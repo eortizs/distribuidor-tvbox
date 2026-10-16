@@ -22,6 +22,36 @@ import { insertUser } from "./users"
 
 export const ACCOUNT_ENTITY_NAME = "Cuenta"
 
+/** Shared draft for the account's umeJSON entity (id/timestamps still sentinel). */
+export function buildAccountDraft(user: AuthUser): UmeJson {
+  return {
+    id: SENTINEL,
+    entityName: ACCOUNT_ENTITY_NAME,
+    dynamicProperties: {
+      email: user.username,
+      userId: user.id,
+      role: user.role,
+      distribuidorId: user.id,
+    },
+    lifecycle: {
+      createdAt: SENTINEL,
+      updatedAt: SENTINEL,
+      version: 1,
+    },
+    state: {
+      current: "active",
+      statusLog: [
+        {
+          status: "active",
+          timestamp: SENTINEL,
+          reason: "Account created",
+        },
+      ],
+    },
+    markdownDocumentation: `### ${ACCOUNT_ENTITY_NAME} — ${user.username}\nCuenta con perfil '${user.role}'.`,
+  }
+}
+
 export interface CreateAccountInput {
   email: string
   password: string
@@ -61,32 +91,7 @@ export async function createAccount(
         tx
       )
 
-      const draft: UmeJson = {
-        id: SENTINEL,
-        entityName: ACCOUNT_ENTITY_NAME,
-        dynamicProperties: {
-          email,
-          userId: user.id,
-          role: user.role,
-          distribuidorId: user.id,
-        },
-        lifecycle: {
-          createdAt: SENTINEL,
-          updatedAt: SENTINEL,
-          version: 1,
-        },
-        state: {
-          current: "active",
-          statusLog: [
-            {
-              status: "active",
-              timestamp: SENTINEL,
-              reason: "Account created",
-            },
-          ],
-        },
-        markdownDocumentation: `### ${ACCOUNT_ENTITY_NAME} — ${email}\nCuenta con perfil '${user.role}'.`,
-      }
+      const draft = buildAccountDraft(user)
 
       const validation = validateDocument(draft)
       if (!validation.valid) {

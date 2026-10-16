@@ -74,3 +74,13 @@ export async function insertUser(
   )
   return mapUserRow(result.rows[0])
 }
+
+export async function updatePassword(
+  id: string,
+  passwordHash: string
+): Promise<void> {
+  await pool.query("UPDATE users SET password_hash = $2 WHERE id = $1", [
+    id,
+    passwordHash,
+  ])
+}

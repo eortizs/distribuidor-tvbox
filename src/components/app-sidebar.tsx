@@ -154,7 +154,9 @@ export function AppSidebar({ user }: { user: AuthUser }) {
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start" className="w-56">
                 <DropdownMenuGroup>
-                  <DropdownMenuItem>Account</DropdownMenuItem>
+                  <DropdownMenuItem render={<Link href="/profile" />}>
+                    Perfil
+                  </DropdownMenuItem>
                   <DropdownMenuItem>Billing</DropdownMenuItem>
                   <DropdownMenuItem>Notifications</DropdownMenuItem>
                 </DropdownMenuGroup>
