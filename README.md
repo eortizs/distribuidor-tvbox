@@ -6,8 +6,8 @@ Dashboard de administración para distribuidores TVBox construido con Next.js 16
 
 - **Entidades umeJSON genéricas**: cualquier `entityName` con `dynamicProperties`, creado a través de un flujo *finalize* donde el servidor inyecta `id` (UUID v7), `lifecycle.createdAt/updatedAt` y valida los sentinels `RESERVED_FOR_SYSTEM`.
 - **Persistencia head + journal**: tabla `entities` (documento JSONB vigente + columnas espejo) y `entity_events` (bitácora append-only con `seq` monotónico, bitemporalidad `occurred_at`/`recorded_at`), con bloqueo optimista por `version` en cada mutación.
-- **Autenticación con perfiles**: `admin` (acceso total + gestión de usuarios) y `distribuidor` (solo sus propias entidades). Sesiones en base de datos con cookie httpOnly, contraseñas con scrypt, gate a nivel proxy con validación de sesión contra la DB.
-- **UI admin**: lista de entidades con data-grid ReUI (búsqueda, filtro, paginación en servidor), formulario dinámico de creación, detalle con editor de propiedades, cambio de estado y timeline de eventos.
+- **Autenticación con perfiles**: `admin` (acceso total + gestión de usuarios) y `distribuidor` (solo sus propias entidades). El login siempre es una cuenta de correo. Autorregistro en `/register`: toda cuenta nueva se crea con perfil `distribuidor` y genera su propia entidad umeJSON (`entityName: "Cuenta"`, ligada vía `dynamicProperties.userId` / `distribuidorId`). Usuario y password se insertan junto a su entidad `Cuenta` en una sola transacción. Sesiones en base de datos con cookie httpOnly, contraseñas con scrypt asíncrono, gate a nivel proxy con validación de sesión contra la DB y rate limit de 10 POST/min por IP en `/login` y `/register` (en memoria, por proceso).
+- **UI admin**: lista de entidades con data-grid ReUI (búsqueda, filtro, paginación en servidor), formulario dinámico de creación, detalle con editor de propiedades, cambio de estado y timeline de eventos. El footer del sidebar muestra el usuario con un menú desplegable (Account, Billing, Notifications, Log out).
 
 ## Requisitos
 
@@ -27,22 +27,24 @@ DATABASE_URL=postgresql://<usuario>:<password>@localhost:5432/reseller
 psql "$DATABASE_URL" -f db/schema.sql
 psql "$DATABASE_URL" -f db/auth-schema.sql
 
-# 4. Crear el usuario administrador
-node db/create-user.mjs <usuario> <password> admin
+# 4. Crear el usuario administrador (el login siempre es un correo)
+node db/create-user.mjs admin@tvbox.network <password> admin
 
 # 5. Desarrollo o producción
 npm run dev            # http://localhost:3000
 npm run build && npm run start   # respeta PORT (default 3000)
 ```
 
-El login vive en `/login`; el resto de rutas redirigen allí si no hay sesión.
+El login vive en `/login` y siempre es una cuenta de correo; desde ahí se enlaza a `/register` para crear cuenta. Toda cuenta nueva nace con perfil `distribuidor` y su entidad umeJSON `Cuenta`; el resto de rutas redirigen a `/login` si no hay sesión.
 
 ## Roles
 
 | Rol | Alcance |
 |---|---|
 | `admin` | Ve y edita todas las entidades; crea usuarios en `/users` |
-| `distribuidor` | Solo ve y edita las entidades que él crea (el servidor estampa `dynamicProperties.distribuidorId` al crear y filtra con el índice GIN) |
+| `distribuidor` | Solo ve y edita las entidades que él crea (el servidor estampa `dynamicProperties.distribuidorId` al crear y filtra con el índice GIN). El scoping se aplica tanto en la API como en la página SSR de detalle y su timeline de eventos |
+
+El autorregistro (`/register`) crea cuentas únicamente como `distribuidor`; solo un `admin` puede elevar el perfil después.
 
 ## Modelo de datos
 
@@ -59,7 +61,7 @@ Cada entidad es un documento umeJSON (`doc` JSONB) con espejos relacionales para
 }
 ```
 
-Toda mutación es una transacción atómica: `UPDATE entities ... WHERE id = $1 AND version = $esperada` (0 filas → conflicto 409) + `INSERT` en `entity_events` con `seq = max(seq)+1`. Los tipos de evento son cerrados: `created`, `property.updated` (con diff `from`/`to`), `state.changed`, `relation.added`, `annotation.added`, `imported.from`, `correction`. `state.statusLog` es una proyección de la bitácora (se recalcula en la misma transacción).
+Toda mutación es una transacción atómica: `UPDATE entities ... WHERE id = $1 AND version = $esperada` (0 filas → conflicto 409) + `INSERT` en `entity_events` con `seq = max(seq)+1`. Los tipos de evento son cerrados: `created`, `property.updated` (con diff `from`/`to`), `state.changed`, `relation.added`, `annotation.added`, `imported.from`, `correction`. `state.statusLog` es una proyección de la bitácora (se recalcula en la misma transacción). `db/create-user.mjs` respeta el mismo protocolo: al cambiar el rol de una cuenta existente aplica lock optimista y journala un `property.updated` con el diff.
 
 ## API
 
@@ -86,8 +88,9 @@ src/server/
 src/app/
   (dashboard)/           # UI protegida: dashboard, entities, users
   api/                   # Route handlers
-  actions/               # Server actions (login, logout, crear usuario)
+  actions/               # Server actions (login, registro, logout, crear usuario)
   login/                 # Login (card ReUI)
+  register/              # Autorregistro (crea user distribuidor + entidad Cuenta)
   proxy.ts (en src/)     # Gate de sesión/rol antes de renderizar
 ```
 

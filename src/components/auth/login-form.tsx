@@ -1,6 +1,7 @@
 "use client"
 
 import { useActionState, useState } from "react"
+import Link from "next/link"
 
 import { loginAction, type LoginState } from "@/app/actions/auth"
 import { Button } from "@/components/ui/button"
@@ -93,6 +94,15 @@ export function LoginForm() {
             {isPending ? "Signing in…" : "Sign in"}
           </Button>
         </form>
+        <p className="text-muted-foreground mt-4 text-center text-sm">
+          Don&apos;t have an account?{" "}
+          <Link
+            href="/register"
+            className="text-primary font-medium underline-offset-4 hover:underline"
+          >
+            Create account
+          </Link>
+        </p>
       </CardContent>
     </Card>
   )

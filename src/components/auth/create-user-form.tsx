@@ -35,8 +35,14 @@ export function CreateUserForm() {
   return (
     <form action={formAction} className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
-        <Label htmlFor="new-username">Username</Label>
-        <Input id="new-username" name="username" required />
+        <Label htmlFor="new-username">Email address</Label>
+        <Input
+          id="new-username"
+          name="username"
+          type="email"
+          placeholder="name@tvbox.network"
+          required
+        />
       </div>
       <div className="flex flex-col gap-2">
         <Label htmlFor="new-password">Password</Label>

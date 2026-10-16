@@ -13,6 +13,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { Separator } from "@/components/ui/separator"
+import { requireUser } from "@/server/auth/guards"
 import { getEntity, getEntityEvents } from "@/server/umejson/repository"
 import { AppError } from "@/server/umejson/types"
 import type { EntityEventRow, EntityRow } from "@/server/umejson/types"
@@ -81,11 +82,19 @@ export default async function EntityDetailPage({
   params: Promise<{ id: string }>
 }) {
   const { id } = await params
+  const user = await requireUser()
+  const scope =
+    user.role === "distribuidor"
+      ? { ownedByDistribuidorId: user.id }
+      : undefined
 
   let entity: EntityRow
   let events: EntityEventRow[]
   try {
-    ;[entity, events] = await Promise.all([getEntity(id), getEntityEvents(id)])
+    ;[entity, events] = await Promise.all([
+      getEntity(id, scope),
+      getEntityEvents(id, scope),
+    ])
   } catch (error) {
     if (error instanceof AppError && error.code === "not_found") {
       notFound()

@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation"
 import {
   BoxesIcon,
   ChartLineIcon,
+  ChevronsUpDownIcon,
   LayoutDashboardIcon,
   LifeBuoyIcon,
   LogOutIcon,
@@ -14,6 +15,14 @@ import {
 
 import { logoutAction } from "@/app/actions/auth"
 import type { AuthUser } from "@/server/auth/types"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Sidebar,
   SidebarContent,
@@ -126,31 +135,42 @@ export function AppSidebar({ user }: { user: AuthUser }) {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton size="lg" className="w-full" tooltip={user.username}>
-              <div className="bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-xs text-xs font-semibold">
-                {user.username.slice(0, 2).toUpperCase()}
-              </div>
-              <div className="flex min-w-0 flex-col text-start">
-                <span className="truncate text-sm font-medium">
-                  {user.username}
-                </span>
-                <span className="text-muted-foreground truncate text-xs">
-                  {user.role}
-                </span>
-              </div>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-          <SidebarMenuItem>
-            <form action={logoutAction}>
-              <SidebarMenuButton
-                tooltip="Log out"
-                render={<button type="submit" />}
-                className="w-full"
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={<SidebarMenuButton size="lg" className="w-full" />}
               >
-                <LogOutIcon aria-hidden="true" />
-                <span>Log out</span>
-              </SidebarMenuButton>
-            </form>
+                <div className="bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-xs text-xs font-semibold">
+                  {user.username.slice(0, 2).toUpperCase()}
+                </div>
+                <div className="flex min-w-0 flex-col text-start">
+                  <span className="truncate text-sm font-medium">
+                    {user.username}
+                  </span>
+                  <span className="text-muted-foreground truncate text-xs">
+                    {user.role}
+                  </span>
+                </div>
+                <ChevronsUpDownIcon className="ms-auto" aria-hidden="true" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="top" align="start" className="w-56">
+                <DropdownMenuGroup>
+                  <DropdownMenuItem>Account</DropdownMenuItem>
+                  <DropdownMenuItem>Billing</DropdownMenuItem>
+                  <DropdownMenuItem>Notifications</DropdownMenuItem>
+                </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <form action={logoutAction}>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    closeOnClick={false}
+                    render={<button type="submit" className="w-full" />}
+                  >
+                    <LogOutIcon aria-hidden="true" />
+                    <span>Log out</span>
+                  </DropdownMenuItem>
+                </form>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>

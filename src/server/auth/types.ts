@@ -1,5 +1,15 @@
 export type UserRole = "admin" | "distribuidor"
 
+export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+export function isValidEmail(value: string): boolean {
+  return EMAIL_RE.test(value)
+}
+
+export function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase()
+}
+
 export interface AuthUser {
   id: string
   username: string

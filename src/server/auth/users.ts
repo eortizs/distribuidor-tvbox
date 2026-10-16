@@ -1,4 +1,4 @@
-import { pool } from "@/server/db"
+import { pool, type PoolClientLike } from "@/server/db"
 import type { AuthUser } from "./types"
 
 export interface UserRow {
@@ -58,12 +58,15 @@ export async function listUsers(): Promise<
   }))
 }
 
-export async function insertUser(input: {
-  username: string
-  passwordHash: string
-  role: AuthUser["role"]
-}): Promise<UserRow> {
-  const result = await pool.query(
+export async function insertUser(
+  input: {
+    username: string
+    passwordHash: string
+    role: AuthUser["role"]
+  },
+  executor: PoolClientLike = pool
+): Promise<UserRow> {
+  const result = await executor.query(
     `INSERT INTO users (id, username, password_hash, role)
      VALUES ($1, $2, $3, $4)
      RETURNING id, username, password_hash, role, created_at`,

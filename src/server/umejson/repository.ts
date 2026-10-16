@@ -211,7 +211,8 @@ async function projectStatusLog(
 
 export async function createEntity(
   doc: UmeJson,
-  options: CreateEntityOptions = {}
+  options: CreateEntityOptions = {},
+  client?: PoolClientLike
 ): Promise<EntityRow> {
   const actor = normalizeActor(options.actor)
   const createdAt = toIso(doc.lifecycle.createdAt)
@@ -220,8 +221,8 @@ export async function createEntity(
   )
   const initialState = doc.state?.current ?? "active"
 
-  return withTransaction(async (client) => {
-    await client.query(
+  const run = async (tx: PoolClientLike): Promise<EntityRow> => {
+    await tx.query(
       `INSERT INTO entities (id, entity_name, doc, version, created_at, updated_at)
        VALUES ($1, $2, $3::jsonb, $4, $5::timestamptz, $6::timestamptz)`,
       [
@@ -234,10 +235,10 @@ export async function createEntity(
       ]
     )
 
-    let seq = await nextSeq(client, doc.id)
+    let seq = await nextSeq(tx, doc.id)
 
     if (options.provenance?.fileHash || options.provenance?.rowIdx != null) {
-      await insertEvent(client, {
+      await insertEvent(tx, {
         entityId: doc.id,
         seq,
         eventType: "imported.from",
@@ -256,7 +257,7 @@ export async function createEntity(
       seq += 1
     }
 
-    await insertEvent(client, {
+    await insertEvent(tx, {
       entityId: doc.id,
       seq,
       eventType: "created",
@@ -270,12 +271,13 @@ export async function createEntity(
       occurredAt,
     })
 
-    const inserted = await client.query(
-      "SELECT * FROM entities WHERE id = $1",
-      [doc.id]
-    )
+    const inserted = await tx.query("SELECT * FROM entities WHERE id = $1", [
+      doc.id,
+    ])
     return mapEntityRow(inserted.rows[0])
-  })
+  }
+
+  return client ? run(client) : withTransaction(run)
 }
 
 export async function getEntity(

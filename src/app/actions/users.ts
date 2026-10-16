@@ -3,16 +3,18 @@
 import { revalidatePath } from "next/cache"
 
 import { getSessionUser } from "@/server/auth/session"
-import { hashPassword } from "@/server/auth/password"
-import { insertUser } from "@/server/auth/users"
-import { isValidRole } from "@/server/auth/types"
+import { createAccount } from "@/server/auth/accounts"
+import {
+  isValidEmail,
+  isValidRole,
+  normalizeEmail,
+} from "@/server/auth/types"
+import { AppError } from "@/server/umejson/types"
 
 export interface CreateUserState {
   error: string | null
   success: string | null
 }
-
-const USERNAME_RE = /^[a-zA-Z0-9._-]{3,32}$/
 
 export async function createUserAction(
   _prev: CreateUserState,
@@ -23,13 +25,13 @@ export async function createUserAction(
     return { error: "Forbidden", success: null }
   }
 
-  const username = String(formData.get("username") ?? "").trim()
+  const email = normalizeEmail(String(formData.get("username") ?? ""))
   const password = String(formData.get("password") ?? "")
   const role = String(formData.get("role") ?? "")
 
-  if (!USERNAME_RE.test(username)) {
+  if (!isValidEmail(email)) {
     return {
-      error: "Username must be 3-32 characters (letters, numbers, . _ -)",
+      error: "Username must be a valid email address",
       success: null,
     }
   }
@@ -41,19 +43,20 @@ export async function createUserAction(
   }
 
   try {
-    await insertUser({
-      username,
-      passwordHash: hashPassword(password),
+    await createAccount({
+      email,
+      password,
       role,
+      actor: `user:${session.username}`,
+      source: "admin",
     })
   } catch (error) {
-    const message = error instanceof Error ? error.message : ""
-    if (message.includes("users_username_key") || message.includes("duplicate key")) {
-      return { error: `Username '${username}' already exists`, success: null }
+    if (error instanceof AppError && error.code === "email_taken") {
+      return { error: `Email '${email}' already exists`, success: null }
     }
     throw error
   }
 
   revalidatePath("/users")
-  return { error: null, success: `User '${username}' created as ${role}` }
+  return { error: null, success: `Account '${email}' created as ${role}` }
 }
