@@ -23,6 +23,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { useSidebar } from "@/components/ui/sidebar"
 import {
   Sidebar,
   SidebarContent,
@@ -60,6 +61,11 @@ const navSecondary = [
 
 export function AppSidebar({ user }: { user: AuthUser }) {
   const pathname = usePathname()
+  const { setOpenMobile } = useSidebar()
+
+  // The mobile sidebar is an overlay panel: close it on any navigation so it
+  // does not cover the destination screen.
+  const closeMobilePanel = () => setOpenMobile(false)
 
   const items = navMain.filter((item) => !item.adminOnly || user.role === "admin")
 
@@ -96,7 +102,9 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                       tooltip={item.title}
                       isActive={isActive}
                       aria-current={isActive ? "page" : undefined}
-                      render={<Link href={item.href} />}
+                      render={
+                        <Link href={item.href} onClick={closeMobilePanel} />
+                      }
                     >
                       <item.icon aria-hidden="true" />
                       <span>{item.title}</span>
@@ -107,7 +115,9 @@ export function AppSidebar({ user }: { user: AuthUser }) {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   tooltip="Analytics"
-                  render={<Link href="#" />}
+                  render={
+                    <Link href="#" onClick={closeMobilePanel} />
+                  }
                 >
                   <ChartLineIcon aria-hidden="true" />
                   <span>Analytics</span>
@@ -120,14 +130,19 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           <SidebarGroupLabel>Support</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navSecondary.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton tooltip={item.title} render={<a href="#" />}>
-                    <item.icon aria-hidden="true" />
-                    <span>{item.title}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+                {navSecondary.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      tooltip={item.title}
+                      render={
+                        <a href="#" onClick={closeMobilePanel} />
+                      }
+                    >
+                      <item.icon aria-hidden="true" />
+                      <span>{item.title}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -154,7 +169,11 @@ export function AppSidebar({ user }: { user: AuthUser }) {
               </DropdownMenuTrigger>
               <DropdownMenuContent side="top" align="start" className="w-56">
                 <DropdownMenuGroup>
-                  <DropdownMenuItem render={<Link href="/profile" />}>
+                  <DropdownMenuItem
+                    render={
+                      <Link href="/profile" onClick={closeMobilePanel} />
+                    }
+                  >
                     Perfil
                   </DropdownMenuItem>
                   <DropdownMenuItem>Billing</DropdownMenuItem>
