@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated vendor code installed by the shadcn CLI:
+    "src/components/reui/**",
+    "src/components/examples/**",
   ]),
 ]);
 

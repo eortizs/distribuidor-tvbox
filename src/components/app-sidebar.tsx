@@ -1,22 +1,19 @@
+"use client"
+
+import Link from "next/link"
+import { usePathname } from "next/navigation"
 import {
+  BoxesIcon,
   ChartLineIcon,
-  ChevronsUpDownIcon,
   LayoutDashboardIcon,
   LifeBuoyIcon,
-  PackageIcon,
+  LogOutIcon,
   SettingsIcon,
-  ShoppingCartIcon,
   UsersIcon,
 } from "lucide-react"
 
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuGroup,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { logoutAction } from "@/app/actions/auth"
+import type { AuthUser } from "@/server/auth/types"
 import {
   Sidebar,
   SidebarContent,
@@ -32,19 +29,31 @@ import {
 } from "@/components/ui/sidebar"
 
 const navMain = [
-  { title: "Dashboard", icon: LayoutDashboardIcon },
-  { title: "Analytics", icon: ChartLineIcon },
-  { title: "Customers", icon: UsersIcon },
-  { title: "Orders", icon: ShoppingCartIcon },
-  { title: "Products", icon: PackageIcon },
-]
+  { title: "Dashboard", icon: LayoutDashboardIcon, href: "/" },
+  { title: "Entities", icon: BoxesIcon, href: "/entities" },
+  {
+    title: "Users",
+    icon: UsersIcon,
+    href: "/users",
+    adminOnly: true,
+  },
+] satisfies {
+  title: string
+  icon: typeof LayoutDashboardIcon
+  href: string
+  adminOnly?: boolean
+}[]
 
 const navSecondary = [
   { title: "Settings", icon: SettingsIcon },
   { title: "Get help", icon: LifeBuoyIcon },
 ]
 
-export function AppSidebar() {
+export function AppSidebar({ user }: { user: AuthUser }) {
+  const pathname = usePathname()
+
+  const items = navMain.filter((item) => !item.adminOnly || user.role === "admin")
+
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
@@ -57,7 +66,7 @@ export function AppSidebar() {
               Acme Inc
             </span>
             <span className="text-muted-foreground truncate text-xs">
-              Admin
+              {user.role === "admin" ? "Admin" : "Distributor"}
             </span>
           </div>
         </div>
@@ -67,19 +76,34 @@ export function AppSidebar() {
           <SidebarGroupLabel>Platform</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navMain.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton
-                    tooltip={item.title}
-                    isActive={item.title === "Dashboard"}
-                    aria-current={item.title === "Dashboard" ? "page" : undefined}
-                    render={<a href="#" />}
-                  >
-                    <item.icon aria-hidden="true" />
-                    <span>{item.title}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+              {items.map((item) => {
+                const isActive =
+                  item.href === "/"
+                    ? pathname === "/"
+                    : pathname.startsWith(item.href)
+                return (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton
+                      tooltip={item.title}
+                      isActive={isActive}
+                      aria-current={isActive ? "page" : undefined}
+                      render={<Link href={item.href} />}
+                    >
+                      <item.icon aria-hidden="true" />
+                      <span>{item.title}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )
+              })}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip="Analytics"
+                  render={<Link href="#" />}
+                >
+                  <ChartLineIcon aria-hidden="true" />
+                  <span>Analytics</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -102,35 +126,31 @@ export function AppSidebar() {
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={<SidebarMenuButton size="lg" className="w-full" />}
+            <SidebarMenuButton size="lg" className="w-full" tooltip={user.username}>
+              <div className="bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-xs text-xs font-semibold">
+                {user.username.slice(0, 2).toUpperCase()}
+              </div>
+              <div className="flex min-w-0 flex-col text-start">
+                <span className="truncate text-sm font-medium">
+                  {user.username}
+                </span>
+                <span className="text-muted-foreground truncate text-xs">
+                  {user.role}
+                </span>
+              </div>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+          <SidebarMenuItem>
+            <form action={logoutAction}>
+              <SidebarMenuButton
+                tooltip="Log out"
+                render={<button type="submit" />}
+                className="w-full"
               >
-                <div className="bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-xs text-xs font-semibold">
-                  SR
-                </div>
-                <div className="flex min-w-0 flex-col text-start">
-                  <span className="truncate text-sm font-medium">Sofia Reyes</span>
-                  <span className="text-muted-foreground truncate text-xs">
-                    sofia@acme.com
-                  </span>
-                </div>
-                <ChevronsUpDownIcon className="ms-auto" aria-hidden="true" />
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                side="top"
-                align="start"
-                className="w-56"
-              >
-                <DropdownMenuGroup>
-                  <DropdownMenuItem>Account</DropdownMenuItem>
-                  <DropdownMenuItem>Billing</DropdownMenuItem>
-                  <DropdownMenuItem>Notifications</DropdownMenuItem>
-                </DropdownMenuGroup>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive">Log out</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+                <LogOutIcon aria-hidden="true" />
+                <span>Log out</span>
+              </SidebarMenuButton>
+            </form>
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
