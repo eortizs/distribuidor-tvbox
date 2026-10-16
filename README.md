@@ -94,6 +94,11 @@ src/app/
   proxy.ts (en src/)     # Gate de sesión/rol antes de renderizar
 ```
 
+## Convenciones de UI
+
+- La interfaz usa componentes **shadcn/ui** y **ReUI** (ver `src/components/ui` y `src/components/reui`) con iconos de `lucide-react`. Los componentes instalados se usan tal como están: no se reestilizan ni se retemporizan; el theming va por tokens semánticos (`bg-primary`, `text-muted-foreground`, etc.).
+- El toggle del sidebar (`SidebarTrigger` en `src/components/ui/sidebar.tsx`) usa el icono de hamburguesa (`MenuIcon`) en lugar del `PanelLeftIcon` por defecto de shadcn.
+
 ## Documentación del formato
 
 - Especificación umeJSON y pipeline de ingestión: [`eortizs/ume-json-v1`](https://github.com/eortizs/ume-json-v1)
@@ -101,4 +106,12 @@ src/app/
 
 ## Deployment
 
-Servidor Node con build de producción (`npm run build && npm run start`), inverse-proxied por Caddy. Requiere `DATABASE_URL` en el entorno y las migraciones aplicadas (paso 3).
+Servidor Node con build de producción, gestionado por **PM2**:
+
+```bash
+npm run build
+pm2 restart distribuidor-tvbox   # o pm2 start npm --name distribuidor-tvbox -- start
+```
+
+- La app corre como `next start` (servicio PM2 `distribuidor-tvbox`) en el **puerto 3010**; PM2 reinicia el proceso automáticamente si muere. Tras cualquier cambio de código hay que ejecutar `npm run build` y luego `pm2 restart distribuidor-tvbox` (`next start` sirve el build de `.next`, no el código fuente).
+- Requiere `DATABASE_URL` en el entorno (`.env`) y las migraciones aplicadas (paso 3).
