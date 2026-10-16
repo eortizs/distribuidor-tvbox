@@ -10,6 +10,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 import { requireUser } from "@/server/auth/guards"
 import { getProfile } from "@/server/auth/profile"
 
@@ -62,47 +68,25 @@ export default async function ProfilePage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="flex flex-col gap-6 lg:col-span-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>Información personal</CardTitle>
-              <CardDescription>
-                Los cambios quedan registrados en el historial de la entidad
-                Cuenta.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ProfileForm
-                key={
-                  account ? `${account.entityId}:${account.version}` : email
-                }
-                email={email}
-                fullName={account?.fullName ?? ""}
-                phone={account?.phone ?? ""}
-              />
-            </CardContent>
-          </Card>
+      <Tabs defaultValue="detalles">
+        <TabsList variant="line" className="mb-3.5 w-full">
+          <TabsTrigger value="detalles">Detalles</TabsTrigger>
+          <TabsTrigger value="informacion">Información</TabsTrigger>
+          <TabsTrigger value="seguridad">Seguridad</TabsTrigger>
+        </TabsList>
 
+        <TabsContent value="detalles" keepMounted>
           <Card>
-            <CardHeader>
-              <CardTitle>Seguridad</CardTitle>
-              <CardDescription>
-                Cambia tu contraseña periódicamente.
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Detalles</CardTitle>
+              <CardDescription className="text-sm">
+                Información general de tu cuenta.
               </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <PasswordForm />
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Detalles</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
+              <Fact label="Email">
+                <span className="break-all">{email}</span>
+              </Fact>
               <Fact label="Rol">
                 <Badge
                   variant={role === "admin" ? "primary-light" : "info-light"}
@@ -117,8 +101,21 @@ export default async function ProfilePage() {
               </Fact>
             </CardContent>
           </Card>
-        </div>
-      </div>
+        </TabsContent>
+
+        <TabsContent value="informacion" keepMounted>
+          <ProfileForm
+            key={account ? `${account.entityId}:${account.version}` : email}
+            email={email}
+            fullName={account?.fullName ?? ""}
+            phone={account?.phone ?? ""}
+          />
+        </TabsContent>
+
+        <TabsContent value="seguridad" keepMounted>
+          <PasswordForm />
+        </TabsContent>
+      </Tabs>
     </div>
   )
 }

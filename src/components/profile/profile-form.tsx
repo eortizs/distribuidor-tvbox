@@ -9,6 +9,14 @@ import {
   type UpdateProfileState,
 } from "@/app/actions/profile"
 import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
@@ -37,55 +45,65 @@ export function ProfileForm({
   }, [state.success, router])
 
   return (
-    <form action={formAction} className="flex flex-col gap-4">
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="profile-email">Email</Label>
-        <Input
-          id="profile-email"
-          type="email"
-          value={email}
-          readOnly
-          disabled
-          aria-describedby="profile-email-hint"
-        />
-        <p id="profile-email-hint" className="text-muted-foreground text-xs">
-          Se usa para iniciar sesión y no se puede cambiar.
-        </p>
-      </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="profile-full-name">Nombre completo</Label>
-        <Input
-          id="profile-full-name"
-          name="fullName"
-          type="text"
-          defaultValue={fullName}
-          maxLength={100}
-          autoComplete="name"
-          placeholder="Ana Pérez García"
-        />
-      </div>
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="profile-phone">Teléfono</Label>
-        <Input
-          id="profile-phone"
-          name="phone"
-          type="tel"
-          defaultValue={phone}
-          maxLength={20}
-          autoComplete="tel"
-          placeholder="+34 600 123 456"
-        />
-      </div>
-      {state.error ? (
-        <p className="text-destructive text-sm" role="alert">
-          {state.error}
-        </p>
-      ) : null}
-      <div className="flex">
-        <Button type="submit" size="sm" disabled={isPending}>
-          {isPending ? "Guardando…" : "Guardar cambios"}
-        </Button>
-      </div>
-    </form>
+    <Card>
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">Información personal</CardTitle>
+        <CardDescription className="text-sm">
+          Los cambios quedan registrados en el historial de la entidad Cuenta.
+        </CardDescription>
+      </CardHeader>
+      <form action={formAction} className="flex flex-col">
+        <CardContent className="flex flex-col gap-4">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="profile-email">Email</Label>
+            <Input
+              id="profile-email"
+              type="email"
+              value={email}
+              readOnly
+              disabled
+              aria-describedby="profile-email-hint"
+            />
+            <p id="profile-email-hint" className="text-muted-foreground text-xs">
+              Se usa para iniciar sesión y no se puede cambiar.
+            </p>
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="profile-full-name">Nombre completo</Label>
+            <Input
+              id="profile-full-name"
+              name="fullName"
+              type="text"
+              defaultValue={fullName}
+              maxLength={100}
+              autoComplete="name"
+              placeholder="Ana Pérez García"
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="profile-phone">Teléfono</Label>
+            <Input
+              id="profile-phone"
+              name="phone"
+              type="tel"
+              defaultValue={phone}
+              maxLength={20}
+              autoComplete="tel"
+              placeholder="+34 600 123 456"
+            />
+          </div>
+          {state.error ? (
+            <p className="text-destructive text-sm" role="alert">
+              {state.error}
+            </p>
+          ) : null}
+        </CardContent>
+        <CardFooter className="pt-3">
+          <Button type="submit" size="sm" disabled={isPending}>
+            {isPending ? "Guardando…" : "Guardar cambios"}
+          </Button>
+        </CardFooter>
+      </form>
+    </Card>
   )
 }
