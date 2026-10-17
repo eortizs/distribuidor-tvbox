@@ -7,7 +7,8 @@ Dashboard de administración para distribuidores TVBox construido con Next.js 16
 - **Entidades umeJSON genéricas**: cualquier `entityName` con `dynamicProperties`, creado a través de un flujo *finalize* donde el servidor inyecta `id` (UUID v7), `lifecycle.createdAt/updatedAt` y valida los sentinels `RESERVED_FOR_SYSTEM`.
 - **Persistencia head + journal**: tabla `entities` (documento JSONB vigente + columnas espejo) y `entity_events` (bitácora append-only con `seq` monotónico, bitemporalidad `occurred_at`/`recorded_at`), con bloqueo optimista por `version` en cada mutación.
 - **Autenticación con perfiles**: `admin` (acceso total + gestión de usuarios) y `distribuidor` (solo sus propias entidades). El login siempre es una cuenta de correo. Autorregistro en `/register`: toda cuenta nueva se crea con perfil `distribuidor` y genera su propia entidad umeJSON (`entityName: "Cuenta"`, ligada vía `dynamicProperties.userId` / `distribuidorId`). Usuario y password se insertan junto a su entidad `Cuenta` en una sola transacción. Sesiones en base de datos con cookie httpOnly, contraseñas con scrypt asíncrono, gate a nivel proxy con validación de sesión contra la DB y rate limit de 10 POST/min por IP en `/login` y `/register` (en memoria, por proceso).
-- **UI admin**: lista de entidades con data-grid ReUI (búsqueda, filtro, paginación en servidor), formulario dinámico de creación, detalle con editor de propiedades, cambio de estado y timeline de eventos. El footer del sidebar muestra el usuario con un menú desplegable (Perfil, Billing, Notifications, Log out).
+- **UI admin**: lista de entidades con data-grid ReUI (búsqueda, filtro, paginación en servidor), formulario dinámico de creación, detalle con editor de propiedades, cambio de estado y timeline de eventos. El footer del sidebar muestra el usuario con un menú desplegable (Perfil, Billing, Notifications, Log out); el panel móvil del sidebar se cierra automáticamente al navegar a cualquier opción.
+- **Perfil de usuario** (`/profile`): pestañas *Detalles*, *Información* y *Seguridad* (variante `line` de ReUI). Ver [Perfil de usuario](#perfil-de-usuario).
 
 ## Requisitos
 
@@ -45,6 +46,24 @@ El login vive en `/login` y siempre es una cuenta de correo; desde ahí se enlaz
 | `distribuidor` | Solo ve y edita las entidades que él crea (el servidor estampa `dynamicProperties.distribuidorId` al crear y filtra con el índice GIN). El scoping se aplica tanto en la API como en la página SSR de detalle y su timeline de eventos |
 
 El autorregistro (`/register`) crea cuentas únicamente como `distribuidor`; solo un `admin` puede elevar el perfil después.
+
+## Perfil de usuario
+
+Página `/profile` (enlace **Perfil** en el menú del footer del sidebar), organizada en tres pestañas (patrón ReUI `c-tabs-2`, variante `line`):
+
+| Pestaña | Contenido |
+|---|---|
+| **Detalles** (por defecto) | Lectura sola: email, rol (badge), fecha de alta y última actualización de la entidad Cuenta |
+| **Información** | Email (solo lectura: es el identificador de login), nombre completo y teléfono, editables |
+| **Seguridad** | Cambio de contraseña: actual + nueva (mín. 8, distinta de la actual) + confirmación |
+
+Persistencia y reglas:
+
+- Los datos de perfil (`fullName`, `phone`) viven en `dynamicProperties` de la entidad umeJSON `Cuenta` del usuario (localizada por `dynamicProperties.userId`); no requieren migración de esquema.
+- Cada guardado pasa por `updateProperties` del repositorio: bloqueo optimista por `version` (conflicto → error al usuario) y evento `property.updated` con diff `from`/`to` en `entity_events`, con `actor` = email de la sesión y `reason: "Profile updated"`. Si la entidad Cuenta no existe, se crea con el mismo draft que el registro.
+- La contraseña se cambia solo tras verificar la actual contra el hash scrypt; el nuevo hash se escribe con `updatePassword` (`src/server/auth/users.ts`). Las sesiones activas no se invalidan.
+- Validación en el server action (`src/app/actions/profile.ts`): nombre ≤ 100 caracteres, teléfono opcional con formato flexible (`+`, dígitos, espacios, paréntesis, guiones; 7–20), y ninguna mutación sin sesión (`requireUser`).
+- Formularios cliente con `useActionState`, estado pendiente, error inline (`role="alert"`) y toast de éxito con `router.refresh()` para recargar los datos; los paneles usan `keepMounted` para no perder lo tecleado al cambiar de pestaña.
 
 ## Modelo de datos
 
@@ -86,9 +105,9 @@ src/server/
   auth/                  # password (scrypt), session, users, guards
   umejson/               # schema (Ajv + sentinels), finalize, repository (protocolo head+journal)
 src/app/
-  (dashboard)/           # UI protegida: dashboard, entities, users
+  (dashboard)/           # UI protegida: dashboard, entities, users, profile
   api/                   # Route handlers
-  actions/               # Server actions (login, registro, logout, crear usuario)
+  actions/               # Server actions (login, registro, logout, perfil, crear usuario)
   login/                 # Login (card ReUI)
   register/              # Autorregistro (crea user distribuidor + entidad Cuenta)
   proxy.ts (en src/)     # Gate de sesión/rol antes de renderizar
