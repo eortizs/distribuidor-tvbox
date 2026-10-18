@@ -10,7 +10,8 @@ Dashboard de administración para distribuidores TVBox construido con Next.js 16
 - **UI admin**: lista de entidades con data-grid ReUI (búsqueda, filtro, paginación en servidor), formulario dinámico de creación, detalle con editor de propiedades, cambio de estado y timeline de eventos. El footer del sidebar muestra el usuario con un menú desplegable (Perfil, Billing, Notifications, Log out); el panel móvil del sidebar se cierra automáticamente al navegar a cualquier opción.
 - **Modo oscuro global**: tema claro/oscuro/sistema en toda la app, incluidos los módulos futuros (ver [Tema y marca](#tema-y-marca)).
 - **Perfil de usuario** (`/profile`): pestañas *Detalles*, *Información* y *Seguridad* (variante `line` de ReUI). Ver [Perfil de usuario](#perfil-de-usuario).
-- **Asistente LLM** (`/asistente`): chat estilo ChatGPT en la sección *Support* del sidebar. Streaming token a token vía OpenRouter (`ASISTENTE_MODEL`, `OPENROUTER_API_KEY` en `.env`), respuestas en Markdown (renderizadas al terminar cada respuesta; texto plano durante el streaming), historial efímero y rate limit de 20 mensajes/min por usuario con timeout de inactividad de 30 s hacia el proveedor. El panel tiene altura fija (`100svh` menos el header): el transcript hace scroll por dentro, con auto-scroll al borde durante la respuesta y botón para volver al final; funciona igual en desktop y móvil (la página nunca crece más allá del viewport). En esta versión el modelo **no** accede a la base de datos; el acceso futuro a datos irá siempre acotado al usuario de la sesión (un `distribuidor` solo podrá consultar sus propias entidades).
+- **Asistente LLM** (`/asistente`): chat estilo ChatGPT en la sección *Support* del sidebar. Streaming token a token vía OpenRouter (`ASISTENTE_MODEL`, `OPENROUTER_API_KEY` en `.env`), respuestas en Markdown (renderizadas al terminar cada respuesta; texto plano durante el streaming), historial efímero y rate limit de 20 mensajes/min por usuario con timeout de inactividad de 30 s hacia el proveedor. El modelo se cambia solo editando `ASISTENTE_MODEL` en `.env` y reiniciando (`pm2 restart distribuidor-tvbox`); con modelos de razonamiento (p. ej. `meta/muse-spark-1.3-contributor`) la respuesta visible llega tras la fase interna de *thinking*, que el servidor mantiene viva. El panel tiene altura fija (`100svh` menos el header): el transcript hace scroll por dentro, con auto-scroll al borde durante la respuesta y botón para volver al final; funciona igual en desktop y móvil (la página nunca crece más allá del viewport). En esta versión el modelo **no** accede a la base de datos; el acceso futuro a datos irá siempre acotado al usuario de la sesión (un `distribuidor` solo podrá consultar sus propias entidades).
+- **Gestión de usuarios** (`/users`, solo admin): listado en data-grid ReUI con búsqueda por email y filtro por rol; alta en dialog, edición (email, rol, contraseña) y baja con confirmación en `AlertDialog`. Protecciones en servidor: no se puede borrar la propia cuenta ni degradar/eliminar al último `admin`; el email debe ser único. Al editar una cuenta se actualiza en la misma transacción el usuario de autenticación y su entidad umeJSON `Cuenta` (espejo de `email`/`role` con evento `property.updated`); al eliminarla se archivan (soft-delete) todas sus entidades —incluida su `Cuenta`— con evento `entity.deleted`, y solo después se borra el usuario.
 
 ## Requisitos
 
@@ -46,7 +47,7 @@ El login vive en `/login` y siempre es una cuenta de correo; desde ahí se enlaz
 
 | Rol | Alcance |
 |---|---|
-| `admin` | Ve y edita todas las entidades; crea usuarios en `/users` |
+| `admin` | Ve y edita todas las entidades; gestiona usuarios en `/users` (crear, editar y eliminar) |
 | `distribuidor` | Solo ve y edita las entidades que él crea (el servidor estampa `dynamicProperties.distribuidorId` al crear y filtra con el índice GIN). El scoping se aplica tanto en la API como en la página SSR de detalle y su timeline de eventos |
 
 El autorregistro (`/register`) crea cuentas únicamente como `distribuidor`; solo un `admin` puede elevar el perfil después.
@@ -95,7 +96,7 @@ Toda mutación es una transacción atómica: `UPDATE entities ... WHERE id = $1 
 | `GET` | `/api/entities/[id]` | Detalle de la entidad |
 | `PATCH` | `/api/entities/[id]` | `{version, dynamicProperties \| state, reason?}` — 409 en conflicto de versión |
 | `GET` | `/api/entities/[id]/events` | Bitácora de eventos |
-| `GET/POST` | `/api/users`* | Gestión de usuarios (solo admin, vía server actions) |
+| `GET/POST` | `/api/users`* | Gestión de cuentas (solo admin, vía server actions: alta, edición y baja) |
 | `POST` | `/api/asistente/chat` | Chat con el LLM en streaming (`{ messages: [{ role, content }] }` → texto plano en chunks). Sesión requerida; 20 req/min por usuario |
 
 Todas las rutas requieren sesión; el `actor` de la bitácora se deriva de la sesión (`user:<username>`), nunca del cliente.
@@ -120,7 +121,7 @@ src/app/
 
 ## Tema y marca
 
-- **Tema claro/oscuro**: `ThemeProvider` (next-themes, atributo `class`) montado en el layout raíz (`src/app/layout.tsx`) con `suppressHydrationWarning`; tema por defecto **dark**, con opción Sistema. El selector Claro / Oscuro / Sistema vive en el header del dashboard (`src/components/theme-toggle.tsx`). Cualquier módulo presente o futuro hereda el tema automáticamente: los tokens de ambos modos ya están definidos en `globals.css` (`:root` y `.dark`) y los componentes shadcn/ReUI reaccionan solos; el Toaster (sonner) sigue el tema vía `useTheme`. Para respetar el tema, el código nuevo usa tokens semánticos (`bg-card`, `text-muted-foreground`, …) y no colores crudos; un color crudo lleva siempre su par `dark:`.
+- **Tema claro/oscuro**: `ThemeProvider` (next-themes, atributo `class`) montado en el layout raíz (`src/app/layout.tsx`) con `suppressHydrationWarning`; tema por defecto **Sistema**, con opción Claro / Oscuro. El selector Claro / Oscuro / Sistema vive en el header del dashboard (`src/components/theme-toggle.tsx`). Cualquier módulo presente o futuro hereda el tema automáticamente: los tokens de ambos modos ya están definidos en `globals.css` (`:root` y `.dark`) y los componentes shadcn/ReUI reaccionan solos; el Toaster (sonner) sigue el tema vía `useTheme`. Para respetar el tema, el código nuevo usa tokens semánticos (`bg-card`, `text-muted-foreground`, …) y no colores crudos; un color crudo lleva siempre su par `dark:`.
 - **Marca Togu**: el logo (monograma "T") es un SVG con tokens semánticos (`src/components/togu-logo.tsx`, `fill-primary`/`fill-primary-foreground`), por lo que se invierte solo al cambiar de tema; se usa en el sidebar, en login/register (`auth-shell.tsx`) y en los metadatos. Los assets estáticos viven en `public/togu-icon-light.svg` y `public/togu-icon-dark.svg` (colores explícitos `#171717`/`#fafafa`), y el favicon es `src/app/icon.svg`, que alterna claro/oscuro según el `prefers-color-scheme` del navegador (sustituye al antiguo `favicon.ico`).
 
 ## Convenciones de UI

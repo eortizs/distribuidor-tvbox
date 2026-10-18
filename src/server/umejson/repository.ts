@@ -357,6 +357,13 @@ export async function updateProperties(
   properties: Record<string, unknown>,
   options: MutationOptions = {}
 ): Promise<EntityRow> {
+  validatePropertyPatch(properties)
+  return withTransaction((client) =>
+    updatePropertiesInTx(client, id, expectedVersion, properties, options)
+  )
+}
+
+function validatePropertyPatch(properties: Record<string, unknown>): void {
   if (
     typeof properties !== "object" ||
     properties === null ||
@@ -379,60 +386,128 @@ export async function updateProperties(
       )
     }
   }
+}
 
+export async function updatePropertiesInTx(
+  client: PoolClientLike,
+  id: string,
+  expectedVersion: number,
+  properties: Record<string, unknown>,
+  options: MutationOptions = {}
+): Promise<EntityRow> {
   const actor = normalizeActor(options.actor)
   const occurredAt = toIso(options.occurredAt)
 
-  return withTransaction(async (client) => {
-    const current = await loadEntityDoc(client, id, {
-      ownedByDistribuidorId: options.ownedByDistribuidorId,
-    })
-
-    const diff: Record<
-      string,
-      { from: unknown; to: unknown }
-    > = {}
-    for (const [key, to] of Object.entries(properties)) {
-      const from = key in current.doc.dynamicProperties
-        ? current.doc.dynamicProperties[key]
-        : null
-      if (JSON.stringify(from) !== JSON.stringify(to)) {
-        diff[key] = { from, to }
-      }
-    }
-    if (Object.keys(diff).length === 0) {
-      throw new AppError(
-        422,
-        "no_changes",
-        "No property values changed"
-      )
-    }
-
-    const newDoc = structuredClone(current.doc)
-    for (const [key, value] of Object.entries(properties)) {
-      newDoc.dynamicProperties[key] = value
-    }
-    newDoc.lifecycle.version = current.version + 1
-    newDoc.lifecycle.updatedAt = occurredAt
-
-    await updateHeadWithOptimisticLock(client, {
-      id,
-      expectedVersion,
-      doc: newDoc,
-    })
-
-    await insertEvent(client, {
-      entityId: id,
-      seq: await nextSeq(client, id),
-      eventType: "property.updated",
-      payload: { diff },
-      actor,
-      reason: options.reason ?? null,
-      occurredAt,
-    })
-
-    return getEntityInsideTransaction(client, id)
+  const current = await loadEntityDoc(client, id, {
+    ownedByDistribuidorId: options.ownedByDistribuidorId,
   })
+
+  const diff: Record<
+    string,
+    { from: unknown; to: unknown }
+  > = {}
+  for (const [key, to] of Object.entries(properties)) {
+    const from = key in current.doc.dynamicProperties
+      ? current.doc.dynamicProperties[key]
+      : null
+    if (JSON.stringify(from) !== JSON.stringify(to)) {
+      diff[key] = { from, to }
+    }
+  }
+  if (Object.keys(diff).length === 0) {
+    throw new AppError(
+      422,
+      "no_changes",
+      "No property values changed"
+    )
+  }
+
+  const newDoc = structuredClone(current.doc)
+  for (const [key, value] of Object.entries(properties)) {
+    newDoc.dynamicProperties[key] = value
+  }
+  newDoc.lifecycle.version = current.version + 1
+  newDoc.lifecycle.updatedAt = occurredAt
+
+  await updateHeadWithOptimisticLock(client, {
+    id,
+    expectedVersion,
+    doc: newDoc,
+  })
+
+  await insertEvent(client, {
+    entityId: id,
+    seq: await nextSeq(client, id),
+    eventType: "property.updated",
+    payload: { diff },
+    actor,
+    reason: options.reason ?? null,
+    occurredAt,
+  })
+
+  return getEntityInsideTransaction(client, id)
+}
+
+/**
+ * Soft-deletes every non-deleted entity owned by `distribuidorId`
+ * (dynamicProperties.distribuidorId), including the owner's account entity.
+ * Returns the number of archived entities.
+ */
+export async function softDeleteEntitiesByOwner(
+  distribuidorId: string,
+  options: MutationOptions = {},
+  client?: PoolClientLike
+): Promise<number> {
+  const run = async (tx: PoolClientLike): Promise<number> => {
+    const occurredAt = toIso(options.occurredAt)
+    const actor = normalizeActor(options.actor)
+    const result = await tx.query(
+      `SELECT id, doc, version FROM entities
+        WHERE deleted_at IS NULL
+          AND doc @> $1::jsonb`,
+      [
+        JSON.stringify({
+          dynamicProperties: { distribuidorId },
+        }),
+      ]
+    )
+
+    for (const row of result.rows) {
+      const id = row.id as string
+      const version = row.version as number
+      const doc = row.doc as UmeJson
+
+      const newDoc = structuredClone(doc)
+      newDoc.lifecycle.deletedAt = occurredAt
+      newDoc.lifecycle.updatedAt = occurredAt
+      newDoc.lifecycle.version = version + 1
+
+      await tx.query(
+        `UPDATE entities
+            SET doc = $2::jsonb, version = version + 1,
+                updated_at = $3::timestamptz, deleted_at = $3::timestamptz
+          WHERE id = $1 AND version = $4 AND deleted_at IS NULL`,
+        [id, JSON.stringify(newDoc), occurredAt, version]
+      )
+
+      await insertEvent(tx, {
+        entityId: id,
+        seq: await nextSeq(tx, id),
+        eventType: "entity.deleted",
+        payload: {
+          entityName: doc.entityName,
+          owner: distribuidorId,
+        },
+        actor,
+        reason: options.reason ?? null,
+        occurredAt,
+      })
+    }
+
+    return result.rowCount ?? 0
+  }
+
+  return client ? run(client) : withTransaction(run)
 }
 
 export async function changeState(

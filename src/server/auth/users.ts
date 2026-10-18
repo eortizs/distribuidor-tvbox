@@ -84,3 +84,72 @@ export async function updatePassword(
     passwordHash,
   ])
 }
+
+export async function updateUser(
+  id: string,
+  input: {
+    username?: string
+    passwordHash?: string
+    role?: AuthUser["role"]
+  },
+  executor: PoolClientLike = pool
+): Promise<UserRow> {
+  const sets: string[] = []
+  const values: unknown[] = []
+
+  if (input.username !== undefined) {
+    values.push(input.username)
+    sets.push(`username = $${values.length}`)
+  }
+  if (input.passwordHash !== undefined) {
+    values.push(input.passwordHash)
+    sets.push(`password_hash = $${values.length}`)
+  }
+  if (input.role !== undefined) {
+    values.push(input.role)
+    sets.push(`role = $${values.length}`)
+  }
+  if (sets.length === 0) {
+    const existing = await findUserByIdIn(id, executor)
+    if (!existing) throw new Error(`User ${id} does not exist`)
+    return existing
+  }
+
+  values.push(id)
+  const result = await executor.query(
+    `UPDATE users SET ${sets.join(", ")} WHERE id = $${values.length}
+     RETURNING id, username, password_hash, role, created_at`,
+    values
+  )
+  if (result.rowCount === 0) {
+    throw new Error(`User ${id} does not exist`)
+  }
+  return mapUserRow(result.rows[0])
+}
+
+async function findUserByIdIn(
+  id: string,
+  executor: PoolClientLike
+): Promise<UserRow | null> {
+  const result = await executor.query(
+    "SELECT id, username, password_hash, role, created_at FROM users WHERE id = $1",
+    [id]
+  )
+  return result.rowCount ? mapUserRow(result.rows[0]) : null
+}
+
+export async function countAdmins(
+  executor: PoolClientLike = pool
+): Promise<number> {
+  const result = await executor.query(
+    "SELECT count(*)::int AS count FROM users WHERE role = 'admin'"
+  )
+  return Number(result.rows[0].count)
+}
+
+export async function deleteUser(
+  id: string,
+  executor: PoolClientLike = pool
+): Promise<void> {
+  await executor.query("DELETE FROM users WHERE id = $1", [id])
+}

@@ -1,10 +1,14 @@
-import { withTransaction } from "@/server/db"
+import { withTransaction, type PoolClientLike } from "@/server/db"
 import {
   finalizeDocument,
   validateDocument,
   validateSentinels,
 } from "@/server/umejson/schema"
-import { createEntity } from "@/server/umejson/repository"
+import {
+  createEntity,
+  softDeleteEntitiesByOwner,
+  updatePropertiesInTx,
+} from "@/server/umejson/repository"
 import {
   AppError,
   SENTINEL,
@@ -18,7 +22,7 @@ import {
   type UserRole,
 } from "./types"
 import { hashPassword } from "./password"
-import { insertUser } from "./users"
+import { deleteUser, insertUser, updateUser } from "./users"
 
 export const ACCOUNT_ENTITY_NAME = "Cuenta"
 
@@ -133,4 +137,109 @@ export async function createAccount(
     }
     throw error
   }
+}
+
+async function findAccountEntityId(
+  client: PoolClientLike,
+  userId: string
+): Promise<string | null> {
+  const result = await client.query(
+    `SELECT id FROM entities
+      WHERE deleted_at IS NULL
+        AND entity_name = $2
+        AND doc->'dynamicProperties'->>'userId' = $1`,
+    [userId, ACCOUNT_ENTITY_NAME]
+  )
+  return result.rowCount ? (result.rows[0].id as string) : null
+}
+
+/**
+ * Updates the auth user and mirrors email/role into its umeJSON account
+ * entity (dynamicProperties.email / .role) atomically.
+ */
+export async function updateAccount(input: {
+  userId: string
+  username?: string
+  role?: UserRole
+  passwordHash?: string
+  actor: string
+}): Promise<AuthUser> {
+  try {
+    return await withTransaction(async (tx) => {
+      const user = await updateUser(
+        input.userId,
+        {
+          username: input.username,
+          role: input.role,
+          passwordHash: input.passwordHash,
+        },
+        tx
+      )
+
+      const patch: Record<string, string> = {}
+      if (input.username !== undefined) patch.email = input.username
+      if (input.role !== undefined) patch.role = input.role
+
+      if (Object.keys(patch).length > 0) {
+        const entityId = await findAccountEntityId(tx, input.userId)
+        if (entityId) {
+          const head = await tx.query(
+            "SELECT version FROM entities WHERE id = $1 AND deleted_at IS NULL",
+            [entityId]
+          )
+          if (head.rowCount) {
+            try {
+              await updatePropertiesInTx(
+                tx,
+                entityId,
+                head.rows[0].version as number,
+                patch,
+                { actor: input.actor, reason: "Account updated" }
+              )
+            } catch (error) {
+              if (
+                !(error instanceof AppError && error.code === "no_changes")
+              ) {
+                throw error
+              }
+            }
+          }
+        }
+      }
+
+      return { id: user.id, username: user.username, role: user.role }
+    })
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") {
+      throw new AppError(
+        409,
+        "email_taken",
+        `An account with email '${input.username}' already exists`
+      )
+    }
+    throw error
+  }
+}
+
+/**
+ * Deletes the auth user and archives every entity it owns (including its
+ * own account entity). Returns the number of archived entities.
+ */
+export async function deleteAccount(input: {
+  userId: string
+  actor: string
+  reason?: string
+}): Promise<number> {
+  return withTransaction(async (tx) => {
+    const archived = await softDeleteEntitiesByOwner(
+      input.userId,
+      {
+        actor: input.actor,
+        reason: input.reason ?? "Owner account deleted",
+      },
+      tx
+    )
+    await deleteUser(input.userId, tx)
+    return archived
+  })
 }

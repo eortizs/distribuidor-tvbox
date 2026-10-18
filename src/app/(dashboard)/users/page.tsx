@@ -1,12 +1,4 @@
-import { CreateUserForm } from "@/components/auth/create-user-form"
-import { Badge } from "@/components/reui/badge"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { CreateUserButton, UsersManager } from "@/components/auth/users-list"
 import { requireRole } from "@/server/auth/guards"
 import { listUsers } from "@/server/auth/users"
 
@@ -19,69 +11,31 @@ function formatDate(date: Date): string {
 }
 
 export default async function UsersPage() {
-  await requireRole("admin")
+  const session = await requireRole("admin")
   const users = await listUsers()
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-      <div className="flex flex-col gap-0.5">
-        <h1 className="text-lg font-semibold tracking-tight">Users</h1>
-        <p className="text-muted-foreground text-sm">
-          Admin and distributor accounts with access to this dashboard.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div className="flex flex-col gap-0.5">
+          <h1 className="text-lg font-semibold tracking-tight">Users</h1>
+          <p className="text-muted-foreground text-sm">
+            Admin and distributor accounts with access to this dashboard.
+          </p>
+        </div>
+        <CreateUserButton />
       </div>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader>
-            <CardTitle>Accounts</CardTitle>
-            <CardDescription>
-              Distributors only see the entities they created.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ul className="flex flex-col">
-              {users.map((user, index) => (
-                <li
-                  key={user.id}
-                  className={
-                    index > 0 ? "border-t py-3 first:pt-0" : "py-3 first:pt-0"
-                  }
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-sm font-medium">{user.username}</span>
-                    <Badge
-                      variant={
-                        user.role === "admin" ? "primary-light" : "info-light"
-                      }
-                      size="sm"
-                    >
-                      {user.role}
-                    </Badge>
-                    <span className="text-muted-foreground ml-auto text-xs">
-                      {user.entityCount}{" "}
-                      {user.entityCount === 1 ? "entity" : "entities"} · created{" "}
-                      {formatDate(user.createdAt)}
-                    </span>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>New user</CardTitle>
-            <CardDescription>
-              Passwords are hashed with scrypt; share it securely once.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CreateUserForm />
-          </CardContent>
-        </Card>
-      </div>
+      <UsersManager
+        users={users.map((user) => ({
+          id: user.id,
+          username: user.username,
+          role: user.role,
+          entityCount: user.entityCount,
+          createdAt: user.createdAt.toISOString(),
+          createdAtLabel: formatDate(user.createdAt),
+        }))}
+        currentUserId={session.id}
+      />
     </div>
   )
 }
