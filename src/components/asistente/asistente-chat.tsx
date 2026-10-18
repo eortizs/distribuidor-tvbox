@@ -321,7 +321,7 @@ export function AsistenteChat() {
               maxLength={MAX_INPUT_LENGTH}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              className="[&::placeholder]:text-foreground/60"
+              className="placeholder:text-foreground/60"
               onKeyDown={(event) => {
                 if (
                   event.key === "Enter" &&
@@ -349,7 +349,7 @@ export function AsistenteChat() {
                   type="submit"
                   size="icon-sm"
                   variant="default"
-                  disabled={!draft.trim()}
+                  aria-disabled={!draft.trim()}
                 >
                   <ArrowUpIcon aria-hidden="true" />
                   <span className="sr-only">Enviar</span>
