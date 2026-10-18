@@ -1,19 +1,11 @@
 import type { Metadata } from "next"
 
+import { EstadoCuentaView } from "@/components/finanzas/estado-cuenta-view"
+
 export const metadata: Metadata = {
   title: "Estado de cuenta",
 }
 
 export default function EstadoDeCuentaPage() {
-  return (
-    <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div className="flex flex-col gap-0.5">
-          <h1 className="text-lg font-semibold tracking-tight">
-            Estado de cuenta
-          </h1>
-        </div>
-      </div>
-    </div>
-  )
+  return <EstadoCuentaView />
 }

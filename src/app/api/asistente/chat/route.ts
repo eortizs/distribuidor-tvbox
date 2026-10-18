@@ -23,8 +23,7 @@ export async function POST(request: Request) {
     const body = await readJsonBody(request)
     if (!body.ok) return body.response
 
-    // When data tools land, scope them here with the session user only:
-    // distribuidorId: user.role === "distribuidor" ? user.id : undefined.
+    // Data tools are executed server-side scoped to the session user only.
     const messages = sanitizeMessages(
       (body.body as { messages?: unknown }).messages
     )
@@ -36,7 +35,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const stream = streamAssistantReply(messages, request.signal)
+    const stream = streamAssistantReply(messages, user.id, request.signal)
 
     return new Response(stream, {
       headers: {

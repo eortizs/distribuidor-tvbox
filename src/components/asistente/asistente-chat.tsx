@@ -54,16 +54,17 @@ const SUGGESTIONS = [
   {
     label: "¿Qué puedes hacer?",
     prompt:
-      "¿Qué puedes hacer y qué podrás hacer cuando tengas acceso a los datos?",
+      "¿Qué puedes hacer? Explícame cómo me ayudas con el control de mis gastos.",
   },
   {
-    label: "Explícame las entidades",
-    prompt: "Explícame cómo funcionan las entidades umeJSON en este panel.",
-  },
-  {
-    label: "Ayuda con el panel",
+    label: "Registrar un gasto",
     prompt:
-      "Dame un repaso rápido de las secciones del panel y para qué sirve cada una.",
+      "Registra un gasto de $500 MXN en la categoría Inventario de hoy, por compra de un TVBox.",
+  },
+  {
+    label: "Estado de cuenta",
+    prompt:
+      "Genera mi estado de cuenta de gastos del año, con el total y el desglose por categoría.",
   },
 ]
 

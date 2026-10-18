@@ -1,5 +1,6 @@
 import { pool } from "@/server/db"
 import { fixRates, mxDayKey, type FixRateInfo } from "@/server/banxico"
+import { createSystemExpense } from "@/server/finanzas/gastos"
 import {
   deleteUserFile,
   maxUploadBytes,
@@ -247,15 +248,63 @@ async function recordCostOnly(
   model: string,
   aspectRatio: string | null,
   quality: string | null,
-  costUsd: number | null
+  costUsd: number | null,
+  day: string,
+  rate: number | null
 ): Promise<void> {
-  await pool
-    .query(
+  const generationId = crypto.randomUUID()
+  try {
+    await pool.query(
       `INSERT INTO image_generations (id, user_id, file_id, prompt, model, aspect_ratio, quality, cost_usd)
        VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)`,
-      [crypto.randomUUID(), userId, prompt, model, aspectRatio, quality, costUsd]
+      [generationId, userId, prompt, model, aspectRatio, quality, costUsd]
     )
-    .catch(() => {})
+  } catch {
+    return
+  }
+  if (costUsd !== null) {
+    await mirrorCostExpense({ generationId, userId, prompt, model, costUsd, day, rate })
+  }
+}
+
+/*
+ * Mirrors a metered generation cost into the user's expense control so it
+ * shows up in Gastos, Estado de cuenta and assistant reports. Best effort by
+ * design: a failure here must never fail (or roll back) the generation, and
+ * the unique source_image_id makes repeated calls idempotent.
+ */
+async function mirrorCostExpense(params: {
+  generationId: string
+  userId: string
+  prompt: string
+  model: string
+  costUsd: number
+  day: string
+  rate: number | null
+}): Promise<void> {
+  if (!(params.costUsd > 0)) return
+  try {
+    await createSystemExpense({
+      userId: params.userId,
+      sourceImageId: params.generationId,
+      description: `Imagen IA — ${params.prompt.replace(/\s+/g, " ").trim().slice(0, 120)}`,
+      notes: `Modelo: ${params.model}`,
+      amount: params.costUsd,
+      spentOn: params.day,
+      exchangeRate: params.rate,
+      mxnEquivalent:
+        params.rate !== null
+          ? Math.round(params.costUsd * params.rate * 1e6) / 1e6
+          : null,
+    })
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `images: expense mirror failed: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    )
+  }
 }
 
 export async function generateImage(
@@ -399,11 +448,14 @@ export async function generateImage(
       model,
       input.aspectRatio ?? null,
       input.quality ?? null,
-      costUsd
+      costUsd,
+      todayKey,
+      todayRate
     )
     throw error
   }
 
+  const generationId = crypto.randomUUID()
   try {
     const result = await pool.query(
       `INSERT INTO image_generations (id, user_id, file_id, prompt, model, aspect_ratio, quality, cost_usd)
@@ -411,7 +463,7 @@ export async function generateImage(
        RETURNING id, file_id, prompt, model, aspect_ratio, quality, cost_usd, created_at,
                  $9 AS file_name, $10 AS mime_type, $11 AS size_bytes`,
       [
-        crypto.randomUUID(),
+        generationId,
         userId,
         saved.id,
         input.prompt,
@@ -426,6 +478,17 @@ export async function generateImage(
     )
     // Durable from here: the generation row (and its cost) is committed, so
     // no later failure may delete the paid binary.
+    if (costUsd !== null) {
+      await mirrorCostExpense({
+        generationId,
+        userId,
+        prompt: input.prompt,
+        model,
+        costUsd,
+        day: todayKey,
+        rate: todayRate,
+      })
+    }
     const image = mapGenerationRow(result.rows[0] as GenerationRow, todayRate)
     return {
       image,
@@ -448,7 +511,9 @@ export async function generateImage(
       model,
       input.aspectRatio ?? null,
       input.quality ?? null,
-      costUsd
+      costUsd,
+      todayKey,
+      todayRate
     )
     await deleteUserFile(userId, saved.id).catch(() => {})
     throw error
