@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 
 interface ImageFile {
@@ -134,6 +135,8 @@ export function ImageStudio() {
   const [viewer, setViewer] = React.useState<ImageGeneration | null>(null)
   const [confirmDelete, setConfirmDelete] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+
+  const [tab, setTab] = React.useState("generar")
 
   const [reloadToken, setReloadToken] = React.useState(0)
 
@@ -281,231 +284,250 @@ export function ImageStudio() {
 
   return (
     <div className="flex flex-1 flex-col gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Generar imagen</CardTitle>
-          <CardDescription>
-            Describe la imagen que quieres crear; se guarda en tu galería y en
-            tu carpeta de almacenamiento.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          <Textarea
-            ref={promptRef}
-            value={prompt}
-            onChange={(event) => setPrompt(event.target.value)}
-            placeholder="Ej.: un ajolote astronauta flotando entre nebulosas, iluminación de estudio, estilo fotográfico"
-            rows={3}
-            maxLength={MAX_PROMPT_LENGTH}
-            aria-label="Prompt de la imagen"
-            className="resize-none"
-          />
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="flex min-w-36 flex-col gap-1">
-              <Label htmlFor="aspecto" className="text-xs">
-                Aspecto
-              </Label>
-              <Select
-                value={aspectRatio}
-                onValueChange={(value) => setAspectRatio(value as string)}
-              >
-                <SelectTrigger id="aspecto" size="sm" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ASPECT_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex min-w-36 flex-col gap-1">
-              <Label htmlFor="calidad" className="text-xs">
-                Calidad
-              </Label>
-              <Select
-                value={quality}
-                onValueChange={(value) => setQuality(value as string)}
-              >
-                <SelectTrigger id="calidad" size="sm" className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {QUALITY_OPTIONS.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="ms-auto flex items-end gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => void enhancePrompt()}
-                disabled={!canEnhance}
-                title="El modelo revisa tu descripción, la hace más concreta y ajusta el aspecto si es ambiguo"
-              >
-                {enhancing ? (
-                  <Spinner className="size-3.5" />
-                ) : (
-                  <WandSparklesIcon
-                    data-icon="inline-start"
-                    className="size-3.5"
-                  />
-                )}
-                {enhancing ? "Revisando…" : "Mejorar instrucciones"}
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => void generate()}
-                disabled={!canGenerate}
-              >
-                {generating ? (
-                  <Spinner className="size-3.5" />
-                ) : (
-                  <SparklesIcon data-icon="inline-start" className="size-3.5" />
-                )}
-                {generating ? "Generando…" : "Generar"}
-              </Button>
-            </div>
-          </div>
-          {generateError ? (
-            <p
-              role="alert"
-              className="text-destructive text-sm transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"
-            >
-              {generateError}
-            </p>
-          ) : null}
-        </CardContent>
-      </Card>
+      <Tabs value={tab} onValueChange={(value) => setTab(value as string)}>
+        <TabsList variant="line" className="mb-3.5 w-full">
+          <TabsTrigger value="generar">Generar</TabsTrigger>
+          <TabsTrigger value="galeria">Galería</TabsTrigger>
+        </TabsList>
 
-      <section aria-labelledby="galeria-titulo" className="flex flex-col gap-3">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div className="flex flex-col gap-0.5">
-            <h2
-              id="galeria-titulo"
-              className="text-sm font-semibold tracking-tight"
-            >
-              Galería
-            </h2>
-            <p className="text-muted-foreground text-xs tabular-nums">
-              {listState === "loading" ? "Cargando…" : `${total} imágenes`}
-            </p>
-          </div>
-          <div className="flex flex-col items-end gap-0.5">
-            <span className="text-muted-foreground text-xs">
-              Costo acumulado
-            </span>
-            {listState === "loading" ? (
-              <Skeleton className="h-5 w-20" />
-            ) : (
-              <span className="text-base font-semibold tabular-nums">
-                {totalCostMxn !== null
-                  ? mxn(totalCostMxn)
-                  : `US$${totalCostUsd.toFixed(4)}`}
-              </span>
-            )}
-          </div>
-        </div>
-
-        {listState === "loading" ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {Array.from({ length: 5 }).map((_, index) => (
-              <Skeleton key={index} className="aspect-square w-full rounded-xl" />
-            ))}
-          </div>
-        ) : null}
-
-        {listState === "error" ? (
-          <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-6 text-center">
-            <p className="text-muted-foreground text-sm">
-              No pudimos cargar tu galería.
-            </p>
-            <Button variant="outline" size="sm" onClick={reload}>
-              Reintentar
-            </Button>
-          </div>
-        ) : null}
-
-        {listState === "ready" && images.length === 0 ? (
-          <Empty className="rounded-xl border">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <ImageIcon aria-hidden="true" />
-              </EmptyMedia>
-              <EmptyTitle>Aún no hay imágenes</EmptyTitle>
-              <EmptyDescription>
-                Genera tu primera imagen y aparecerá aquí automáticamente, con
-                su costo registrado.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => promptRef.current?.focus()}
-              >
-                Escribir prompt
-              </Button>
-            </EmptyContent>
-          </Empty>
-        ) : null}
-
-        {listState === "ready" && images.length > 0 ? (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-            {generating ? (
-              <Skeleton className="aspect-square w-full rounded-xl" />
-            ) : null}
-            {images.map((image) =>
-              image.file ? (
-                <figure
-                  key={image.id}
-                  className="group relative overflow-hidden rounded-xl bg-muted ring-1 ring-foreground/10"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setViewer(image)}
-                    className="block w-full cursor-zoom-in focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                    aria-label={`Ver imagen generada el ${dateFormatter.format(new Date(image.createdAt))}`}
+        <TabsContent value="generar" keepMounted>
+          <Card>
+            <CardHeader>
+              <CardTitle>Generar imagen</CardTitle>
+              <CardDescription>
+                Describe la imagen que quieres crear; se guarda en tu galería y en
+                tu carpeta de almacenamiento.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3">
+              <Textarea
+                ref={promptRef}
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                placeholder="Ej.: un ajolote astronauta flotando entre nebulosas, iluminación de estudio, estilo fotográfico"
+                rows={3}
+                maxLength={MAX_PROMPT_LENGTH}
+                aria-label="Prompt de la imagen"
+                className="resize-none"
+              />
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="flex min-w-36 flex-col gap-1">
+                  <Label htmlFor="aspecto" className="text-xs">
+                    Aspecto
+                  </Label>
+                  <Select
+                    value={aspectRatio}
+                    onValueChange={(value) => setAspectRatio(value as string)}
                   >
-                    {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
-                    <img
-                      src={image.file.url}
-                      alt={image.prompt}
-                      loading="lazy"
-                      className="aspect-square w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
-                    />
-                  </button>
-                  <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2">
-                    <span className="text-muted-foreground truncate text-xs">
-                      {dateFormatter.format(new Date(image.createdAt))}
-                    </span>
-                    <Badge
-                      variant="success-light"
-                      size="sm"
-                      radius="full"
-                      className="tabular-nums"
-                      title={
-                        image.costMxn !== null
-                          ? "Costo de esta imagen en pesos, al TC FIX del día de generación"
-                          : "Costo de esta imagen en USD, TC no disponible"
-                      }
+                    <SelectTrigger id="aspecto" size="sm" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ASPECT_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex min-w-36 flex-col gap-1">
+                  <Label htmlFor="calidad" className="text-xs">
+                    Calidad
+                  </Label>
+                  <Select
+                    value={quality}
+                    onValueChange={(value) => setQuality(value as string)}
+                  >
+                    <SelectTrigger id="calidad" size="sm" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {QUALITY_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="ms-auto flex items-end gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void enhancePrompt()}
+                    disabled={!canEnhance}
+                    title="El modelo revisa tu descripción, la hace más concreta y ajusta el aspecto si es ambiguo"
+                  >
+                    {enhancing ? (
+                      <Spinner className="size-3.5" />
+                    ) : (
+                      <WandSparklesIcon
+                        data-icon="inline-start"
+                        className="size-3.5"
+                      />
+                    )}
+                    {enhancing ? "Revisando…" : "Mejorar instrucciones"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => void generate()}
+                    disabled={!canGenerate}
+                  >
+                    {generating ? (
+                      <Spinner className="size-3.5" />
+                    ) : (
+                      <SparklesIcon data-icon="inline-start" className="size-3.5" />
+                    )}
+                    {generating ? "Generando…" : "Generar"}
+                  </Button>
+                </div>
+              </div>
+              {generateError ? (
+                <p
+                  role="alert"
+                  className="text-destructive text-sm transition-opacity duration-200 ease-[cubic-bezier(0.22,1,0.36,1)]"
+                >
+                  {generateError}
+                </p>
+              ) : null}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="galeria" keepMounted>
+          <section
+            aria-labelledby="galeria-titulo"
+            className="flex flex-col gap-3"
+          >
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div className="flex flex-col gap-0.5">
+                <h2
+                  id="galeria-titulo"
+                  className="text-sm font-semibold tracking-tight"
+                >
+                  Galería
+                </h2>
+                <p className="text-muted-foreground text-xs tabular-nums">
+                  {listState === "loading" ? "Cargando…" : `${total} imágenes`}
+                </p>
+              </div>
+              <div className="flex flex-col items-end gap-0.5">
+                <span className="text-muted-foreground text-xs">
+                  Costo acumulado
+                </span>
+                {listState === "loading" ? (
+                  <Skeleton className="h-5 w-20" />
+                ) : (
+                  <span className="text-base font-semibold tabular-nums">
+                    {totalCostMxn !== null
+                      ? mxn(totalCostMxn)
+                      : `US$${totalCostUsd.toFixed(4)}`}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {listState === "loading" ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {Array.from({ length: 5 }).map((_, index) => (
+                  <Skeleton key={index} className="aspect-square w-full rounded-xl" />
+                ))}
+              </div>
+            ) : null}
+
+            {listState === "error" ? (
+              <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed p-6 text-center">
+                <p className="text-muted-foreground text-sm">
+                  No pudimos cargar tu galería.
+                </p>
+                <Button variant="outline" size="sm" onClick={reload}>
+                  Reintentar
+                </Button>
+              </div>
+            ) : null}
+
+            {listState === "ready" && images.length === 0 ? (
+              <Empty className="rounded-xl border">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <ImageIcon aria-hidden="true" />
+                  </EmptyMedia>
+                  <EmptyTitle>Aún no hay imágenes</EmptyTitle>
+                  <EmptyDescription>
+                    Genera tu primera imagen y aparecerá aquí automáticamente, con
+                    su costo registrado.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <EmptyContent>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setTab("generar")
+                      requestAnimationFrame(() =>
+                        promptRef.current?.focus()
+                      )
+                    }}
+                  >
+                    Escribir prompt
+                  </Button>
+                </EmptyContent>
+              </Empty>
+            ) : null}
+
+            {listState === "ready" && images.length > 0 ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                {generating ? (
+                  <Skeleton className="aspect-square w-full rounded-xl" />
+                ) : null}
+                {images.map((image) =>
+                  image.file ? (
+                    <figure
+                      key={image.id}
+                      className="group relative overflow-hidden rounded-xl bg-muted ring-1 ring-foreground/10"
                     >
-                      {costLabel(image)}
-                    </Badge>
-                  </figcaption>
-                </figure>
-              ) : null
-            )}
-          </div>
-        ) : null}
-      </section>
+                      <button
+                        type="button"
+                        onClick={() => setViewer(image)}
+                        className="block w-full cursor-zoom-in focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                        aria-label={`Ver imagen generada el ${dateFormatter.format(new Date(image.createdAt))}`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
+                        <img
+                          src={image.file.url}
+                          alt={image.prompt}
+                          loading="lazy"
+                          className="aspect-square w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
+                        />
+                      </button>
+                      <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2">
+                        <span className="text-muted-foreground truncate text-xs">
+                          {dateFormatter.format(new Date(image.createdAt))}
+                        </span>
+                        <Badge
+                          variant="success-light"
+                          size="sm"
+                          radius="full"
+                          className="tabular-nums"
+                          title={
+                            image.costMxn !== null
+                              ? "Costo de esta imagen en pesos, al TC FIX del día de generación"
+                              : "Costo de esta imagen en USD, TC no disponible"
+                          }
+                        >
+                          {costLabel(image)}
+                        </Badge>
+                      </figcaption>
+                    </figure>
+                  ) : null
+                )}
+              </div>
+            ) : null}
+          </section>
+        </TabsContent>
+      </Tabs>
 
       <Dialog
         open={viewer !== null}
