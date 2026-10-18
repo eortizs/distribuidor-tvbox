@@ -1,0 +1,47 @@
+// Configuración de parámetros
+const TOKEN_BANXICO = "TU_TOKEN_DE_64_CARACTERES"; // Sustituye con tu token oficial
+const ID_SERIE = "SF43718"; // Identificador para Tipo de cambio Dólar FIX
+
+// URL para obtener el último dato registrado de la serie (dato oportuno)
+const url = `https://banxico.org.mx{ID_SERIE}/datos/oportuno`;
+
+// Configuración de las cabeceras (Headers) obligatorias
+const opciones = {
+  method: 'GET',
+  headers: {
+    'Bmx-Token': TOKEN_BANXICO,
+    'Accept': 'application/json'
+  }
+};
+
+// Petición asíncrona al API de Banxico
+async function obtenerTipoCambio() {
+  try {
+    const respuesta = await fetch(url, opciones);
+
+    // Validamos que la respuesta sea exitosa (Status 200)
+    if (!respuesta.ok) {
+      throw new Error(`HTTP error! Estatus: ${respuesta.status}`);
+    }
+
+    const data = await respuesta.json();
+    
+    // Extracción de la información dentro de la estructura de Banxico
+    const serie = data.bmx.series[0];
+    const nombreSerie = serie.titulo;
+    const ultimoDato = serie.datos[0];
+    
+    const fecha = ultimoDato.fecha;
+    const tipoCambio = ultimoDato.dato;
+
+    console.log(`Indicador: ${nombreSerie}`);
+    console.log(`Fecha de publicación: ${fecha}`);
+    console.log(`Tipo de cambio: $${tipoCambio} MXN por USD`);
+
+  } catch (error) {
+    console.error("Ocurrió un error al conectar con el API:", error.message);
+  }
+}
+
+// Ejecutar la función
+obtenerTipoCambio();

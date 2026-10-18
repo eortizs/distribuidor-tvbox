@@ -13,7 +13,8 @@ export default function ImagenesPage() {
         <div className="flex flex-col gap-0.5">
           <h1 className="text-lg font-semibold tracking-tight">Imágenes</h1>
           <p className="text-muted-foreground text-sm">
-            Genera imágenes con IA y lleva el control de lo que cuesta cada una.
+            Genera imágenes con IA y lleva el control de lo que cuesta cada una,
+            en pesos mexicanos al tipo de cambio FIX de Banxico del día de uso.
           </p>
         </div>
       </div>

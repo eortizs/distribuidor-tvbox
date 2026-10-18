@@ -67,6 +67,7 @@ interface ImageGeneration {
   aspectRatio: string | null
   quality: string | null
   costUsd: number | null
+  costMxn: number | null
   createdAt: string
   file: ImageFile | null
 }
@@ -98,12 +99,18 @@ const dateFormatter = new Intl.DateTimeFormat("es", {
   timeStyle: "short",
 })
 
-function usd(value: number): string {
-  return `$${value.toFixed(4)}`
+const mxnFormatter = new Intl.NumberFormat("es-MX", {
+  style: "currency",
+  currency: "MXN",
+})
+
+function mxn(value: number): string {
+  return `${mxnFormatter.format(value)} MXN`
 }
 
-function costLabel(costUsd: number | null): string {
-  return costUsd === null ? "s/d" : usd(costUsd)
+function costLabel(image: { costUsd: number | null; costMxn: number | null }): string {
+  if (image.costMxn !== null) return mxn(image.costMxn)
+  return image.costUsd === null ? "s/d" : `US$${image.costUsd.toFixed(4)}`
 }
 
 function modelName(model: string): string {
@@ -114,6 +121,7 @@ export function ImageStudio() {
   const [images, setImages] = React.useState<ImageGeneration[]>([])
   const [total, setTotal] = React.useState(0)
   const [totalCostUsd, setTotalCostUsd] = React.useState(0)
+  const [totalCostMxn, setTotalCostMxn] = React.useState<number | null>(null)
   const [listState, setListState] = React.useState<ListState>("loading")
 
   const [prompt, setPrompt] = React.useState("")
@@ -141,6 +149,7 @@ export function ImageStudio() {
             images: ImageGeneration[]
             total: number
             totalCostUsd: number
+            totalCostMxn: number | null
           }
           error?: { message?: string }
         }
@@ -150,6 +159,7 @@ export function ImageStudio() {
         setImages(body.data.images)
         setTotal(body.data.total)
         setTotalCostUsd(body.data.totalCostUsd)
+        setTotalCostMxn(body.data.totalCostMxn)
         setListState("ready")
       })
       .catch((error: unknown) => {
@@ -177,7 +187,11 @@ export function ImageStudio() {
       })
       const body = (await response.json()) as {
         ok: boolean
-        data?: { image: ImageGeneration; totalCostUsd: number }
+        data?: {
+          image: ImageGeneration
+          totalCostUsd: number
+          totalCostMxn: number | null
+        }
         error?: { message?: string }
       }
       if (!response.ok || !body.ok || !body.data) {
@@ -190,8 +204,9 @@ export function ImageStudio() {
       setImages((current) => [body.data!.image, ...current])
       setTotal((current) => current + 1)
       setTotalCostUsd(body.data.totalCostUsd)
+      setTotalCostMxn(body.data.totalCostMxn)
       toast.success(
-        `Imagen generada · costo ${costLabel(body.data.image.costUsd)}`
+        `Imagen generada · costo ${costLabel(body.data.image)}`
       )
     } catch {
       setGenerateError(
@@ -391,7 +406,9 @@ export function ImageStudio() {
               <Skeleton className="h-5 w-20" />
             ) : (
               <span className="text-base font-semibold tabular-nums">
-                {usd(totalCostUsd)}
+                {totalCostMxn !== null
+                  ? mxn(totalCostMxn)
+                  : `US$${totalCostUsd.toFixed(4)}`}
               </span>
             )}
           </div>
@@ -474,9 +491,13 @@ export function ImageStudio() {
                       size="sm"
                       radius="full"
                       className="tabular-nums"
-                      title="Costo de esta imagen"
+                      title={
+                        image.costMxn !== null
+                          ? "Costo de esta imagen en pesos, al TC FIX del día de generación"
+                          : "Costo de esta imagen en USD, TC no disponible"
+                      }
                     >
-                      {costLabel(image.costUsd)}
+                      {costLabel(image)}
                     </Badge>
                   </figcaption>
                 </figure>
@@ -519,7 +540,7 @@ export function ImageStudio() {
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="success-light" className="tabular-nums">
-                  Costo: {costLabel(viewer.costUsd)}
+                  Costo: {costLabel(viewer)}
                 </Badge>
                 <Badge variant="outline">
                   {viewer.aspectRatio ?? "auto"}

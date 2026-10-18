@@ -1,4 +1,5 @@
 import { pool } from "@/server/db"
+import { fixRates, mxDayKey, type FixRateInfo } from "@/server/banxico"
 import {
   deleteUserFile,
   maxUploadBytes,
@@ -42,6 +43,7 @@ export interface ImageGenerationPayload {
   aspectRatio: string | null
   quality: string | null
   costUsd: number | null
+  costMxn: number | null
   createdAt: string
   file: ImageFilePayload | null
 }
@@ -151,7 +153,14 @@ function slugifyPrompt(prompt: string): string {
   return slug || "imagen"
 }
 
-function mapGenerationRow(row: GenerationRow): ImageGenerationPayload {
+function round6(value: number): number {
+  return Math.round(value * 1e6) / 1e6
+}
+
+function mapGenerationRow(
+  row: GenerationRow,
+  rate: number | null = null
+): ImageGenerationPayload {
   const file =
     row.file_id && row.file_name && row.mime_type
       ? {
@@ -162,13 +171,16 @@ function mapGenerationRow(row: GenerationRow): ImageGenerationPayload {
           url: `/api/files/${row.file_id}`,
         }
       : null
+  const costUsd = row.cost_usd === null ? null : Number(row.cost_usd)
   return {
     id: row.id,
     prompt: row.prompt,
     model: row.model,
     aspectRatio: row.aspect_ratio,
     quality: row.quality,
-    costUsd: row.cost_usd === null ? null : Number(row.cost_usd),
+    costUsd,
+    costMxn:
+      costUsd === null || rate === null ? null : round6(costUsd * rate),
     createdAt: row.created_at.toISOString(),
     file,
   }
@@ -181,15 +193,48 @@ const SELECT_GENERATION = `
     FROM image_generations g
     LEFT JOIN user_files f ON f.id = g.file_id`
 
+export interface LifetimeCost {
+  totalUsd: number
+  /** null when the Banxico rate is unavailable for at least one costed day */
+  totalMxn: number | null
+  /** FIX rate (MXN per USD) per calendar day of use, null when unknown */
+  rates: Map<string, number | null>
+  latest: FixRateInfo | null
+}
+
 /** Lifetime provider spend: soft-deleted generations still cost money. */
-export async function totalCostUsd(userId: string): Promise<number> {
+async function lifetimeCost(userId: string): Promise<LifetimeCost> {
   const result = await pool.query(
-    `SELECT COALESCE(SUM(cost_usd), 0)::float8 AS total
+    `SELECT (created_at AT TIME ZONE 'America/Mexico_City')::date::text AS day,
+            SUM(cost_usd)::float8 AS cost
        FROM image_generations
-      WHERE user_id = $1`,
+      WHERE user_id = $1 AND cost_usd IS NOT NULL
+      GROUP BY 1`,
     [userId]
   )
-  return Number(result.rows[0].total)
+  const usdByDay = new Map<string, number>()
+  let totalUsd = 0
+  for (const row of result.rows as { day: string; cost: number }[]) {
+    totalUsd += row.cost
+    usdByDay.set(row.day, row.cost)
+  }
+  totalUsd = round6(totalUsd)
+  // Today is always requested: the caller may be about to bill a new
+  // generation on a day that has no stored rows yet.
+  const requestedDays = [...usdByDay.keys(), mxDayKey(new Date())]
+  const { rates, latest } = await fixRates(requestedDays)
+  if (usdByDay.size === 0) {
+    return { totalUsd: 0, totalMxn: 0, rates, latest }
+  }
+  let totalMxn = 0
+  for (const [day, cost] of usdByDay) {
+    const rate = rates.get(day)
+    if (rate === undefined || rate === null) {
+      return { totalUsd, totalMxn: null, rates, latest }
+    }
+    totalMxn += cost * rate
+  }
+  return { totalUsd, totalMxn: round6(totalMxn), rates, latest }
 }
 
 /*
@@ -216,7 +261,12 @@ async function recordCostOnly(
 export async function generateImage(
   userId: string,
   input: GenerateImageInput
-): Promise<{ image: ImageGenerationPayload; totalCostUsd: number }> {
+): Promise<{
+  image: ImageGenerationPayload
+  totalCostUsd: number
+  totalCostMxn: number | null
+  fx: FixRateInfo | null
+}> {
   const apiKey = process.env.OPENROUTER_API_KEY
   const model = process.env.IMAGE_MODEL
   if (!apiKey || !model) {
@@ -320,13 +370,18 @@ export async function generateImage(
   }
 
   // The provider bills completed generations in full: resolve the user's
-  // running total before persisting anything, so a later failure can never
-  // leave a stored file or row without a total to report against.
+  // running total (USD and MXN) before persisting anything, so a later
+  // failure can never leave a stored file or row without a total to report
+  // against.
   const costUsd =
     typeof payload?.usage?.cost === "number" && Number.isFinite(payload.usage.cost)
       ? payload.usage.cost
       : null
-  const totalBefore = await totalCostUsd(userId)
+  const before = await lifetimeCost(userId)
+  const todayKey = mxDayKey(new Date())
+  const todayRate = before.rates.get(todayKey) ?? null
+  const costMxn =
+    costUsd === null || todayRate === null ? null : round6(costUsd * todayRate)
 
   let saved: UserFile
   try {
@@ -371,10 +426,20 @@ export async function generateImage(
     )
     // Durable from here: the generation row (and its cost) is committed, so
     // no later failure may delete the paid binary.
-    const image = mapGenerationRow(result.rows[0] as GenerationRow)
+    const image = mapGenerationRow(result.rows[0] as GenerationRow, todayRate)
     return {
       image,
-      totalCostUsd: totalBefore + (costUsd ?? 0),
+      totalCostUsd: round6(before.totalUsd + (costUsd ?? 0)),
+      // A row without a known USD cost adds nothing to the total, so the
+      // lifetime MXN total stays valid; only an unconvertible known cost
+      // makes the MXN total unknowable.
+      totalCostMxn:
+        costUsd === null
+          ? before.totalMxn
+          : before.totalMxn === null || costMxn === null
+            ? null
+            : round6(before.totalMxn + costMxn),
+      fx: before.latest,
     }
   } catch (error) {
     await recordCostOnly(
@@ -393,7 +458,13 @@ export async function generateImage(
 export async function listImageGenerations(
   userId: string,
   options: { limit?: number; offset?: number } = {}
-): Promise<{ images: ImageGenerationPayload[]; total: number; totalCostUsd: number }> {
+): Promise<{
+  images: ImageGenerationPayload[]
+  total: number
+  totalCostUsd: number
+  totalCostMxn: number | null
+  fx: FixRateInfo | null
+}> {
   const values: unknown[] = [userId]
   const totalResult = await pool.query(
     `SELECT count(*)::int AS count
@@ -410,10 +481,18 @@ export async function listImageGenerations(
       LIMIT $2 OFFSET $3`,
     [userId, limit, offset]
   )
+  const lifetime = await lifetimeCost(userId)
   return {
-    images: result.rows.map((row) => mapGenerationRow(row as GenerationRow)),
+    images: result.rows.map((row) =>
+      mapGenerationRow(
+        row as GenerationRow,
+        lifetime.rates.get(mxDayKey((row as GenerationRow).created_at)) ?? null
+      )
+    ),
     total: Number(totalResult.rows[0].count),
-    totalCostUsd: await totalCostUsd(userId),
+    totalCostUsd: lifetime.totalUsd,
+    totalCostMxn: lifetime.totalMxn,
+    fx: lifetime.latest,
   }
 }
 
