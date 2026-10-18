@@ -2,10 +2,13 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { Collapsible } from "@base-ui/react/collapsible"
 import {
   BoxesIcon,
   ChartLineIcon,
+  ChevronRightIcon,
   ChevronsUpDownIcon,
+  ImageIcon,
   LayoutDashboardIcon,
   LifeBuoyIcon,
   LogOutIcon,
@@ -37,6 +40,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
 
@@ -128,6 +134,47 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                   <span>Analytics</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel>Herramientas</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              <Collapsible.Root defaultOpen={pathname.startsWith("/herramientas")}>
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    tooltip="Imágenes"
+                    isActive={pathname.startsWith("/herramientas")}
+                    render={<Collapsible.Trigger className="w-full" />}
+                  >
+                    <ImageIcon aria-hidden="true" />
+                    <span>Imágenes</span>
+                    <ChevronRightIcon
+                      aria-hidden="true"
+                      className="ms-auto transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-[panel-open]/menu-button:rotate-90"
+                    />
+                  </SidebarMenuButton>
+                  <Collapsible.Panel>
+                    <SidebarMenuSub>
+                      <SidebarMenuSubItem>
+                        <SidebarMenuSubButton
+                          size="sm"
+                          isActive={pathname.startsWith("/herramientas/imagenes")}
+                          render={
+                            <Link
+                              href="/herramientas/imagenes"
+                              onClick={closeMobilePanel}
+                            />
+                          }
+                        >
+                          <span>Generador</span>
+                        </SidebarMenuSubButton>
+                      </SidebarMenuSubItem>
+                    </SidebarMenuSub>
+                  </Collapsible.Panel>
+                </SidebarMenuItem>
+              </Collapsible.Root>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
