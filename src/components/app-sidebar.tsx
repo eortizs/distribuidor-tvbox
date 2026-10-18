@@ -9,6 +9,7 @@ import {
   LayoutDashboardIcon,
   LifeBuoyIcon,
   LogOutIcon,
+  BotIcon,
   SettingsIcon,
   UsersIcon,
 } from "lucide-react"
@@ -55,9 +56,14 @@ const navMain = [
 }[]
 
 const navSecondary = [
+  { title: "Asistente", icon: BotIcon, href: "/asistente" },
   { title: "Settings", icon: SettingsIcon },
   { title: "Get help", icon: LifeBuoyIcon },
-]
+] satisfies {
+  title: string
+  icon: typeof LayoutDashboardIcon
+  href?: string
+}[]
 
 export function AppSidebar({ user }: { user: AuthUser }) {
   const pathname = usePathname()
@@ -130,19 +136,33 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           <SidebarGroupLabel>Support</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-                {navSecondary.map((item) => (
-                  <SidebarMenuItem key={item.title}>
-                    <SidebarMenuButton
-                      tooltip={item.title}
-                      render={
-                        <a href="#" onClick={closeMobilePanel} />
-                      }
-                    >
-                      <item.icon aria-hidden="true" />
-                      <span>{item.title}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
+                {navSecondary.map((item) => {
+                  const isActive = item.href
+                    ? pathname.startsWith(item.href)
+                    : false
+                  return (
+                    <SidebarMenuItem key={item.title}>
+                      <SidebarMenuButton
+                        tooltip={item.title}
+                        isActive={isActive}
+                        aria-current={isActive ? "page" : undefined}
+                        render={
+                          item.href ? (
+                            <Link
+                              href={item.href}
+                              onClick={closeMobilePanel}
+                            />
+                          ) : (
+                            <a href="#" onClick={closeMobilePanel} />
+                          )
+                        }
+                      >
+                        <item.icon aria-hidden="true" />
+                        <span>{item.title}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  )
+                })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

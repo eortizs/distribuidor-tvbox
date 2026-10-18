@@ -9,6 +9,7 @@ Dashboard de administración para distribuidores TVBox construido con Next.js 16
 - **Autenticación con perfiles**: `admin` (acceso total + gestión de usuarios) y `distribuidor` (solo sus propias entidades). El login siempre es una cuenta de correo. Autorregistro en `/register`: toda cuenta nueva se crea con perfil `distribuidor` y genera su propia entidad umeJSON (`entityName: "Cuenta"`, ligada vía `dynamicProperties.userId` / `distribuidorId`). Usuario y password se insertan junto a su entidad `Cuenta` en una sola transacción. Sesiones en base de datos con cookie httpOnly, contraseñas con scrypt asíncrono, gate a nivel proxy con validación de sesión contra la DB y rate limit de 10 POST/min por IP en `/login` y `/register` (en memoria, por proceso).
 - **UI admin**: lista de entidades con data-grid ReUI (búsqueda, filtro, paginación en servidor), formulario dinámico de creación, detalle con editor de propiedades, cambio de estado y timeline de eventos. El footer del sidebar muestra el usuario con un menú desplegable (Perfil, Billing, Notifications, Log out); el panel móvil del sidebar se cierra automáticamente al navegar a cualquier opción.
 - **Perfil de usuario** (`/profile`): pestañas *Detalles*, *Información* y *Seguridad* (variante `line` de ReUI). Ver [Perfil de usuario](#perfil-de-usuario).
+- **Asistente LLM** (`/asistente`): chat estilo ChatGPT en la sección *Support* del sidebar. Streaming token a token vía OpenRouter (`ASISTENTE_MODEL`, `OPENROUTER_API_KEY` en `.env`), respuestas en Markdown (renderizadas al terminar cada respuesta; texto plano durante el streaming), historial efímero y rate limit de 20 mensajes/min por usuario con timeout de inactividad de 30 s hacia el proveedor. El panel tiene altura fija (`100svh` menos el header): el transcript hace scroll por dentro, con auto-scroll al borde durante la respuesta y botón para volver al final; funciona igual en desktop y móvil (la página nunca crece más allá del viewport). En esta versión el modelo **no** accede a la base de datos; el acceso futuro a datos irá siempre acotado al usuario de la sesión (un `distribuidor` solo podrá consultar sus propias entidades).
 
 ## Requisitos
 
@@ -23,6 +24,8 @@ npm install
 
 # 2. Configurar variables de entorno (.env)
 DATABASE_URL=postgresql://<usuario>:<password>@localhost:5432/reseller
+OPENROUTER_API_KEY=<clave de OpenRouter>   # Asistente (/asistente)
+ASISTENTE_MODEL=meta/muse-spark-1.3-contributor
 
 # 3. Aplicar el esquema (idempotente en DB vacía)
 psql "$DATABASE_URL" -f db/schema.sql
@@ -92,6 +95,7 @@ Toda mutación es una transacción atómica: `UPDATE entities ... WHERE id = $1 
 | `PATCH` | `/api/entities/[id]` | `{version, dynamicProperties \| state, reason?}` — 409 en conflicto de versión |
 | `GET` | `/api/entities/[id]/events` | Bitácora de eventos |
 | `GET/POST` | `/api/users`* | Gestión de usuarios (solo admin, vía server actions) |
+| `POST` | `/api/asistente/chat` | Chat con el LLM en streaming (`{ messages: [{ role, content }] }` → texto plano en chunks). Sesión requerida; 20 req/min por usuario |
 
 Todas las rutas requieren sesión; el `actor` de la bitácora se deriva de la sesión (`user:<username>`), nunca del cliente.
 
