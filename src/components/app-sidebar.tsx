@@ -4,22 +4,23 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Collapsible } from "@base-ui/react/collapsible"
 import {
-  BoxesIcon,
   ChartLineIcon,
   ChevronRightIcon,
   ChevronsUpDownIcon,
   ImageIcon,
-  LayoutDashboardIcon,
-  LifeBuoyIcon,
   LogOutIcon,
-  BotIcon,
-  SettingsIcon,
-  UsersIcon,
 } from "lucide-react"
 
 import { logoutAction } from "@/app/actions/auth"
 import type { AuthUser } from "@/server/auth/types"
 import { ToguLogo } from "@/components/togu-logo"
+import {
+  groupLabels,
+  herramientasNav,
+  navMain,
+  navSecondary,
+  profileNav,
+} from "@/components/dashboard/nav-config"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,32 +46,6 @@ import {
   SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
-
-const navMain = [
-  { title: "Dashboard", icon: LayoutDashboardIcon, href: "/" },
-  { title: "Entities", icon: BoxesIcon, href: "/entities" },
-  {
-    title: "Users",
-    icon: UsersIcon,
-    href: "/users",
-    adminOnly: true,
-  },
-] satisfies {
-  title: string
-  icon: typeof LayoutDashboardIcon
-  href: string
-  adminOnly?: boolean
-}[]
-
-const navSecondary = [
-  { title: "Asistente", icon: BotIcon, href: "/asistente" },
-  { title: "Settings", icon: SettingsIcon },
-  { title: "Get help", icon: LifeBuoyIcon },
-] satisfies {
-  title: string
-  icon: typeof LayoutDashboardIcon
-  href?: string
-}[]
 
 export function AppSidebar({ user }: { user: AuthUser }) {
   const pathname = usePathname()
@@ -99,7 +74,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Platform</SidebarGroupLabel>
+          <SidebarGroupLabel>{groupLabels.main}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               {items.map((item) => {
@@ -138,18 +113,18 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           </SidebarGroupContent>
         </SidebarGroup>
         <SidebarGroup>
-          <SidebarGroupLabel>Herramientas</SidebarGroupLabel>
+          <SidebarGroupLabel>{herramientasNav.group}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
               <Collapsible.Root defaultOpen={pathname.startsWith("/herramientas")}>
                 <SidebarMenuItem>
                   <SidebarMenuButton
-                    tooltip="Imágenes"
+                    tooltip={herramientasNav.title}
                     isActive={pathname.startsWith("/herramientas")}
                     render={<Collapsible.Trigger className="w-full" />}
                   >
                     <ImageIcon aria-hidden="true" />
-                    <span>Imágenes</span>
+                    <span>{herramientasNav.title}</span>
                     <ChevronRightIcon
                       aria-hidden="true"
                       className="ms-auto transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-[panel-open]/menu-button:rotate-90"
@@ -163,12 +138,12 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                           isActive={pathname.startsWith("/herramientas/imagenes")}
                           render={
                             <Link
-                              href="/herramientas/imagenes"
+                              href={herramientasNav.href}
                               onClick={closeMobilePanel}
                             />
                           }
                         >
-                          <span>Generador</span>
+                          <span>{herramientasNav.childTitle}</span>
                         </SidebarMenuSubButton>
                       </SidebarMenuSubItem>
                     </SidebarMenuSub>
@@ -179,7 +154,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           </SidebarGroupContent>
         </SidebarGroup>
         <SidebarGroup>
-          <SidebarGroupLabel>Support</SidebarGroupLabel>
+          <SidebarGroupLabel>{groupLabels.support}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
                 {navSecondary.map((item) => {
@@ -237,10 +212,10 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                 <DropdownMenuGroup>
                   <DropdownMenuItem
                     render={
-                      <Link href="/profile" onClick={closeMobilePanel} />
+                      <Link href={profileNav.href} onClick={closeMobilePanel} />
                     }
                   >
-                    Perfil
+                    {profileNav.title}
                   </DropdownMenuItem>
                   <DropdownMenuItem>Billing</DropdownMenuItem>
                   <DropdownMenuItem>Notifications</DropdownMenuItem>
