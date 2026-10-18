@@ -312,7 +312,7 @@ export function AsistenteChat() {
           </div>
         ) : null}
         <form className="w-full" onSubmit={handleSubmit}>
-          <InputGroup>
+          <InputGroup className="bg-background">
             <InputGroupTextarea
               ref={textareaRef}
               aria-label="Mensaje para el asistente"
@@ -321,6 +321,7 @@ export function AsistenteChat() {
               maxLength={MAX_INPUT_LENGTH}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
+              className="[&::placeholder]:text-foreground/60"
               onKeyDown={(event) => {
                 if (
                   event.key === "Enter" &&
