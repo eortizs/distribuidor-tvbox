@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# per-user file storage
+/storage/
+
 # production
 /build
 

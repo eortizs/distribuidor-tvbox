@@ -23,6 +23,7 @@ import {
 } from "./types"
 import { hashPassword } from "./password"
 import { deleteUser, insertUser, updateUser } from "./users"
+import { ensureUserStorage, removeUserStorage } from "@/server/storage/user-files"
 
 export const ACCOUNT_ENTITY_NAME = "Cuenta"
 
@@ -83,9 +84,10 @@ export async function createAccount(
     )
   }
   const role: UserRole = input.role ?? "distribuidor"
+  let created: AuthUser | null = null
 
   try {
-    return await withTransaction(async (tx) => {
+    created = await withTransaction(async (tx) => {
       const user = await insertUser(
         {
           username: email,
@@ -127,6 +129,7 @@ export async function createAccount(
 
       return { id: user.id, username: user.username, role: user.role }
     })
+    return created
   } catch (error) {
     if ((error as { code?: string }).code === "23505") {
       throw new AppError(
@@ -136,6 +139,18 @@ export async function createAccount(
       )
     }
     throw error
+  } finally {
+    const ensured = created
+    if (ensured) {
+      await ensureUserStorage(ensured.id).catch((error) => {
+        console.error(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            error: `storage: ensure folder for ${ensured.id} failed: ${error instanceof Error ? error.message : String(error)}`,
+          })
+        )
+      })
+    }
   }
 }
 
@@ -230,7 +245,7 @@ export async function deleteAccount(input: {
   actor: string
   reason?: string
 }): Promise<number> {
-  return withTransaction(async (tx) => {
+  const archived = await withTransaction(async (tx) => {
     const archived = await softDeleteEntitiesByOwner(
       input.userId,
       {
@@ -242,4 +257,13 @@ export async function deleteAccount(input: {
     await deleteUser(input.userId, tx)
     return archived
   })
+  await removeUserStorage(input.userId).catch((error) => {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `storage: remove folder for ${input.userId} failed: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    )
+  })
+  return archived
 }
