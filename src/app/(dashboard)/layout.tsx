@@ -1,4 +1,5 @@
 import { AppSidebar } from "@/components/app-sidebar"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { requireUser } from "@/server/auth/guards"
 
 export const instant = false
@@ -44,6 +45,9 @@ export default async function DashboardLayout({
                 </BreadcrumbItem>
               </BreadcrumbList>
             </Breadcrumb>
+          </div>
+          <div className="ms-auto px-4">
+            <ThemeToggle />
           </div>
         </header>
         {children}

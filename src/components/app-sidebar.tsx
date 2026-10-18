@@ -16,6 +16,7 @@ import {
 
 import { logoutAction } from "@/app/actions/auth"
 import type { AuthUser } from "@/server/auth/types"
+import { ToguLogo } from "@/components/togu-logo"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -79,12 +80,10 @@ export function AppSidebar({ user }: { user: AuthUser }) {
     <Sidebar collapsible="icon">
       <SidebarHeader>
         <div className="flex items-center gap-2 px-2 py-1.5">
-          <div className="bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-xs text-xs font-semibold">
-            A
-          </div>
+          <ToguLogo />
           <div className="flex min-w-0 flex-col group-data-[collapsible=icon]:hidden">
             <span className="truncate text-sm font-semibold tracking-tight">
-              Acme Inc
+              Togu
             </span>
             <span className="text-muted-foreground truncate text-xs">
               {user.role === "admin" ? "Admin" : "Distributor"}
