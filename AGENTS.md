@@ -8,6 +8,10 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 <!-- END:nextjs-agent-rules -->
 
+## Despliegue (obligatorio)
+
+Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbox.people-ia.com/
+
 ## Reglas de UI: servidor MCP de ReUI (obligatorio)
 
 Cualquier elemento o componente de la GUI debe crearse usando el servidor MCP de **ReUI**. Está prohibido escribir componentes de UI a mano cuando ReUI provee uno equivalente.

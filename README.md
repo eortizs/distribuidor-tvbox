@@ -14,6 +14,7 @@ Dashboard de administración para distribuidores TVBox construido con Next.js 16
 - **Gestión de usuarios** (`/users`, solo admin): listado en data-grid ReUI con búsqueda por email y filtro por rol; alta en dialog, edición (email, rol, contraseña) y baja con confirmación en `AlertDialog`. Protecciones en servidor: no se puede borrar la propia cuenta ni degradar/eliminar al último `admin`; el email debe ser único. Al editar una cuenta se actualiza en la misma transacción el usuario de autenticación y su entidad umeJSON `Cuenta` (espejo de `email`/`role` con evento `property.updated`); al eliminarla se archivan (soft-delete) todas sus entidades —incluida su `Cuenta`— con evento `entity.deleted`, y solo después se borra el usuario.
 - **Almacenamiento de archivos por usuario**: cada cuenta tiene su propio folder en el servidor (`storage/users/<userId>/`, raíz configurable con `USER_FILES_DIR`) con subcarpetas `attachments/` (adjuntos subidos) y `generated/` (imágenes y archivos generados por IA). El folder se crea al registrar la cuenta, al ejecutar `node db/ensure-user-storage.mjs` (cartera de cuentas existentes) y de forma perezosa en el primer guardado; se elimina junto con la cuenta. Los archivos se indexan en la tabla `user_files` (`db/storage-schema.sql`) y se sirven solo al usuario de la sesión vía `/api/files`. Ver [Almacenamiento por usuario](#almacenamiento-por-usuario).
 - **Imágenes con IA** (`/herramientas/imagenes`, sección *Herramientas* del sidebar): generador de imágenes vía OpenRouter Image API (`IMAGE_MODEL`, `OPENROUTER_API_KEY` en `.env`) con prompt, relación de aspecto y calidad. La página se organiza en dos pestañas, *Generar* y *Galería*, con el mismo patrón de pestañas de `/profile` (variante `line`, paneles `keepMounted`; ver [Convenciones de UI](#convenciones-de-ui)). Cada imagen se guarda en `storage/users/<userId>/generated/` vía `saveUserFile` (kind `generated`) y se sirve por `/api/files`; la galería es automática por usuario (tabla `image_generations`, `db/images-schema.sql`). Tarificador: cada generación registra el costo real que reporta el proveedor (`usage.cost` en USD) y la UI lo presenta **en pesos mexicanos**, convertido con el tipo de cambio FIX de Banxico del día de uso (`BANXICO_TOKEN` en `.env`). Borrar una imagen es un soft-delete: sale de la galería y libera su archivo, pero el costo permanece en el acumulado; si el binario no pudiera guardarse, el costo igualmente queda registrado (fila sin `file_id`, excluida de la galería). Rate limit de 6 imágenes/min por usuario. Ver [Imágenes con IA](#imágenes-con-ia).
+- **Finanzas** (`/finanzas`, sección *Finanzas* del sidebar): estructura inicial del módulo financiero con páginas vacías listas para implementación — **Estado de cuenta**, **Ganancias**, **Gastos** y **Método de pago**. La navegación vive en `finanzasNav` (`src/components/dashboard/nav-config.ts`): la sección se renderiza como grupo del sidebar con enlaces directos (sin colapsable) y los breadcrumbs reconocen las cuatro rutas (`src/components/dashboard/app-breadcrumb.tsx`).
 
 ## Requisitos
 
@@ -158,7 +159,7 @@ src/server/
   storage/               # user-files (folders por usuario + índice user_files)
   umejson/               # schema (Ajv + sentinels), finalize, repository (protocolo head+journal)
 src/app/
-  (dashboard)/           # UI protegida: dashboard, entities, users, profile, herramientas/imagenes
+  (dashboard)/           # UI protegida: dashboard, entities, users, profile, herramientas/imagenes, finanzas
   api/                   # Route handlers
   actions/               # Server actions (login, registro, logout, perfil, crear usuario)
   login/                 # Login (card ReUI)
@@ -183,6 +184,8 @@ src/app/
 - Diseño de persistencia normativo: [`docs/PERSISTENCE.md` (upstream)](https://github.com/eortizs/ume-json-v1/blob/main/docs/PERSISTENCE.md)
 
 ## Deployment
+
+Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbox.people-ia.com/ (Caddy reverse-proxy al puerto 3010).
 
 Servidor Node con build de producción, gestionado por **PM2**:
 
