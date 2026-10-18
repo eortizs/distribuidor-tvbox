@@ -5,6 +5,7 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 
 import {
+  finanzasNav,
   groupLabels,
   herramientasNav,
   navMain,
@@ -37,13 +38,17 @@ for (const item of [...navMain, ...navSecondary]) {
 navRouteLabels.set("/", groupLabels.main)
 navRouteLabels.set("/herramientas", herramientasNav.group)
 navRouteLabels.set(herramientasNav.href, herramientasNav.title)
+navRouteLabels.set("/finanzas", finanzasNav.group)
+for (const child of finanzasNav.children) {
+  navRouteLabels.set(child.href, child.title)
+}
 navRouteLabels.set(profileNav.href, profileNav.title)
 
 const pageTitles: Record<string, string> = {
   "/entities/new": "New entity",
 }
 
-const groupHrefs = new Set(["/herramientas"])
+const groupHrefs = new Set(["/herramientas", "/finanzas"])
 
 function humanize(segment: string) {
   return segment.charAt(0).toUpperCase() + segment.slice(1)

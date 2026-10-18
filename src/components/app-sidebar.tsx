@@ -2,12 +2,9 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { Collapsible } from "@base-ui/react/collapsible"
 import {
   ChartLineIcon,
-  ChevronRightIcon,
   ChevronsUpDownIcon,
-  ImageIcon,
   LogOutIcon,
 } from "lucide-react"
 
@@ -15,6 +12,7 @@ import { logoutAction } from "@/app/actions/auth"
 import type { AuthUser } from "@/server/auth/types"
 import { ToguLogo } from "@/components/togu-logo"
 import {
+  finanzasNav,
   groupLabels,
   herramientasNav,
   navMain,
@@ -41,9 +39,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar"
 
@@ -116,40 +111,51 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           <SidebarGroupLabel>{herramientasNav.group}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <Collapsible.Root defaultOpen={pathname.startsWith("/herramientas")}>
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    tooltip={herramientasNav.title}
-                    isActive={pathname.startsWith("/herramientas")}
-                    render={<Collapsible.Trigger className="w-full" />}
-                  >
-                    <ImageIcon aria-hidden="true" />
-                    <span>{herramientasNav.title}</span>
-                    <ChevronRightIcon
-                      aria-hidden="true"
-                      className="ms-auto transition-transform duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] group-data-[panel-open]/menu-button:rotate-90"
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  tooltip={herramientasNav.title}
+                  isActive={pathname.startsWith(herramientasNav.href)}
+                  aria-current={
+                    pathname.startsWith(herramientasNav.href)
+                      ? "page"
+                      : undefined
+                  }
+                  render={
+                    <Link
+                      href={herramientasNav.href}
+                      onClick={closeMobilePanel}
                     />
-                  </SidebarMenuButton>
-                  <Collapsible.Panel>
-                    <SidebarMenuSub>
-                      <SidebarMenuSubItem>
-                        <SidebarMenuSubButton
-                          size="sm"
-                          isActive={pathname.startsWith("/herramientas/imagenes")}
-                          render={
-                            <Link
-                              href={herramientasNav.href}
-                              onClick={closeMobilePanel}
-                            />
-                          }
-                        >
-                          <span>{herramientasNav.childTitle}</span>
-                        </SidebarMenuSubButton>
-                      </SidebarMenuSubItem>
-                    </SidebarMenuSub>
-                  </Collapsible.Panel>
-                </SidebarMenuItem>
-              </Collapsible.Root>
+                  }
+                >
+                  <herramientasNav.icon aria-hidden="true" />
+                  <span>{herramientasNav.title}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+        <SidebarGroup>
+          <SidebarGroupLabel>{finanzasNav.group}</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {finanzasNav.children.map((child) => {
+                const isActive = pathname.startsWith(child.href)
+                return (
+                  <SidebarMenuItem key={child.href}>
+                    <SidebarMenuButton
+                      tooltip={child.title}
+                      isActive={isActive}
+                      aria-current={isActive ? "page" : undefined}
+                      render={
+                        <Link href={child.href} onClick={closeMobilePanel} />
+                      }
+                    >
+                      <child.icon aria-hidden="true" />
+                      <span>{child.title}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>

@@ -1,15 +1,21 @@
 import {
   BotIcon,
   BoxesIcon,
+  CreditCardIcon,
+  ImageIcon,
   LayoutDashboardIcon,
   LifeBuoyIcon,
+  ReceiptTextIcon,
   SettingsIcon,
+  TrendingDownIcon,
+  TrendingUpIcon,
   UsersIcon,
 } from "lucide-react"
 
 export const groupLabels = {
   main: "Inicio",
   herramientas: "Herramientas",
+  finanzas: "Finanzas",
   support: "Support",
 } as const
 
@@ -42,8 +48,26 @@ export const navSecondary = [
 export const herramientasNav = {
   group: groupLabels.herramientas,
   title: "Imágenes",
+  icon: ImageIcon,
   href: "/herramientas/imagenes",
-  childTitle: "Generador",
+} as const
+
+export const finanzasNav = {
+  group: groupLabels.finanzas,
+  children: [
+    {
+      title: "Estado de cuenta",
+      icon: ReceiptTextIcon,
+      href: "/finanzas/estado-de-cuenta",
+    },
+    { title: "Ganancias", icon: TrendingUpIcon, href: "/finanzas/ganancias" },
+    { title: "Gastos", icon: TrendingDownIcon, href: "/finanzas/gastos" },
+    {
+      title: "Método de pago",
+      icon: CreditCardIcon,
+      href: "/finanzas/metodo-de-pago",
+    },
+  ],
 } as const
 
 export const profileNav = {
