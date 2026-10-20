@@ -3,8 +3,16 @@
 import { memo, useEffect, useRef, useState } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { ArrowUpIcon, ClapperboardIcon, RotateCcwIcon, SquareIcon } from "lucide-react"
+import {
+  ArrowUpIcon,
+  ClapperboardIcon,
+  ClockIcon,
+  RotateCcwIcon,
+  SquareIcon,
+} from "lucide-react"
 import { useEveAgent } from "eve/react"
+
+import { formatDurationMs } from "@/lib/duration"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
@@ -197,10 +205,26 @@ const ChatMessageRow = memo(
     prev.tools.every((tool, index) => tool.id === next.tools[index].id && tool.label === next.tools[index].label)
 )
 
-export function AnimacionAgent() {
+type AnimacionAgentProps = {
+  /** Fires when a turn settles (files may have been delivered meanwhile). */
+  onTurnSettled?: () => void
+}
+
+export function AnimacionAgent({ onTurnSettled }: AnimacionAgentProps = {}) {
   const agent = useEveAgent({ followIdle: false })
   const [draft, setDraft] = useState("")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Working-time stopwatch: ticks while a turn is in flight, accumulates the
+  // conversation's closed turns, and resets with "Nueva conversación".
+  const turnStartRef = useRef<number | null>(null)
+  const [accumulatedMs, setAccumulatedMs] = useState(0)
+  const [currentTurnMs, setCurrentTurnMs] = useState(0)
+  const onTurnSettledRef = useRef(onTurnSettled)
+
+  useEffect(() => {
+    onTurnSettledRef.current = onTurnSettled
+  }, [onTurnSettled])
 
   const messages = agent.data.messages
   const isBusy = agent.status === "submitted" || agent.status === "streaming"
@@ -208,6 +232,32 @@ export function AnimacionAgent() {
   const inputDisabled = isResuming
   const lastMessage = messages[messages.length - 1]
   const showPendingRow = isBusy && (!lastMessage || lastMessage.role === "user")
+
+  useEffect(() => {
+    if (isBusy) {
+      if (turnStartRef.current === null) turnStartRef.current = Date.now()
+      return
+    }
+    if (turnStartRef.current !== null) {
+      const startedAt = turnStartRef.current
+      turnStartRef.current = null
+      setAccumulatedMs((ms) => ms + (Date.now() - startedAt))
+      setCurrentTurnMs(0)
+      onTurnSettledRef.current?.()
+    }
+  }, [isBusy])
+
+  useEffect(() => {
+    if (!isBusy) return
+    const interval = window.setInterval(() => {
+      if (turnStartRef.current !== null) {
+        setCurrentTurnMs(Date.now() - turnStartRef.current)
+      }
+    }, 1000)
+    return () => window.clearInterval(interval)
+  }, [isBusy])
+
+  const workingTimeMs = accumulatedMs + currentTurnMs
 
   function fitTextarea() {
     const el = textareaRef.current
@@ -233,6 +283,9 @@ export function AnimacionAgent() {
   function handleReset() {
     agent.reset()
     setDraft("")
+    turnStartRef.current = null
+    setAccumulatedMs(0)
+    setCurrentTurnMs(0)
   }
 
   return (
@@ -342,8 +395,22 @@ export function AnimacionAgent() {
             <span>{agent.error.message}</span>
           </div>
         ) : null}
-        {messages.length > 0 ? (
-          <div className="flex w-full justify-end">
+        <div className="flex w-full items-center justify-between gap-2">
+          <span
+            className="text-muted-foreground flex min-w-0 items-center gap-1.5 text-xs tabular-nums"
+            title="Tiempo de trabajo del agente en esta conversación (sin contar las esperas de tu respuesta)"
+          >
+            <ClockIcon
+              aria-hidden="true"
+              className={
+                isBusy ? "size-3.5 shrink-0 animate-spin" : "size-3.5 shrink-0"
+              }
+            />
+            <span className="truncate">
+              {formatDurationMs(workingTimeMs)}
+            </span>
+          </span>
+          {messages.length > 0 ? (
             <Button
               variant="ghost"
               size="sm"
@@ -353,8 +420,8 @@ export function AnimacionAgent() {
               <RotateCcwIcon aria-hidden="true" />
               Nueva conversación
             </Button>
-          </div>
-        ) : null}
+          ) : null}
+        </div>
         <form className="w-full" onSubmit={handleSubmit}>
           <InputGroup className="bg-background">
             <InputGroupTextarea

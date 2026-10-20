@@ -2,6 +2,7 @@ import { defineTool } from "eve/tools";
 import { z } from "zod";
 
 import { AppError } from "../../src/server/umejson/types";
+import { pool } from "../../src/server/db";
 import {
   saveUserFile,
   sanitizeFileName,
@@ -92,6 +93,35 @@ export default defineTool({
       bytes,
       maxBytes: MAX_SAVE_BYTES,
     });
+
+    // Index the delivery for the gallery. Best effort: a metering/indexing
+    // failure must never break a delivery the user already paid for.
+    try {
+      await pool.query(
+        `INSERT INTO animation_deliverables
+           (id, user_id, file_id, session_id, turn_id, file_name, mime_type, size_bytes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [
+          crypto.randomUUID(),
+          principalId,
+          file.id,
+          ctx.session.id,
+          ctx.session.turn.id,
+          file.fileName,
+          file.mimeType,
+          file.sizeBytes,
+        ]
+      );
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          error: `guardar_archivo: gallery index failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        })
+      );
+    }
 
     return {
       url: `/api/files/${file.id}`,

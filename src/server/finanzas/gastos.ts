@@ -370,6 +370,54 @@ export async function createSystemExpense(
   return result.rowCount === 0 ? null : mapExpenseRow(result.rows[0])
 }
 
+export interface SystemAnimationExpenseInput {
+  userId: string
+  sourceSessionId: string
+  sourceTurnId: string
+  description: string
+  notes: string | null
+  amount: number
+  spentOn: string
+  exchangeRate: number | null
+  mxnEquivalent: number | null
+}
+
+/*
+ * Mirrors the metered cost of one animation-agent turn into the expense
+ * control. Same contract as createSystemExpense: the amount comes from the
+ * meter, and the unique (session, turn) anchor makes repeats idempotent.
+ */
+export async function createSystemAnimationExpense(
+  input: SystemAnimationExpenseInput
+): Promise<ExpenseRow | null> {
+  const amount = Math.round(input.amount * 1e6) / 1e6
+  if (!(amount > 0)) return null
+  const result = await pool.query(
+    `INSERT INTO expenses
+       (id, user_id, description, category, amount, currency,
+        exchange_rate, mxn_equivalent, spent_on, notes, created_by,
+        source_animation_session_id, source_animation_turn_id)
+     VALUES ($1, $2, $3, 'Animación', $4, 'USD', $5, $6, $7, $8, 'sistema', $9, $10)
+     ON CONFLICT (source_animation_session_id, source_animation_turn_id) DO NOTHING
+     RETURNING ${EXPENSE_COLUMNS}`,
+    [
+      randomUUID(),
+      input.userId,
+      input.description.slice(0, 300),
+      amount.toFixed(6),
+      input.exchangeRate !== null ? input.exchangeRate.toFixed(6) : null,
+      input.mxnEquivalent !== null
+        ? (Math.round(input.mxnEquivalent * 1e6) / 1e6).toFixed(6)
+        : null,
+      input.spentOn,
+      input.notes,
+      input.sourceSessionId,
+      input.sourceTurnId,
+    ]
+  )
+  return result.rowCount === 0 ? null : mapExpenseRow(result.rows[0])
+}
+
 export async function getExpense(
   userId: string,
   id: string
