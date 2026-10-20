@@ -35,6 +35,8 @@ function track<K, V>(map: Map<K, V>, key: K, value: V): void {
 }
 
 const modelByStep = new Map<string, string>();
+/** Último modelo usado en cada turno (el selector de LLM puede cambiarlo). */
+const modelByTurn = new Map<string, string>();
 const inputWaitStartedAt = new Map<string, number>();
 
 function stepKey(sessionId: string, turnId: string, stepIndex: number): string {
@@ -108,6 +110,7 @@ export default defineHook({
           stepKey(ctx.session.id, turnId, stepIndex),
           modelId
         );
+        track(modelByTurn, turnKey(ctx.session.id, turnId), modelId);
         // A new step means the agent resumed: any human-input wait is over.
         await closeInputWait(ctx.session.id, turnId);
       } catch (error) {
@@ -122,7 +125,7 @@ export default defineHook({
         const { turnId, stepIndex, usage } = event.data;
         const model =
           modelByStep.get(stepKey(ctx.session.id, turnId, stepIndex)) ??
-          process.env.ANIMATION_MODEL ??
+          modelByTurn.get(turnKey(ctx.session.id, turnId)) ??
           "desconocido";
         await meterAnimationStep({
           userId,
@@ -176,7 +179,7 @@ export default defineHook({
             userId,
             sessionId,
             turnId,
-            model: process.env.ANIMATION_MODEL ?? null,
+            model: modelByTurn.get(turnKey(sessionId, turnId)) ?? null,
             costUsd,
           });
         }
@@ -199,7 +202,7 @@ export default defineHook({
             userId,
             sessionId,
             turnId,
-            model: process.env.ANIMATION_MODEL ?? null,
+            model: modelByTurn.get(turnKey(sessionId, turnId)) ?? null,
             costUsd,
           });
         }
@@ -222,7 +225,7 @@ export default defineHook({
             userId,
             sessionId,
             turnId,
-            model: process.env.ANIMATION_MODEL ?? null,
+            model: modelByTurn.get(turnKey(sessionId, turnId)) ?? null,
             costUsd,
           });
         }

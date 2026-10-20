@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 
 import { AnimacionStudio } from "@/components/herramientas/animacion/animacion-studio"
+import { animationModels } from "@/server/animaciones/models"
 
 export const metadata: Metadata = {
   title: "Animación",
@@ -19,7 +20,7 @@ export default function AnimacionPage() {
           </p>
         </div>
       </div>
-      <AnimacionStudio />
+      <AnimacionStudio models={animationModels()} />
     </div>
   )
 }

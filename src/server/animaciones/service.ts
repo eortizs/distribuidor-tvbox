@@ -245,6 +245,40 @@ export async function meterAnimationStep(
   )
 }
 
+export interface AnimationSessionCost {
+  /** Costo acumulado de la conversación en USD (tarificador). */
+  costUsd: number
+  /** Costo acumulado en MXN al TC FIX del día; null si no hay tipo de cambio. */
+  costMxn: number | null
+  /** Tipo de cambio FIX aplicado (MXN por USD). */
+  rate: number | null
+}
+
+/**
+ * Costo acumulado de una conversación según el tarificador
+ * (`animation_costs`), para mostrarlo en vivo mientras el agente trabaja.
+ */
+export async function getAnimationSessionCost(
+  userId: string,
+  sessionId: string
+): Promise<AnimationSessionCost> {
+  const result = await pool.query(
+    `SELECT COALESCE(SUM(cost_usd), 0)::float8 AS cost
+       FROM animation_costs
+      WHERE session_id = $1 AND user_id = $2 AND cost_usd IS NOT NULL`,
+    [sessionId, userId]
+  )
+  const costUsd = round6(toNumber(result.rows[0]?.cost) ?? 0)
+  const day = mxDayKey(new Date())
+  const { rates, latest } = await fixRates([day])
+  const rate = rates.get(day) ?? latest?.rate ?? null
+  return {
+    costUsd,
+    costMxn: rate === null ? null : round6(costUsd * rate),
+    rate,
+  }
+}
+
 export async function openAnimationTurn(input: {
   userId: string
   sessionId: string

@@ -32,6 +32,7 @@ import {
   InputGroupButton,
   InputGroupTextarea,
 } from "@/components/ui/input-group"
+import { Label } from "@/components/ui/label"
 import {
   Message,
   MessageAvatar,
@@ -45,9 +46,34 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  MODEL_SELECTOR_PREFIX,
+  type AnimationModelInfo,
+} from "@/server/animaciones/models"
 
 const MAX_INPUT_LENGTH = 4000
+
+// El costo en vivo se muestra con 4 decimales: los montos por paso son
+// fracciones de centavo y con 2 se vería siempre $0.00.
+const mxnFormatter = new Intl.NumberFormat("es-MX", {
+  style: "currency",
+  currency: "MXN",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 4,
+})
+
+function costLabel(cost: { usd: number; mxn: number | null }): string {
+  if (cost.mxn !== null) return mxnFormatter.format(cost.mxn)
+  return `US$${cost.usd.toFixed(6)}`
+}
 
 const SUGGESTIONS = [
   {
@@ -206,14 +232,21 @@ const ChatMessageRow = memo(
 )
 
 type AnimacionAgentProps = {
+  /** Catálogo de LLMs para el selector (nivel máximo de razonamiento incluido). */
+  models: readonly AnimationModelInfo[]
   /** Fires when a turn settles (files may have been delivered meanwhile). */
   onTurnSettled?: () => void
 }
 
-export function AnimacionAgent({ onTurnSettled }: AnimacionAgentProps = {}) {
+export function AnimacionAgent({
+  models,
+  onTurnSettled,
+}: AnimacionAgentProps = { models: [] }) {
   const agent = useEveAgent({ followIdle: false })
   const [draft, setDraft] = useState("")
+  const [modelId, setModelId] = useState(models[0]?.id ?? "")
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const selectedModel = models.find((model) => model.id === modelId) ?? models[0]
 
   // Working-time stopwatch: ticks while a turn is in flight, accumulates the
   // conversation's closed turns, and resets with "Nueva conversación".
@@ -232,6 +265,50 @@ export function AnimacionAgent({ onTurnSettled }: AnimacionAgentProps = {}) {
   const inputDisabled = isResuming
   const lastMessage = messages[messages.length - 1]
   const showPendingRow = isBusy && (!lastMessage || lastMessage.role === "user")
+
+  // Tarificador: costo acumulado de la conversación, en vivo mientras el
+  // agente trabaja (el hook del servidor escribe cada paso medido).
+  const sessionId = agent.session?.sessionId
+  const [cost, setCost] = useState<{ usd: number; mxn: number | null } | null>(
+    null
+  )
+
+  useEffect(() => {
+    if (!sessionId) return
+    let cancelled = false
+    const load = () => {
+      fetch(
+        `/api/animaciones/costo?sessionId=${encodeURIComponent(sessionId)}`,
+        { cache: "no-store" }
+      )
+        .then((response) => response.json())
+        .then(
+          (body: {
+            ok?: boolean
+            data?: { costUsd?: number; costMxn?: number | null }
+          }) => {
+            if (cancelled) return
+            if (!body?.ok || !body.data) return
+            if (typeof body.data.costUsd !== "number") return
+            setCost({
+              usd: body.data.costUsd,
+              mxn:
+                typeof body.data.costMxn === "number" ? body.data.costMxn : null,
+            })
+          }
+        )
+        .catch(() => {
+          // El costo es informativo: un fallo no interrumpe la conversación.
+        })
+    }
+    load()
+    if (!isBusy) return
+    const interval = window.setInterval(load, 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+    }
+  }, [sessionId, isBusy])
 
   useEffect(() => {
     if (isBusy) {
@@ -273,7 +350,13 @@ export function AnimacionAgent({ onTurnSettled }: AnimacionAgentProps = {}) {
     const message = draft.trim()
     if (!message || isBusy || inputDisabled) return
     setDraft("")
-    void agent.send(message).catch(() => {})
+    // El selector viaja como clientContext del turno: llega al resolver
+    // dinámico de modelo y no se persiste en el historial durable.
+    void agent
+      .send(message, {
+        clientContext: `${MODEL_SELECTOR_PREFIX}${modelId}`,
+      })
+      .catch(() => {})
   }
 
   function handleStop() {
@@ -410,18 +493,67 @@ export function AnimacionAgent({ onTurnSettled }: AnimacionAgentProps = {}) {
               {formatDurationMs(workingTimeMs)}
             </span>
           </span>
-          {messages.length > 0 ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReset}
-              disabled={isBusy}
-            >
-              <RotateCcwIcon aria-hidden="true" />
-              Nueva conversación
-            </Button>
-          ) : null}
+          <div className="flex shrink-0 items-center gap-2">
+            {cost ? (
+              <span
+                className="text-muted-foreground text-xs tabular-nums"
+                title="Costo acumulado de esta conversación (tarificador), al TC FIX del día"
+              >
+                {costLabel(cost)}
+              </span>
+            ) : null}
+            {messages.length > 0 ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleReset}
+                disabled={isBusy}
+              >
+                <RotateCcwIcon aria-hidden="true" />
+                Nueva conversación
+              </Button>
+            ) : null}
+          </div>
         </div>
+        {models.length > 0 ? (
+          <div className="flex w-full items-center gap-2">
+            <Label
+              htmlFor="animacion-modelo"
+              className="text-muted-foreground shrink-0 text-xs"
+            >
+              Modelo
+            </Label>
+            <Select
+              value={modelId}
+              onValueChange={(value) => {
+                if (typeof value === "string" && value) setModelId(value)
+              }}
+            >
+              <SelectTrigger
+                id="animacion-modelo"
+                size="sm"
+                className="min-w-0 flex-1"
+                disabled={inputDisabled}
+              >
+                <SelectValue>
+                  {(value) => {
+                    const model =
+                      models.find((entry) => entry.id === value) ??
+                      selectedModel
+                    return model ? model.label : String(value)
+                  }}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {models.map((model) => (
+                  <SelectItem key={model.id} value={model.id} label={model.label}>
+                    {model.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        ) : null}
         <form className="w-full" onSubmit={handleSubmit}>
           <InputGroup className="bg-background">
             <InputGroupTextarea

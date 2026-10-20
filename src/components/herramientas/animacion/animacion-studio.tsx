@@ -13,6 +13,7 @@ import { toast } from "sonner"
 
 import { AnimacionAgent } from "@/components/herramientas/animacion/animacion-agent"
 import { Badge } from "@/components/reui/badge"
+import type { AnimationModelInfo } from "@/server/animaciones/models"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -104,7 +105,11 @@ function isImage(mimeType: string): boolean {
   return mimeType.startsWith("image/")
 }
 
-export function AnimacionStudio() {
+export function AnimacionStudio({
+  models,
+}: {
+  models: readonly AnimationModelInfo[]
+}) {
   const [deliverables, setDeliverables] = React.useState<
     AnimationDeliverable[]
   >([])
@@ -206,7 +211,7 @@ export function AnimacionStudio() {
       </TabsList>
 
       <TabsContent value="agente" keepMounted className="flex min-h-0 flex-col">
-        <AnimacionAgent onTurnSettled={refresh} />
+        <AnimacionAgent models={models} onTurnSettled={refresh} />
       </TabsContent>
 
       <TabsContent value="galeria" keepMounted className="min-h-0 overflow-y-auto">
