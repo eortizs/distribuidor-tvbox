@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // eve build output and workflow state:
+    ".eve/**",
+    ".output/**",
     // Generated vendor code installed by the shadcn CLI:
     "src/components/reui/**",
     "src/components/examples/**",

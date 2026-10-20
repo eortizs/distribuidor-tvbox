@@ -1,6 +1,7 @@
 import {
   BotIcon,
   BoxesIcon,
+  ClapperboardIcon,
   CreditCardIcon,
   ImageIcon,
   LayoutDashboardIcon,
@@ -47,9 +48,18 @@ export const navSecondary = [
 
 export const herramientasNav = {
   group: groupLabels.herramientas,
-  title: "Imágenes",
-  icon: ImageIcon,
-  href: "/herramientas/imagenes",
+  children: [
+    {
+      title: "Imágenes",
+      icon: ImageIcon,
+      href: "/herramientas/imagenes",
+    },
+    {
+      title: "Animación",
+      icon: ClapperboardIcon,
+      href: "/herramientas/animacion",
+    },
+  ],
 } as const
 
 export const finanzasNav = {

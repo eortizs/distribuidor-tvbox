@@ -10,6 +10,7 @@ import {
 
 import { logoutAction } from "@/app/actions/auth"
 import type { AuthUser } from "@/server/auth/types"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { ToguLogo } from "@/components/togu-logo"
 import {
   finanzasNav,
@@ -111,26 +112,24 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           <SidebarGroupLabel>{herramientasNav.group}</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  tooltip={herramientasNav.title}
-                  isActive={pathname.startsWith(herramientasNav.href)}
-                  aria-current={
-                    pathname.startsWith(herramientasNav.href)
-                      ? "page"
-                      : undefined
-                  }
-                  render={
-                    <Link
-                      href={herramientasNav.href}
-                      onClick={closeMobilePanel}
-                    />
-                  }
-                >
-                  <herramientasNav.icon aria-hidden="true" />
-                  <span>{herramientasNav.title}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+              {herramientasNav.children.map((child) => {
+                const isActive = pathname.startsWith(child.href)
+                return (
+                  <SidebarMenuItem key={child.href}>
+                    <SidebarMenuButton
+                      tooltip={child.title}
+                      isActive={isActive}
+                      aria-current={isActive ? "page" : undefined}
+                      render={
+                        <Link href={child.href} onClick={closeMobilePanel} />
+                      }
+                    >
+                      <child.icon aria-hidden="true" />
+                      <span>{child.title}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )
+              })}
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -226,6 +225,8 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                   <DropdownMenuItem>Billing</DropdownMenuItem>
                   <DropdownMenuItem>Notifications</DropdownMenuItem>
                 </DropdownMenuGroup>
+                <DropdownMenuSeparator />
+                <ThemeToggle />
                 <DropdownMenuSeparator />
                 <form action={logoutAction}>
                   <DropdownMenuItem

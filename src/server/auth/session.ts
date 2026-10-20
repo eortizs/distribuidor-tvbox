@@ -1,15 +1,16 @@
-import { createHash, randomBytes } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import { cookies } from "next/headers"
 
 import { pool } from "@/server/db"
+import {
+  SESSION_COOKIE,
+  findSessionUser,
+  hashSessionToken,
+} from "./session-lookup"
 import type { AuthUser } from "./types"
 
-export const SESSION_COOKIE = "reseller_session"
+export { SESSION_COOKIE }
 const SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
-
-function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex")
-}
 
 export async function createSession(user: AuthUser): Promise<void> {
   const token = randomBytes(32).toString("base64url")
@@ -18,7 +19,7 @@ export async function createSession(user: AuthUser): Promise<void> {
   await pool.query(
     `INSERT INTO sessions (id, user_id, token_hash, expires_at)
      VALUES ($1, $2, $3, $4)`,
-    [crypto.randomUUID(), user.id, hashToken(token), expiresAt]
+    [crypto.randomUUID(), user.id, hashSessionToken(token), expiresAt]
   )
 
   const cookieStore = await cookies()
@@ -36,20 +37,7 @@ export async function getSessionUser(): Promise<AuthUser | null> {
   const token = cookieStore.get(SESSION_COOKIE)?.value
   if (!token) return null
 
-  const result = await pool.query(
-    `SELECT u.id, u.username, u.role
-       FROM sessions s
-       JOIN users u ON u.id = s.user_id
-      WHERE s.token_hash = $1 AND s.expires_at > now()`,
-    [hashToken(token)]
-  )
-  if (!result.rowCount) return null
-
-  return {
-    id: result.rows[0].id as string,
-    username: result.rows[0].username as string,
-    role: result.rows[0].role as AuthUser["role"],
-  }
+  return findSessionUser(pool, token)
 }
 
 export async function destroySession(): Promise<void> {
@@ -57,7 +45,7 @@ export async function destroySession(): Promise<void> {
   const token = cookieStore.get(SESSION_COOKIE)?.value
   if (token) {
     await pool.query("DELETE FROM sessions WHERE token_hash = $1", [
-      hashToken(token),
+      hashSessionToken(token),
     ])
   }
   cookieStore.delete(SESSION_COOKIE)

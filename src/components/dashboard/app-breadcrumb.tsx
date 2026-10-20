@@ -37,7 +37,9 @@ for (const item of [...navMain, ...navSecondary]) {
 
 navRouteLabels.set("/", groupLabels.main)
 navRouteLabels.set("/herramientas", herramientasNav.group)
-navRouteLabels.set(herramientasNav.href, herramientasNav.title)
+for (const child of herramientasNav.children) {
+  navRouteLabels.set(child.href, child.title)
+}
 navRouteLabels.set("/finanzas", finanzasNav.group)
 for (const child of finanzasNav.children) {
   navRouteLabels.set(child.href, child.title)

@@ -14,11 +14,12 @@ Dashboard de administración para distribuidores TVBox construido con Next.js 16
 - **Gestión de usuarios** (`/users`, solo admin): listado en data-grid ReUI con búsqueda por email y filtro por rol; alta en dialog, edición (email, rol, contraseña) y baja con confirmación en `AlertDialog`. Protecciones en servidor: no se puede borrar la propia cuenta ni degradar/eliminar al último `admin`; el email debe ser único. Al editar una cuenta se actualiza en la misma transacción el usuario de autenticación y su entidad umeJSON `Cuenta` (espejo de `email`/`role` con evento `property.updated`); al eliminarla se archivan (soft-delete) todas sus entidades —incluida su `Cuenta`— con evento `entity.deleted`, y solo después se borra el usuario.
 - **Almacenamiento de archivos por usuario**: cada cuenta tiene su propio folder en el servidor (`storage/users/<userId>/`, raíz configurable con `USER_FILES_DIR`) con subcarpetas `attachments/` (adjuntos subidos) y `generated/` (imágenes y archivos generados por IA). El folder se crea al registrar la cuenta, al ejecutar `node db/ensure-user-storage.mjs` (cartera de cuentas existentes) y de forma perezosa en el primer guardado; se elimina junto con la cuenta. Los archivos se indexan en la tabla `user_files` (`db/storage-schema.sql`) y se sirven solo al usuario de la sesión vía `/api/files`. Ver [Almacenamiento por usuario](#almacenamiento-por-usuario).
 - **Imágenes con IA** (`/herramientas/imagenes`, sección *Herramientas* del sidebar): generador de imágenes vía OpenRouter Image API (`IMAGE_MODEL`, `OPENROUTER_API_KEY` en `.env`) con prompt, relación de aspecto y calidad. La página se organiza en dos pestañas, *Generar* y *Galería*, con el mismo patrón de pestañas de `/profile` (variante `line`, paneles `keepMounted`; ver [Convenciones de UI](#convenciones-de-ui)). Cada imagen se guarda en `storage/users/<userId>/generated/` vía `saveUserFile` (kind `generated`) y se sirve por `/api/files`; la galería es automática por usuario (tabla `image_generations`, `db/images-schema.sql`). Tarificador: cada generación registra el costo real que reporta el proveedor (`usage.cost` en USD) y la UI lo presenta **en pesos mexicanos**, convertido con el tipo de cambio FIX de Banxico del día de uso (`BANXICO_TOKEN` en `.env`). Además, cada costo se **espeja automáticamente al control de gastos** del usuario (categoría *Imágenes*, `created_by: "sistema"`), por lo que también aparece en Gastos, Estado de cuenta y en los reportes del asistente. Borrar una imagen es un soft-delete: sale de la galería y libera su archivo, pero el costo permanece en el acumulado; si el binario no pudiera guardarse, el costo igualmente queda registrado (fila sin `file_id`, excluida de la galería). Rate limit de 6 imágenes/min por usuario. Ver [Imágenes con IA](#imágenes-con-ia).
+- **Animación con agente EVE** (`/herramientas/animacion`, debajo de *Imágenes* en la sección *Herramientas*): chat con un agente [EVE](https://eve.dev) montado same-origin en `/eve/v1/*` vía `withEve()` en `next.config.ts`. La v1 es un asistente conversacional de animación (conceptos, guiones, storyboards y prompts para herramientas de animación IA), con las herramientas por defecto de EVE desactivadas (`defaultTools: false`). El agente vive en `agent/` (`instructions.md`, `agent.ts` con el modelo de Vercel AI Gateway `ANIMATION_MODEL` y `agent/channels/eve.ts`, que valida la misma cookie de sesión del panel contra Postgres, liga cada sesión EVE a su creador en `eve_sessions` y limita a 20 mensajes/min por usuario) y su estado durable se guarda en `.eve/.workflow-data`. Requiere `AI_GATEWAY_API_KEY` y `ANIMATION_MODEL` en `.env`; el middleware excluye `/eve/` y `/.well-known` del redirect a `/login` para que la API responda 401 en lugar de redirigir. Ver [Animación con agente EVE](#animación-con-agente-eve).
 - **Finanzas** (`/finanzas`, sección *Finanzas* del sidebar): **Gastos** y **Estado de cuenta** implementados; **Ganancias** y **Método de pago** siguen como páginas de estructura. La navegación vive en `finanzasNav` (`src/components/dashboard/nav-config.ts`). Ver [Control de gastos](#control-de-gastos).
 
 ## Requisitos
 
-- Node.js 20+
+- Node.js 24+ (requisito de EVE; `package.json` declara `engines.node: 24.x`)
 - PostgreSQL 16
 
 ## Puesta en marcha
@@ -33,21 +34,24 @@ OPENROUTER_API_KEY=<clave de OpenRouter>   # Asistente (/asistente) e Imágenes 
 ASISTENTE_MODEL=meta/muse-spark-1.3-contributor
 IMAGE_MODEL=openai/gpt-image-2.5-sunburst   # Generador de imágenes (obligatorio para /herramientas/imagenes)
 BANXICO_TOKEN=<token del API de Banxico>    # Conversión de costos a MXN en /herramientas/imagenes
+AI_GATEWAY_API_KEY=<clave del Vercel AI Gateway>  # Agente Animación (/herramientas/animacion)
+ANIMATION_MODEL=xiaomi/mimo-v2.6-pro              # Modelo del agente EVE (Vercel AI Gateway)
 
 # 3. Aplicar el esquema (idempotente en DB vacía; respetar este orden:
-#    auth → storage → images → expenses por las foreign keys)
+#    auth → storage → images → expenses → eve-sessions por las foreign keys)
 psql "$DATABASE_URL" -f db/schema.sql
 psql "$DATABASE_URL" -f db/auth-schema.sql
 psql "$DATABASE_URL" -f db/storage-schema.sql
 psql "$DATABASE_URL" -f db/images-schema.sql
 psql "$DATABASE_URL" -f db/expenses-schema.sql
+psql "$DATABASE_URL" -f db/eve-sessions-schema.sql
 
 # 4. Crear el usuario administrador (el login siempre es un correo)
 node db/create-user.mjs admin@tvbox.network <password> admin
 
 # 5. Desarrollo o producción
 npm run dev            # http://localhost:3000
-npm run build && npm run start   # respeta PORT (default 3000)
+npm run build && npm run start   # compila el agente EVE y luego Next.js; respeta PORT (default 3000)
 ```
 
 El login vive en `/login` y siempre es una cuenta de correo; desde ahí se enlaza a `/register` para crear cuenta. Toda cuenta nueva nace con perfil `distribuidor` y su entidad umeJSON `Cuenta`; el resto de rutas redirigen a `/login` si no hay sesión.
@@ -107,6 +111,17 @@ Generador en `/herramientas/imagenes` (sección *Herramientas* del sidebar); bac
 - **Conversión a pesos mexicanos (Banxico)**: el USD se guarda como fuente de verdad para facturación y la UI presenta los costos **en MXN**, cada uno convertido con el tipo de cambio **FIX de Banxico** (serie `SF43718`) publicado para el **día de uso** de la generación en zona horaria `America/Mexico_City` (fin de semana y feriados heredan el último día hábil publicado). El módulo `src/server/banxico.ts` consulta el API de Banxico (`BANXICO_TOKEN` en `.env`) por rango de fechas con ventana ampliada 10 días atrás (un rango caído íntegramente en día inhábil devuelve la serie sin `datos`) y mantiene en memoria un cache por día calendario con TTL de 1 h, relleno hacia adelante y cooldown de 60 s ante fallos del proveedor. Si Banxico no responde (o falta `BANXICO_TOKEN`), la conversión degrada con gracia: costos y total se muestran en USD etiquetado (`US$…`) o `s/d`, sin romper ninguna petición. La fila `image_generations` no cambia: la conversión se calcula al leer (`cost_usd` → `costMxn`) usando `created_at`.
 - **Galería**: `GET /api/images` devuelve las generaciones vivas (con `file_id`), el total y el costo acumulado en USD (`costUsd`/`totalCostUsd`) junto con su equivalente en MXN (`costMxn`/`totalCostMxn`, `null` si algún día carece de tipo de cambio); `DELETE /api/images/[id]` hace el soft-delete y libera el archivo. La UI (`src/components/herramientas/imagenes/image-studio.tsx`) muestra el costo por imagen en cada tile (badge) y el acumulado en el encabezado; si el MXN no está disponible cae a `US$…` etiquetado.
 
+## Animación con agente EVE
+
+Chat en `/herramientas/animacion` (sección *Herramientas*, debajo de *Imágenes*); agente en `agent/`, UI en `src/components/herramientas/animacion/animacion-agent.tsx` y montaje same-origin en `/eve/v1/*` con `withEve()` (`next.config.ts`).
+
+- **Agente**: `agent/agent.ts` define el modelo (`ANIMATION_MODEL`, Vercel AI Gateway) y desactiva las herramientas por defecto (`defaultTools: false`); `agent/instructions.md` fija el rol de asistente de animación en español (conceptos, guiones, storyboards y prompts) y `agent/channels/eve.ts` implementa el canal HTTP. La v1 no genera imágenes, video ni audio: produce el guion, el storyboard y los prompts.
+- **Autenticación**: el canal valida la misma cookie `reseller_session` del panel contra Postgres mediante `src/server/auth/session-lookup.ts` (compartido con `src/server/auth/session.ts` y `src/proxy.ts`). Cada sesión EVE se liga a su creador en la tabla `eve_sessions` (`db/eve-sessions-schema.sql`, FK a `users`): otro usuario autenticado recibe 401 al intentar continuar, leer o resetear una sesión ajena. El middleware excluye `/eve/` y `/.well-known` del redirect a `/login` (la API responde 401, no HTML) y `GET /eve/v1/health` es pública.
+- **Rate limit**: 20 mensajes/min por usuario (en memoria, por proceso) aplicado en `onMessage`; los streams y las creaciones de sesión no cuentan.
+- **Modelo y rebuild**: `AI_GATEWAY_API_KEY` y `ANIMATION_MODEL` viven en `.env`. El model ID y las instrucciones se congelan al compilar: tras cambiarlos hay que ejecutar `npm run build` (que corre `eve build` antes de `next build`).
+- **Runtime y estado**: `next start` levanta el agente compilado (`.output/server/index.mjs`) en loopback (4274) y Next proxya `/eve/v1/*` por el mismo origen; el estado durable de las sesiones vive en `.eve/.workflow-data` (incluir en backups y no versionar).
+- **UI**: chat con `useEveAgent` de `eve/react` sobre los componentes ReUI del chat (`message`, `bubble`, `message-scroller`, `input-group`), con composer multilínea, detener respuesta, nueva conversación, sugerencias iniciales y render Markdown de las respuestas. La UI no persiste la conversación entre visitas; el servidor sí conserva las sesiones.
+
 ## Control de gastos
 
 Módulo de Finanzas (`/finanzas/gastos` y `/finanzas/estado-de-cuenta`); backend en `src/server/finanzas/gastos.ts`, rutas `/api/finanzas/*` y UI en `src/components/finanzas/`. Lleva un control de gastos **persistente y aislado por usuario**, que alimenta la UI, el estado de cuenta y los reportes del asistente.
@@ -163,15 +178,18 @@ Toda mutación es una transacción atómica: `UPDATE entities ... WHERE id = $1 
 
 Todas las rutas requieren sesión; el `actor` de la bitácora se deriva de la sesión (`user:<username>`), nunca del cliente.
 
+El agente EVE no vive bajo `/api`: sus rutas (`/eve/v1/health`, `/eve/v1/session*`, `/stream`, `/reset`, `/cancel`) se montan same-origin vía `withEve`; solo `health` es pública y el resto exige sesión, ownership de la sesión y el rate limit de 20 mensajes/min. Ver [Animación con agente EVE](#animación-con-agente-eve).
+
 ## Estructura
 
 ```
-db/                      # DDL normativo (schema.sql, auth-schema.sql, storage-schema.sql, images-schema.sql, expenses-schema.sql) + create-user.mjs, ensure-user-storage.mjs, backfill-image-expenses.mjs
+db/                      # DDL normativo (schema.sql, auth-schema.sql, storage-schema.sql, images-schema.sql, expenses-schema.sql, eve-sessions-schema.sql) + create-user.mjs, ensure-user-storage.mjs, backfill-image-expenses.mjs
+agent/                   # Agente EVE: agent.ts (modelo + defaultTools off), instructions.md y channels/eve.ts
 src/server/
   db.ts                  # Pool pg singleton
   http.ts                # Errores API + límite de body 100 KB
   asistente/             # LLM del asistente (streaming OpenRouter + tool-calling de gastos)
-  auth/                  # password (scrypt), session, users, guards
+  auth/                  # password (scrypt), session + session-lookup, users, guards
   banxico.ts             # Tipo de cambio FIX (SF43718): cache por día + carry-forward de días inhábiles
   finanzas/              # Control de gastos (validación, scoping por usuario, conversión Banxico)
   images/                # Generador de imágenes (OpenRouter Image API + tarificador USD/MXN espejado a gastos)
@@ -181,8 +199,9 @@ src/lib/
   finanzas.ts            # Constantes compartidas (categorías, tipos) + formateo MXN/USD/fechas
 src/components/
   finanzas/              # GastosView (grid + KPIs + form) y EstadoCuentaView (KPIs + gráfico + desglose)
+  herramientas/          # Imágenes (image-studio) y animación (chat del agente EVE)
 src/app/
-  (dashboard)/           # UI protegida: dashboard, entities, users, profile, herramientas/imagenes, finanzas
+  (dashboard)/           # UI protegida: dashboard, entities, users, profile, herramientas/imagenes, herramientas/animacion, finanzas
   api/                   # Route handlers
   actions/               # Server actions (login, registro, logout, perfil, crear usuario)
   login/                 # Login (card ReUI)
@@ -192,7 +211,7 @@ src/app/
 
 ## Tema y marca
 
-- **Tema claro/oscuro**: `ThemeProvider` (next-themes, atributo `class`) montado en el layout raíz (`src/app/layout.tsx`) con `suppressHydrationWarning`; tema por defecto **Sistema**, con opción Claro / Oscuro. El selector Claro / Oscuro / Sistema vive en el header del dashboard (`src/components/theme-toggle.tsx`). Cualquier módulo presente o futuro hereda el tema automáticamente: los tokens de ambos modos ya están definidos en `globals.css` (`:root` y `.dark`) y los componentes shadcn/ReUI reaccionan solos; el Toaster (sonner) sigue el tema vía `useTheme`. Para respetar el tema, el código nuevo usa tokens semánticos (`bg-card`, `text-muted-foreground`, …) y no colores crudos; un color crudo lleva siempre su par `dark:`.
+- **Tema claro/oscuro**: `ThemeProvider` (next-themes, atributo `class`) montado en el layout raíz (`src/app/layout.tsx`) con `suppressHydrationWarning`; tema por defecto **Sistema**, con opción Claro / Oscuro. El selector Claro / Oscuro / Sistema vive como submenú del menú de usuario en el **footer del sidebar** (`src/components/theme-toggle.tsx`, `DropdownMenuSub`), y el header del dashboard es sticky (`sticky top-0`). Cualquier módulo presente o futuro hereda el tema automáticamente: los tokens de ambos modos ya están definidos en `globals.css` (`:root` y `.dark`) y los componentes shadcn/ReUI reaccionan solos; el Toaster (sonner) sigue el tema vía `useTheme`. Para respetar el tema, el código nuevo usa tokens semánticos (`bg-card`, `text-muted-foreground`, …) y no colores crudos; un color crudo lleva siempre su par `dark:`.
 - **Marca Togu**: el logo (monograma "T") es un SVG con tokens semánticos (`src/components/togu-logo.tsx`, `fill-primary`/`fill-primary-foreground`), por lo que se invierte solo al cambiar de tema; se usa en el sidebar, en login/register (`auth-shell.tsx`) y en los metadatos. Los assets estáticos viven en `public/togu-icon-light.svg` y `public/togu-icon-dark.svg` (colores explícitos `#171717`/`#fafafa`), y el favicon es `src/app/icon.svg`, que alterna claro/oscuro según el `prefers-color-scheme` del navegador (sustituye al antiguo `favicon.ico`).
 
 ## Convenciones de UI
@@ -213,10 +232,12 @@ Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbo
 Servidor Node con build de producción, gestionado por **PM2**:
 
 ```bash
-npm run build
+npm run build                    # eve build (runtime del agente, .output/) + next build
 pm2 restart distribuidor-tvbox   # o pm2 start npm --name distribuidor-tvbox -- start
 ```
 
 - La app corre como `next start` (servicio PM2 `distribuidor-tvbox`) en el **puerto 3010**; PM2 reinicia el proceso automáticamente si muere. Tras cualquier cambio de código hay que ejecutar `npm run build` y luego `pm2 restart distribuidor-tvbox` (`next start` sirve el build de `.next`, no el código fuente).
+- Con `withEve()` en `next.config.ts`, `next start` también levanta el runtime compilado del agente EVE en loopback (puerto 4274) y proxya `/eve/v1/*` por el mismo origen. `npm run build` compila primero el agente (`eve build`) porque `next start` **falla si `.output/server/index.mjs` no existe**. El modelo y las instrucciones se congelan en ese build: tras cambiar `ANIMATION_MODEL` o `agent/` hay que reconstruir con `npm run build`. Caddy ya reenvía todas las rutas sin reescribirlas, incluidas `/eve/` y `/.well-known/workflow/`.
+- El estado durable del agente vive en `.eve/.workflow-data` (disco del servidor, fuera de git): incluirlo en los backups. Variables requeridas: `AI_GATEWAY_API_KEY` y `ANIMATION_MODEL` (Vercel AI Gateway) además de `DATABASE_URL`.
 - Requiere `DATABASE_URL` y `BANXICO_TOKEN` en el entorno (`.env`) y las migraciones aplicadas (paso 3). Sin `BANXICO_TOKEN` (o si Banxico no responde) la app funciona, pero los costos se muestran en USD etiquetado en lugar de pesos y los gastos en USD se reportan como *pendientes de conversión*.
-- Tras actualizar el código, aplicar también `db/expenses-schema.sql` (idempotente) si aún no existe la tabla `expenses`; el espejo de costos de imágenes históricos se importa una sola vez con `node db/backfill-image-expenses.mjs`.
+- Tras actualizar el código, aplicar también `db/expenses-schema.sql` y `db/eve-sessions-schema.sql` (idempotentes) si aún no existen las tablas `expenses` y `eve_sessions`; el espejo de costos de imágenes históricos se importa una sola vez con `node db/backfill-image-expenses.mjs`.

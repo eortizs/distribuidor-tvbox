@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto"
 import { NextResponse, type NextRequest } from "next/server"
 
+import { findSessionUser } from "@/server/auth/session-lookup"
 import { pool } from "@/server/db"
 
 const SESSION_COOKIE = "reseller_session"
@@ -39,21 +39,9 @@ function isRateLimited(request: NextRequest): boolean {
   return bucket.count > RATE_LIMIT_MAX_POSTS
 }
 
-async function getSessionRole(
-  token: string
-): Promise<{ role: string } | null> {
+async function getSession(token: string) {
   try {
-    const tokenHash = createHash("sha256").update(token).digest("hex")
-    const result = await pool.query(
-      `SELECT u.role
-         FROM sessions s
-         JOIN users u ON u.id = s.user_id
-        WHERE s.token_hash = $1 AND s.expires_at > now()`,
-      [tokenHash]
-    )
-    return result.rowCount
-      ? { role: result.rows[0].role as string }
-      : null
+    return await findSessionUser(pool, token)
   } catch {
     return null
   }
@@ -61,7 +49,7 @@ async function getSessionRole(
 
 export async function proxy(request: NextRequest) {
   const token = request.cookies.get(SESSION_COOKIE)?.value
-  const session = token ? await getSessionRole(token) : null
+  const session = token ? await getSession(token) : null
   const { pathname } = request.nextUrl
 
   if (isRateLimited(request)) {
@@ -91,6 +79,6 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!api|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|webp|ico|woff2?)$).*)",
+    "/((?!api|eve/|\\.well-known|_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|webp|ico|woff2?)$).*)",
   ],
 }
