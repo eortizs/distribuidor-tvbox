@@ -1,7 +1,7 @@
 "use client"
 
 import { memo, useEffect, useRef, useState } from "react"
-import ReactMarkdown from "react-markdown"
+import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { ArrowUpIcon, ClapperboardIcon, RotateCcwIcon, SquareIcon } from "lucide-react"
 import { useEveAgent } from "eve/react"
@@ -48,14 +48,14 @@ const SUGGESTIONS = [
       "Escribe un guion de 20 segundos para promocionar un TVBox en redes sociales, con gancho inicial, demostración y llamado a la acción.",
   },
   {
-    label: "Storyboard de 30 segundos",
+    label: "Render de prueba",
     prompt:
-      "Arma el storyboard de un video de 30 segundos que explique qué incluye la caja y cómo se instala, con planos, cámara y texto en pantalla.",
+      "Produce un draft de 2 segundos, 320×180 y sin audio, para verificar que el pipeline de render funciona, y entrégalo con guardar_archivo.",
   },
   {
-    label: "Prompts para animación IA",
+    label: "Storyboard animado",
     prompt:
-      "Dame prompts detallados para animar con IA un producto tecnológico sobre un escritorio: estilo visual, iluminación, cámara y ritmo.",
+      "Arma el storyboard de un video de 30 segundos que explique qué incluye la caja y cómo se instala, y luego renderiza un draft de la primera escena.",
   },
 ]
 
@@ -65,12 +65,58 @@ function messageText(parts: readonly { type: string; text?: string }[]): string 
     .join("\n\n")
 }
 
+type ToolActivity = { id: string; label: string }
+
+function toolActivity(parts: readonly {
+  type: string
+  toolCallId?: string
+  toolName?: string
+  toolMetadata?: { eve?: { label?: string } }
+}[]): ToolActivity[] {
+  return parts.flatMap((part) =>
+    part.type === "dynamic-tool" && part.toolCallId
+      ? [
+          {
+            id: part.toolCallId,
+            label: part.toolMetadata?.eve?.label ?? part.toolName ?? "Herramienta",
+          },
+        ]
+      : []
+  )
+}
+
+const MEDIA_VIDEO_RE = /\.(mp4|webm|mov)$/i
+const MEDIA_AUDIO_RE = /\.(wav|mp3)$/i
+
+const markdownComponents: Components = {
+  a: ({ href, children }) => {
+    if (href && href.startsWith("/api/files/")) {
+      if (MEDIA_VIDEO_RE.test(href)) {
+        return (
+          <video controls preload="metadata" className="w-full">
+            <source src={href} />
+          </video>
+        )
+      }
+      if (MEDIA_AUDIO_RE.test(href)) {
+        return (
+          <audio controls preload="metadata" className="w-full">
+            <source src={href} />
+          </audio>
+        )
+      }
+    }
+    return <a href={href}>{children}</a>
+  },
+}
+
 const REMARK_PLUGINS = [remarkGfm]
 
 type ChatMessageRowProps = {
   messageId: string
   role: "user" | "assistant"
   text: string
+  tools: ToolActivity[]
   isStreaming: boolean
 }
 
@@ -79,6 +125,7 @@ const ChatMessageRow = memo(
     messageId,
     role,
     text,
+    tools,
     isStreaming,
   }: ChatMessageRowProps) {
     const isUser = role === "user"
@@ -107,11 +154,26 @@ const ChatMessageRow = memo(
               align={isUser ? "end" : "start"}
             >
               <BubbleContent className="space-y-2">
+                {tools.length > 0 && !isUser ? (
+                  <div className="gap-1 flex flex-col">
+                    {tools.map((tool) => (
+                      <p
+                        key={tool.id}
+                        className="text-muted-foreground text-xs"
+                      >
+                        {tool.label}
+                      </p>
+                    ))}
+                  </div>
+                ) : null}
                 {isUser || isStreaming ? (
                   <p className="whitespace-pre-wrap">{text}</p>
                 ) : (
                   <div className="prose prose-sm dark:prose-invert max-w-none text-foreground [--tw-prose-body:var(--foreground)] [--tw-prose-bold:var(--foreground)] [--tw-prose-headings:var(--foreground)] [--tw-prose-quotes:var(--foreground)]">
-                    <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>
+                    <ReactMarkdown
+                      remarkPlugins={REMARK_PLUGINS}
+                      components={markdownComponents}
+                    >
                       {text}
                     </ReactMarkdown>
                   </div>
@@ -130,7 +192,9 @@ const ChatMessageRow = memo(
     prev.messageId === next.messageId &&
     prev.role === next.role &&
     prev.text === next.text &&
-    prev.isStreaming === next.isStreaming
+    prev.isStreaming === next.isStreaming &&
+    prev.tools.length === next.tools.length &&
+    prev.tools.every((tool, index) => tool.id === next.tools[index].id && tool.label === next.tools[index].label)
 )
 
 export function AnimacionAgent() {
@@ -182,9 +246,9 @@ export function AnimacionAgent() {
               </EmptyMedia>
               <EmptyTitle>¿Qué quieres animar?</EmptyTitle>
               <EmptyDescription className="text-foreground">
-                Te ayudo a convertir una idea en guion, storyboard y prompts
-                listos para producir. Cuéntame el producto, el público y el
-                formato.
+                Produzco videos reales con Remotion: guion, storyboard,
+                render y sonido. Cuéntame el producto, el formato y la
+                duración.
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -221,6 +285,7 @@ export function AnimacionAgent() {
                         messageId={message.id}
                         role={role}
                         text={messageText(message.parts)}
+                        tools={toolActivity(message.parts)}
                         isStreaming={
                           role === "assistant" &&
                           isBusy &&

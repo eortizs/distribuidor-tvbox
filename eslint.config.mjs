@@ -18,6 +18,8 @@ const eslintConfig = defineConfig([
     // Generated vendor code installed by the shadcn CLI:
     "src/components/reui/**",
     "src/components/examples/**",
+    // Vendored claude-motion toolkit seeded into the Docker sandbox:
+    "agent/sandbox/workspace/**",
   ]),
 ]);
 

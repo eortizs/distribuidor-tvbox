@@ -116,20 +116,23 @@ export interface SaveUserFileInput {
   fileName: string
   mimeType: string
   bytes: Uint8Array
+  /** Optional per-call size limit; defaults to the global upload limit. */
+  maxBytes?: number
 }
 
 export async function saveUserFile(
   input: SaveUserFileInput
 ): Promise<UserFile> {
   const userId = requireValidUserId(input.userId)
+  const maxBytes = input.maxBytes ?? maxUploadBytes()
   if (input.bytes.byteLength === 0) {
     throw new AppError(422, "empty_file", "The file is empty")
   }
-  if (input.bytes.byteLength > maxUploadBytes()) {
+  if (input.bytes.byteLength > maxBytes) {
     throw new AppError(
       413,
       "file_too_large",
-      `The file exceeds the ${maxUploadBytes()} byte limit`
+      `The file exceeds the ${maxBytes} byte limit`
     )
   }
 

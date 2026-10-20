@@ -49,3 +49,9 @@ next-env.d.ts
 
 # kilo
 .kilo/
+
+# vendored claude-motion toolkit in the sandbox seed (generated at runtime)
+agent/sandbox/workspace/**/node_modules/
+agent/sandbox/workspace/out/
+agent/sandbox/workspace/sims/dist/
+agent/sandbox/workspace/public/*.wav
