@@ -63,9 +63,14 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Slider } from "@/components/ui/slider"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  ASPECT_OPTIONS,
+  type ImageLevel,
+} from "@/server/images/models"
 import {
   AttachmentChips,
   type AttachmentItem,
@@ -111,24 +116,6 @@ type ReferenceState = {
 
 const MAX_PROMPT_LENGTH = 2000
 
-const ASPECT_OPTIONS = [
-  { value: "auto", label: "Automático" },
-  { value: "1:1", label: "1:1 · Cuadrada" },
-  { value: "16:9", label: "16:9 · Panorámica" },
-  { value: "9:16", label: "9:16 · Vertical" },
-  { value: "4:3", label: "4:3 · Clásica" },
-  { value: "3:4", label: "3:4 · Retrato" },
-  { value: "3:2", label: "3:2 · Foto" },
-  { value: "2:3", label: "2:3 · Foto vertical" },
-] as const
-
-const QUALITY_OPTIONS = [
-  { value: "auto", label: "Automática" },
-  { value: "low", label: "Baja" },
-  { value: "medium", label: "Media" },
-  { value: "high", label: "Alta" },
-] as const
-
 const dateFormatter = new Intl.DateTimeFormat("es", {
   dateStyle: "medium",
   timeStyle: "short",
@@ -152,7 +139,24 @@ function modelName(model: string): string {
   return model.split("/").pop() ?? model
 }
 
-export function ImageStudio() {
+/**
+ * Proporción CSS de la miniatura a partir del aspecto con el que se generó
+ * la imagen ("9:16" → "9 / 16"). Sin aspecto conocido, la imagen se muestra
+ * con su tamaño natural.
+ */
+function aspectStyle(aspect: string | null): React.CSSProperties | undefined {
+  if (!aspect || aspect === "auto") return undefined
+  const [width, height] = aspect.split(":")
+  if (!width || !height) return undefined
+  return { aspectRatio: `${width} / ${height}` }
+}
+
+type ImageStudioProps = {
+  /** Niveles del control de calidad (modelo por nivel) del usuario. */
+  levels: readonly ImageLevel[]
+}
+
+export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [images, setImages] = React.useState<ImageGeneration[]>([])
   const [total, setTotal] = React.useState(0)
   const [totalCostUsd, setTotalCostUsd] = React.useState(0)
@@ -161,10 +165,39 @@ export function ImageStudio() {
 
   const [prompt, setPrompt] = React.useState("")
   const [aspectRatio, setAspectRatio] = React.useState<string>("auto")
-  const [quality, setQuality] = React.useState<string>("auto")
+  // El nivel (media/alta) es lo que elige el usuario; cada nivel trae el
+  // modelo, la calidad y el tamaño configurados en Configuración.
+  const [qualityIndex, setQualityIndex] = React.useState(0)
   const [generating, setGenerating] = React.useState(false)
   const [enhancing, setEnhancing] = React.useState(false)
   const [generateError, setGenerateError] = React.useState<string | null>(null)
+
+  const activeQualityIndex = Math.min(
+    qualityIndex,
+    Math.max(levels.length - 1, 0)
+  )
+  const selectedLevel = levels[activeQualityIndex] ?? levels[0]
+
+  // La lista de aspectos es la misma en todos los niveles: es el modelo
+  // configurado el que la aplica (el que lo admite, la recorta a la más
+  // cercana en el servidor).
+  const aspectOptions = ASPECT_OPTIONS
+
+  // Aspecto efectivo: si el modelo del nivel no admite el aspecto elegido
+  // (p. ej. tras cambiar de nivel), se usa "Automático", que aplica el
+  // tamaño configurado para el nivel.
+  const activeAspect = aspectOptions.some(
+    (option) => option.value === aspectRatio
+  )
+    ? aspectRatio
+    : "auto"
+
+  // Tamaño efectivo de la generación: el aspecto elegido manda; si es
+  // "Automático", manda el tamaño configurado para el nivel.
+  const effectiveSize =
+    aspectOptions.find((option) => option.value === activeAspect)?.label ??
+    selectedLevel?.entry.size ??
+    ""
 
   const [references, setReferences] = React.useState<Record<string, ReferenceState>>({})
   const [referenceError, setReferenceError] = React.useState<string | null>(null)
@@ -374,8 +407,8 @@ export function ImageStudio() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: trimmed,
-          aspectRatio,
-          quality,
+          aspectRatio: activeAspect,
+          level: selectedLevel?.id,
           referenceIds,
         }),
       })
@@ -423,13 +456,12 @@ export function ImageStudio() {
         body: JSON.stringify({
           prompt: trimmed,
           aspectRatio,
-          quality,
           referenceIds,
         }),
       })
       const body = (await response.json()) as {
         ok: boolean
-        data?: { prompt: string; aspectRatio: string; quality: string }
+        data?: { prompt: string; aspectRatio: string }
         error?: { message?: string }
       }
       if (!response.ok || !body.ok || !body.data) {
@@ -441,7 +473,6 @@ export function ImageStudio() {
       }
       setPrompt(body.data.prompt)
       setAspectRatio(body.data.aspectRatio)
-      setQuality(body.data.quality)
       toast.success("Instrucciones mejoradas")
     } catch {
       setGenerateError(
@@ -574,41 +605,70 @@ export function ImageStudio() {
                     Aspecto
                   </Label>
                   <Select
-                    value={aspectRatio}
+                    value={activeAspect}
                     onValueChange={(value) => setAspectRatio(value as string)}
                   >
                     <SelectTrigger id="aspecto" size="sm" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {ASPECT_OPTIONS.map((option) => (
+                      {aspectOptions.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
                           {option.label}
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  <p className="text-muted-foreground text-xs">
+                    {activeAspect === "auto"
+                      ? `Tamaño: ${selectedLevel?.entry.size ?? "—"}`
+                      : effectiveSize}
+                  </p>
                 </div>
-                <div className="flex min-w-36 flex-col gap-1">
-                  <Label htmlFor="calidad" className="text-xs">
-                    Calidad
-                  </Label>
-                  <Select
-                    value={quality}
-                    onValueChange={(value) => setQuality(value as string)}
-                  >
-                    <SelectTrigger id="calidad" size="sm" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {QUALITY_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
+                {levels.length > 1 ? (
+                  <div className="flex min-w-40 flex-col gap-1">
+                    <Label
+                      id="imagenes-calidad"
+                      className="text-muted-foreground text-xs"
+                    >
+                      Calidad
+                      <span className="sr-only">
+                        : {levels[activeQualityIndex].label}
+                      </span>
+                    </Label>
+                    <Slider
+                      aria-labelledby="imagenes-calidad"
+                      value={[activeQualityIndex + 1]}
+                      min={1}
+                      max={levels.length}
+                      step={1}
+                      disabled={generating || enhancing}
+                      onValueChange={(value) => {
+                        const next = Array.isArray(value)
+                          ? value[value.length - 1]
+                          : value
+                        if (typeof next === "number") setQualityIndex(next - 1)
+                      }}
+                    />
+                    <div
+                      aria-hidden="true"
+                      className="text-muted-foreground flex w-full items-center justify-between text-xs font-medium"
+                    >
+                      {levels.map((level, index) => (
+                        <span
+                          key={level.id}
+                          className={
+                            index === activeQualityIndex
+                              ? "text-foreground"
+                              : undefined
+                          }
+                        >
+                          {level.label}
+                        </span>
                       ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                    </div>
+                  </div>
+                ) : null}
                 <div className="ms-auto flex items-end gap-2">
                   <Button
                     type="button"
@@ -736,7 +796,7 @@ export function ImageStudio() {
             ) : null}
 
             {listState === "ready" && images.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+              <div className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 {generating ? (
                   <Skeleton className="aspect-square w-full rounded-xl" />
                 ) : null}
@@ -757,7 +817,11 @@ export function ImageStudio() {
                           src={image.file.url}
                           alt={image.prompt}
                           loading="lazy"
-                          className="aspect-square w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
+                          // La miniatura respeta la proporción de la imagen: un
+                          // recorte al cuadrado escondería (por ejemplo) una
+                          // vertical 9:16.
+                          style={aspectStyle(image.aspectRatio)}
+                          className="w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
                         />
                       </button>
                       <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2">

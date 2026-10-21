@@ -1,4 +1,13 @@
 import { readFile } from "node:fs/promises"
+import {
+  generateImage as generateGatewayImage,
+  generateText as generateGatewayText,
+} from "ai"
+import {
+  gateway,
+  GatewayAuthenticationError,
+  GatewayError,
+} from "@ai-sdk/gateway"
 
 import { pool } from "@/server/db"
 import { fixRates, mxDayKey, type FixRateInfo } from "@/server/banxico"
@@ -13,18 +22,31 @@ import {
 } from "@/server/storage/user-files"
 import { AppError } from "@/server/umejson/types"
 import {
+  QUALITY_STEPS,
+  closestAspect,
+  pixelSizeForAspect,
+  type ImageModelEntry,
+  type QualityStepId,
+} from "@/server/images/models"
+import { getImageLevels } from "@/server/images/settings"
+import {
   MAX_REFERENCE_FILES,
   MAX_REFERENCE_TOTAL_BYTES,
   REFERENCE_IMAGE_TYPES,
 } from "@/lib/attachments"
 
-const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images"
+const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 const MAX_PROMPT_LENGTH = 2000
 const REQUEST_TIMEOUT_MS = 180_000
 
+/**
+ * Calidad enviada al AI Gateway en cada generación: siempre la máxima,
+ * para ambos modelos. El slider de la UI elige el modelo; el nivel de
+ * render no se negocia.
+ */
 const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export const ASPECT_RATIOS = [
   "auto",
@@ -36,10 +58,8 @@ export const ASPECT_RATIOS = [
   "3:2",
   "2:3",
 ] as const
-export const QUALITIES = ["auto", "low", "medium", "high"] as const
 
 export type AspectRatio = (typeof ASPECT_RATIOS)[number]
-export type Quality = (typeof QUALITIES)[number]
 
 export interface ImageFilePayload {
   id: string
@@ -64,7 +84,8 @@ export interface ImageGenerationPayload {
 export interface GenerateImageInput {
   prompt: string
   aspectRatio?: AspectRatio
-  quality?: Quality
+  /** Nivel del control de calidad ("media" / "alta"). */
+  level?: QualityStepId
   /** Ids de los adjuntos del usuario que sirven de imagen de referencia. */
   referenceIds?: readonly string[]
 }
@@ -116,15 +137,24 @@ function isAspectRatio(value: unknown): value is AspectRatio {
   )
 }
 
-function isQuality(value: unknown): value is Quality {
+function isLevel(value: unknown): value is QualityStepId {
   return (
-    typeof value === "string" && (QUALITIES as readonly string[]).includes(value)
+    typeof value === "string" &&
+    (QUALITY_STEPS as readonly { id: string }[]).some((step) => step.id === value)
   )
 }
 
+/** Imagen de referencia ya verificada contra su firma de bytes. */
+interface ReferenceImage {
+  /** Contenido de la imagen. */
+  readonly bytes: Uint8Array
+  /** Tipo real derivado del contenido. */
+  readonly mediaType: string
+}
+
 /**
- * Parte de contenido con una imagen en línea: el proveedor acepta data URLs
- * y URLs http(s) tanto en `input_references` como en el chat.
+ * Parte de contenido con una imagen en línea: el proveedor de chat acepta
+ * data URLs tanto en el mensaje del usuario como en `input_references`.
  */
 interface ImageContentPart {
   type: "image_url"
@@ -165,8 +195,8 @@ function detectImageMediaType(bytes: Uint8Array): string | null {
 async function resolveReferenceImages(
   userId: string,
   referenceIds: readonly string[]
-): Promise<ImageContentPart[]> {
-  const images: ImageContentPart[] = []
+): Promise<ReferenceImage[]> {
+  const images: ReferenceImage[] = []
   let totalBytes = 0
   for (const id of referenceIds) {
     const file = await getUserFile(userId, id)
@@ -201,14 +231,18 @@ async function resolveReferenceImages(
         "Solo se admiten imágenes PNG, JPEG, GIF o WebP como referencia."
       )
     }
-    images.push({
-      type: "image_url",
-      image_url: {
-        url: `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
-      },
-    })
+    images.push({ bytes, mediaType })
   }
   return images
+}
+
+function referenceContentPart(image: ReferenceImage): ImageContentPart {
+  return {
+    type: "image_url",
+    image_url: {
+      url: `data:${image.mediaType};base64,${Buffer.from(image.bytes).toString("base64")}`,
+    },
+  }
 }
 
 export function sanitizeImageInput(input: unknown):
@@ -216,12 +250,12 @@ export function sanitizeImageInput(input: unknown):
       ok: true
       prompt: string
       aspectRatio?: AspectRatio
-      quality?: Quality
+      level?: QualityStepId
       referenceIds: string[]
     }
   | { ok: false } {
   if (typeof input !== "object" || input === null) return { ok: false }
-  const { prompt, aspectRatio, quality, referenceIds } = input as Record<
+  const { prompt, aspectRatio, level, referenceIds } = input as Record<
     string,
     unknown
   >
@@ -233,7 +267,7 @@ export function sanitizeImageInput(input: unknown):
   if (aspectRatio !== undefined && !isAspectRatio(aspectRatio)) {
     return { ok: false }
   }
-  if (quality !== undefined && !isQuality(quality)) return { ok: false }
+  if (level !== undefined && !isLevel(level)) return { ok: false }
   let references: string[] = []
   if (referenceIds !== undefined) {
     if (!Array.isArray(referenceIds)) return { ok: false }
@@ -247,7 +281,7 @@ export function sanitizeImageInput(input: unknown):
     ok: true,
     prompt: trimmed,
     aspectRatio: isAspectRatio(aspectRatio) ? aspectRatio : undefined,
-    quality: isQuality(quality) ? quality : undefined,
+    level: isLevel(level) ? level : undefined,
     referenceIds: references,
   }
 }
@@ -424,6 +458,181 @@ async function mirrorCostExpense(params: {
   }
 }
 
+/** Imagen devuelta por el proveedor, ya decodificada. */
+interface GeneratedImage {
+  bytes: Uint8Array
+  mimeType: string
+  costUsd: number | null
+  model: string
+  /** Calidad de render usada (null si el modelo no expone calidad). */
+  quality: string | null
+  /** Aspecto realmente aplicado (el ajustado al modelo, si hizo falta). */
+  aspect: string | null
+}
+
+/** Traduce el error del gateway a un error de la API. */
+function imageProviderError(error: unknown): AppError {
+  if (error instanceof Error && error.name === "TimeoutError") {
+    return new AppError(
+      504,
+      "image_provider_timeout",
+      "El proveedor del modelo tardó demasiado en generar la imagen. Inténtalo de nuevo."
+    )
+  }
+  if (GatewayAuthenticationError.isInstance(error)) {
+    return new AppError(
+      502,
+      "image_provider_error",
+      "El servidor no está autorizado frente al AI Gateway (revisa AI_GATEWAY_API_KEY)."
+    )
+  }
+  if (GatewayError.isInstance(error) && error.statusCode === 429) {
+    return new AppError(
+      429,
+      "image_provider_error",
+      "El proveedor del modelo está saturado. Inténtalo de nuevo en unos momentos."
+    )
+  }
+  return new AppError(
+    502,
+    "image_provider_error",
+    "El proveedor del modelo no pudo generar la imagen. Ajusta el prompt e inténtalo de nuevo."
+  )
+}
+
+/**
+ * Costo que reporta el gateway (USD) en los metadatos de la respuesta.
+ */
+function gatewayCost(metadata: unknown): number | null {
+  const cost = (metadata as { gateway?: { cost?: unknown } } | undefined)?.gateway
+    ?.cost
+  return (typeof cost === "string" || typeof cost === "number") &&
+    Number.isFinite(Number(cost))
+    ? Number(cost)
+    : null
+}
+
+/**
+ * Genera la imagen con un modelo concreto. Cada familia de proveedor
+ * expone los controles de forma distinta: los modelos de imagen aceptan
+ * `size`/`aspectRatio` en el cuerpo, y los LLM multimodales (Gemini)
+ * devuelven la imagen como parte de la respuesta de texto.
+ */
+async function generateWithEntry(params: {
+  entry: ImageModelEntry
+  prompt: string
+  references: readonly ReferenceImage[]
+  aspect: string
+}): Promise<GeneratedImage> {
+  const { entry, prompt, references, aspect } = params
+  const model = entry.model
+  const abortSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+
+  // El aspecto pedido puede no estar entre los que admite el modelo (la UI
+  // ofrece la lista completa): se recorta al más cercano para que la
+  // imagen no salga con otra forma sin avisar.
+  const requestedAspect = aspect !== "auto" ? aspect : undefined
+  const resolvedAspect = requestedAspect
+    ? closestAspect(model, requestedAspect)
+    : undefined
+
+  // En los modelos de OpenAI el tamaño en píxeles implica el aspecto: si el
+  // usuario pide un aspecto, el tamaño lo determina.
+  const size =
+    model.sizeMode === "pixels"
+      ? resolvedAspect
+        ? (pixelSizeForAspect(resolvedAspect) ?? entry.size ?? undefined)
+        : (entry.size ?? undefined)
+      : undefined
+  const aspectRatio =
+    model.sizeMode !== "pixels" ? resolvedAspect : undefined
+
+  if (model.kind === "language") {
+    // Estos modelos a veces responden con texto y sin imagen: se reintenta
+    // una vez a mano (el intento vacío no se factura imagen, solo tokens).
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const result = await generateGatewayText({
+        model: gateway.languageModel(model.id),
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: prompt },
+              ...references.map((image) => ({
+                type: "image" as const,
+                image: image.bytes,
+              })),
+            ],
+          },
+        ],
+        providerOptions: {
+          [model.providerKey]: {
+            imageConfig: {
+              ...(aspectRatio ? { aspectRatio } : {}),
+              ...(entry.size ? { imageSize: entry.size } : {}),
+            },
+          },
+        },
+        maxRetries: 1,
+        abortSignal,
+      })
+      const files = await result.files
+      const file = files[0]
+      if (file?.uint8Array) {
+        return {
+          bytes: file.uint8Array,
+          mimeType: file.mediaType?.startsWith("image/")
+            ? file.mediaType
+            : "image/png",
+          costUsd: gatewayCost(result.providerMetadata),
+          model: model.id,
+          quality: null,
+          aspect: resolvedAspect ?? null,
+        }
+      }
+    }
+    throw new AppError(
+      502,
+      "image_provider_error",
+      "El proveedor no devolvió ninguna imagen. Inténtalo de nuevo."
+    )
+  }
+
+  const result = await generateGatewayImage({
+    model: gateway.imageModel(model.id),
+    prompt:
+      references.length > 0
+        ? { images: references.map((image) => image.bytes), text: prompt }
+        : prompt,
+    n: 1,
+    ...(size ? { size: size as `${number}x${number}` } : {}),
+    ...(aspectRatio ? { aspectRatio: aspectRatio as `${number}:${number}` } : {}),
+    ...(entry.quality
+      ? { providerOptions: { [model.providerKey]: { quality: entry.quality } } }
+      : {}),
+    abortSignal,
+  })
+
+  const image = result.images[0]
+  if (!image?.base64) {
+    throw new AppError(
+      502,
+      "image_provider_error",
+      "El proveedor no devolvió ninguna imagen. Inténtalo de nuevo."
+    )
+  }
+  return {
+    bytes: Uint8Array.from(Buffer.from(image.base64, "base64")),
+    mimeType: image.mediaType?.startsWith("image/")
+      ? image.mediaType
+      : "image/png",
+    costUsd: gatewayCost(result.providerMetadata),
+    model: model.id,
+    quality: entry.quality,
+    aspect: resolvedAspect ?? null,
+  }
+}
+
 export async function generateImage(
   userId: string,
   input: GenerateImageInput
@@ -433,13 +642,25 @@ export async function generateImage(
   totalCostMxn: number | null
   fx: FixRateInfo | null
 }> {
-  const apiKey = process.env.OPENROUTER_API_KEY
-  const model = process.env.IMAGE_MODEL
-  if (!apiKey || !model) {
+  if (!process.env.AI_GATEWAY_API_KEY) {
     throw new AppError(
       500,
       "image_provider_not_configured",
-      "La generación de imágenes no está configurada en el servidor (falta OPENROUTER_API_KEY o IMAGE_MODEL)."
+      "La generación de imágenes no está configurada en el servidor (falta AI_GATEWAY_API_KEY)."
+    )
+  }
+
+  // El nivel (media/alta) lo elige el slider de la UI; el servidor lo
+  // traduce al modelo, la calidad y el tamaño configurados por el usuario.
+  // Un nivel desconocido cae al primer nivel configurado.
+  const levels = await getImageLevels(userId)
+  const level =
+    levels.find((candidate) => candidate.id === input.level) ?? levels[0]
+  if (!level) {
+    throw new AppError(
+      500,
+      "image_provider_not_configured",
+      "La generación de imágenes no está configurada en el servidor (no hay modelos seleccionados)."
     )
   }
 
@@ -450,86 +671,28 @@ export async function generateImage(
     input.referenceIds ?? []
   )
 
-  let upstream: Response
+  const requestedAspect = input.aspectRatio ?? "auto"
+  let generated: GeneratedImage
   try {
-    upstream = await fetch(OPENROUTER_IMAGES_URL, {
-      method: "POST",
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        prompt: input.prompt,
-        n: 1,
-        ...(referenceImages.length > 0
-          ? { input_references: referenceImages }
-          : {}),
-        ...(input.aspectRatio && input.aspectRatio !== "auto"
-          ? { aspect_ratio: input.aspectRatio }
-          : {}),
-        ...(input.quality && input.quality !== "auto"
-          ? { quality: input.quality }
-          : {}),
-      }),
+    generated = await generateWithEntry({
+      entry: level.entry,
+      prompt: input.prompt,
+      references: referenceImages,
+      aspect: requestedAspect,
     })
   } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new AppError(
-        504,
-        "image_provider_timeout",
-        "El proveedor del modelo tardó demasiado en generar la imagen. Inténtalo de nuevo."
-      )
-    }
     console.error(
       JSON.stringify({
         ts: new Date().toISOString(),
-        error: `images: openrouter fetch failed: ${error instanceof Error ? error.message : String(error)}`,
+        error: `images: model ${level.entry.model.id} failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       })
     )
-    throw new AppError(
-      502,
-      "image_provider_unreachable",
-      "No pude conectarme con el proveedor del modelo. Inténtalo de nuevo en unos momentos."
-    )
+    throw imageProviderError(error)
   }
 
-  if (!upstream.ok) {
-    const status = upstream.status
-    console.error(
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        error: `images: openrouter ${status}`,
-      })
-    )
-    const message =
-      status === 401 || status === 403
-        ? "El servidor no está autorizado frente al proveedor del modelo (revisa OPENROUTER_API_KEY)."
-        : status === 429
-          ? "El proveedor del modelo está saturado. Inténtalo de nuevo en unos momentos."
-          : "El proveedor del modelo no pudo generar la imagen. Ajusta el prompt e inténtalo de nuevo."
-    throw new AppError(status === 429 ? 429 : 502, "image_provider_error", message)
-  }
-
-  const payload = (await upstream.json().catch(() => null)) as {
-    data?: { b64_json?: string; media_type?: string }[]
-    usage?: { cost?: number }
-  } | null
-  const item = payload?.data?.[0]
-  if (!item?.b64_json) {
-    throw new AppError(
-      502,
-      "image_provider_error",
-      "El proveedor no devolvió ninguna imagen. Inténtalo de nuevo."
-    )
-  }
-
-  const mimeType =
-    typeof item.media_type === "string" && item.media_type.startsWith("image/")
-      ? item.media_type
-      : "image/png"
-  const bytes = Uint8Array.from(Buffer.from(item.b64_json, "base64"))
+  const { bytes, mimeType, costUsd, model, quality, aspect } = generated
   if (bytes.byteLength === 0) {
     throw new AppError(
       502,
@@ -549,10 +712,6 @@ export async function generateImage(
   // running total (USD and MXN) before persisting anything, so a later
   // failure can never leave a stored file or row without a total to report
   // against.
-  const costUsd =
-    typeof payload?.usage?.cost === "number" && Number.isFinite(payload.usage.cost)
-      ? payload.usage.cost
-      : null
   const before = await lifetimeCost(userId)
   const todayKey = mxDayKey(new Date())
   const todayRate = before.rates.get(todayKey) ?? null
@@ -573,8 +732,8 @@ export async function generateImage(
       userId,
       input.prompt,
       model,
-      input.aspectRatio ?? null,
-      input.quality ?? null,
+      aspect,
+      quality,
       costUsd,
       todayKey,
       todayRate
@@ -595,8 +754,8 @@ export async function generateImage(
         saved.id,
         input.prompt,
         model,
-        input.aspectRatio ?? null,
-        input.quality ?? null,
+        aspect,
+        quality,
         costUsd,
         saved.fileName,
         saved.mimeType,
@@ -636,8 +795,8 @@ export async function generateImage(
       userId,
       input.prompt,
       model,
-      input.aspectRatio ?? null,
-      input.quality ?? null,
+      aspect,
+      quality,
       costUsd,
       todayKey,
       todayRate
@@ -722,7 +881,6 @@ export async function deleteImageGeneration(
  * that is ambiguous in the text (retrato, banner, paisaje, logo...).
  */
 
-const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 const ENHANCE_TIMEOUT_MS = 30_000
 // max_tokens includes the model's internal reasoning (muse-spark spends
 // hundreds of tokens thinking before the JSON answer).
@@ -732,14 +890,12 @@ const ENHANCE_SYSTEM_PROMPT = [
   "Eres el asistente de prompts de la herramienta de generación de imágenes del panel.",
   "Reescribes el prompt del usuario para que sea claro, visual y específico: mantiene su intención e idioma (español), no inventa elementos que contradigan lo pedido y añade solo cuando falten detalles útiles de estilo, iluminación, composición y encuadre. Máximo 80 palabras.",
   "Si el prompt implica claramente una relación de aspecto (p. ej. 'banner' o 'paisaje' → 16:9, 'retrato' o 'historia' → 9:16, 'logo' o 'icono' → 1:1), sugiere la adecuada; si no, conserva la seleccionada.",
-  "La calidad solo cambia si el usuario lo pide explícitamente ('alta calidad', 'borrador rápido'); si no, conserva la seleccionada.",
-  'Responde ÚNICAMENTE con JSON válido, sin markdown ni explicaciones: {"prompt": string, "aspectRatio": "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | "3:2" | "2:3", "quality": "auto" | "low" | "medium" | "high"}',
+  'Responde ÚNICAMENTE con JSON válido, sin markdown ni explicaciones: {"prompt": string, "aspectRatio": "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | "3:2" | "2:3"}',
 ].join(" ")
 
 export interface EnhancePromptInput {
   prompt: string
   aspectRatio?: AspectRatio
-  quality?: Quality
   /** Ids de los adjuntos del usuario que sirven de imagen de referencia. */
   referenceIds?: readonly string[]
 }
@@ -747,7 +903,6 @@ export interface EnhancePromptInput {
 export interface EnhancePromptResult {
   prompt: string
   aspectRatio: AspectRatio
-  quality: Quality
 }
 
 function parseEnhanceResponse(
@@ -773,7 +928,7 @@ function parseEnhanceResponse(
     }
   }
   if (typeof parsed !== "object" || parsed === null) return null
-  const { prompt, aspectRatio, quality } = parsed as Record<string, unknown>
+  const { prompt, aspectRatio } = parsed as Record<string, unknown>
   if (typeof prompt !== "string") return null
   const trimmed = prompt.trim()
   if (trimmed.length === 0 || trimmed.length > MAX_PROMPT_LENGTH) return null
@@ -782,7 +937,6 @@ function parseEnhanceResponse(
     aspectRatio: isAspectRatio(aspectRatio)
       ? aspectRatio
       : (fallback.aspectRatio ?? "auto"),
-    quality: isQuality(quality) ? quality : (fallback.quality ?? "auto"),
   }
 }
 
@@ -803,7 +957,6 @@ export async function enhanceImagePrompt(
   const userContent = [
     `Prompt actual: ${input.prompt}`,
     `Aspecto seleccionado: ${input.aspectRatio ?? "auto"}`,
-    `Calidad seleccionada: ${input.quality ?? "auto"}`,
   ].join("\n")
 
   // Las referencias se resuelven antes de llamar al proveedor: un adjunto
@@ -834,7 +987,7 @@ export async function enhanceImagePrompt(
               referenceImages.length > 0
                 ? [
                     { type: "text", text: userContent },
-                    ...referenceImages,
+                    ...referenceImages.map(referenceContentPart),
                   ]
                 : userContent,
           },

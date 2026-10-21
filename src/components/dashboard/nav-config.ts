@@ -38,7 +38,11 @@ export const navMain = [
 
 export const navSecondary = [
   { title: "Asistente", icon: BotIcon, href: "/asistente" },
-  { title: "Settings", icon: SettingsIcon },
+  {
+    title: "Configuración",
+    icon: SettingsIcon,
+    href: "/configuracion",
+  },
   { title: "Get help", icon: LifeBuoyIcon },
 ] satisfies {
   title: string

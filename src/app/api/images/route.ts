@@ -50,14 +50,14 @@ export async function POST(request: Request) {
       throw new AppError(
         422,
         "invalid_request",
-        `Solicitud inválida: se esperaba { prompt: string (1-${2000} caracteres) } con aspecto, calidad y hasta ${MAX_REFERENCE_FILES} imágenes de referencia opcionales.`
+        `Solicitud inválida: se esperaba { prompt: string (1-${2000} caracteres) } con aspecto, modelo y hasta ${MAX_REFERENCE_FILES} imágenes de referencia opcionales.`
       )
     }
 
     const result = await generateImage(user.id, {
       prompt: input.prompt,
       aspectRatio: input.aspectRatio,
-      quality: input.quality,
+      level: input.level,
       referenceIds: input.referenceIds,
     })
 

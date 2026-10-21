@@ -29,14 +29,13 @@ export async function POST(request: Request) {
       throw new AppError(
         422,
         "invalid_request",
-        `Solicitud inválida: se esperaba { prompt: string } con aspecto, calidad y hasta ${MAX_REFERENCE_FILES} imágenes de referencia opcionales.`
+        `Solicitud inválida: se esperaba { prompt: string } con aspecto y hasta ${MAX_REFERENCE_FILES} imágenes de referencia opcionales.`
       )
     }
 
     const result = await enhanceImagePrompt(user.id, {
       prompt: input.prompt,
       aspectRatio: input.aspectRatio,
-      quality: input.quality,
       referenceIds: input.referenceIds,
     })
 
