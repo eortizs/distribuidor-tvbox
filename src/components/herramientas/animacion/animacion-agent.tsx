@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useEffect, useRef, useState } from "react"
+import { memo, useEffect, useMemo, useRef, useState } from "react"
 import ReactMarkdown, { type Components } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -46,16 +46,11 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
+import { Slider } from "@/components/ui/slider"
 import { Spinner } from "@/components/ui/spinner"
 import {
   MODEL_SELECTOR_PREFIX,
+  animationBudgetSteps,
   type AnimationModelInfo,
 } from "@/server/animaciones/models"
 
@@ -244,9 +239,17 @@ export function AnimacionAgent({
 }: AnimacionAgentProps = { models: [] }) {
   const agent = useEveAgent({ followIdle: false })
   const [draft, setDraft] = useState("")
-  const [modelId, setModelId] = useState(models[0]?.id ?? "")
+  // El presupuesto (bajo/medio/alto) es lo que elige el usuario; cada paso
+  // corresponde al modelo que ocupa esa posición en ANIMATION_MODELS.
+  const [budgetIndex, setBudgetIndex] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-  const selectedModel = models.find((model) => model.id === modelId) ?? models[0]
+  const budgetSteps = useMemo(() => animationBudgetSteps(models), [models])
+  const activeBudgetIndex = Math.min(
+    budgetIndex,
+    Math.max(budgetSteps.length - 1, 0)
+  )
+  const selectedModel =
+    budgetSteps[activeBudgetIndex]?.model ?? budgetSteps[0]?.model
 
   // Working-time stopwatch: ticks while a turn is in flight, accumulates the
   // conversation's closed turns, and resets with "Nueva conversación".
@@ -350,11 +353,11 @@ export function AnimacionAgent({
     const message = draft.trim()
     if (!message || isBusy || inputDisabled) return
     setDraft("")
-    // El selector viaja como clientContext del turno: llega al resolver
-    // dinámico de modelo y no se persiste en el historial durable.
+    // El presupuesto elegido viaja como clientContext del turno: llega al
+    // resolver dinámico de modelo y no se persiste en el historial durable.
     void agent
       .send(message, {
-        clientContext: `${MODEL_SELECTOR_PREFIX}${modelId}`,
+        clientContext: `${MODEL_SELECTOR_PREFIX}${selectedModel?.id ?? ""}`,
       })
       .catch(() => {})
   }
@@ -515,43 +518,44 @@ export function AnimacionAgent({
             ) : null}
           </div>
         </div>
-        {models.length > 0 ? (
-          <div className="flex w-full items-center gap-2">
+        {budgetSteps.length > 1 ? (
+          <div className="grid w-full gap-1.5">
             <Label
-              htmlFor="animacion-modelo"
-              className="text-muted-foreground shrink-0 text-xs"
+              id="animacion-presupuesto"
+              className="text-muted-foreground text-xs"
             >
-              Modelo
+              Presupuesto
+              <span className="sr-only">
+                : {budgetSteps[activeBudgetIndex].budget}
+              </span>
             </Label>
-            <Select
-              value={modelId}
+            <Slider
+              aria-labelledby="animacion-presupuesto"
+              value={[activeBudgetIndex + 1]}
+              min={1}
+              max={budgetSteps.length}
+              step={1}
+              disabled={inputDisabled}
               onValueChange={(value) => {
-                if (typeof value === "string" && value) setModelId(value)
+                const next = Array.isArray(value)
+                  ? value[value.length - 1]
+                  : value
+                if (typeof next === "number") setBudgetIndex(next - 1)
               }}
+            />
+            <div
+              aria-hidden="true"
+              className="text-muted-foreground flex w-full items-center justify-between text-xs font-medium"
             >
-              <SelectTrigger
-                id="animacion-modelo"
-                size="sm"
-                className="min-w-0 flex-1"
-                disabled={inputDisabled}
-              >
-                <SelectValue>
-                  {(value) => {
-                    const model =
-                      models.find((entry) => entry.id === value) ??
-                      selectedModel
-                    return model ? model.label : String(value)
-                  }}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {models.map((model) => (
-                  <SelectItem key={model.id} value={model.id} label={model.label}>
-                    {model.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              {budgetSteps.map((step, index) => (
+                <span
+                  key={step.budget}
+                  className={index === activeBudgetIndex ? "text-foreground" : undefined}
+                >
+                  {step.budget}
+                </span>
+              ))}
+            </div>
           </div>
         ) : null}
         <form className="w-full" onSubmit={handleSubmit}>

@@ -112,6 +112,36 @@ export function findAnimationModel(id: string): AnimationModelInfo | undefined {
 }
 
 /**
+ * Etiquetas de presupuesto del selector, de menor a mayor. Cada etiqueta
+ * corresponde al modelo que ocupa la misma posición en `ANIMATION_MODELS`:
+ * el primero es el de presupuesto bajo, el segundo el medio y el tercero el
+ * alto. La UI elige por presupuesto, nunca por nombre de modelo.
+ */
+export const BUDGET_LABELS = ["bajo", "medio", "alto"] as const
+
+export type BudgetLabel = (typeof BUDGET_LABELS)[number]
+
+export interface AnimationBudgetStep {
+  /** Etiqueta de presupuesto que ve el usuario. */
+  readonly budget: BudgetLabel
+  /** Modelo que corre el turno cuando se elige ese presupuesto. */
+  readonly model: AnimationModelInfo
+}
+
+/**
+ * Pasos del selector de presupuesto, en orden. Se deriva del orden de
+ * `ANIMATION_MODELS` (de menor a mayor presupuesto) y se limita a los
+ * `BUDGET_LABELS` disponibles.
+ */
+export function animationBudgetSteps(
+  models: readonly AnimationModelInfo[]
+): readonly AnimationBudgetStep[] {
+  return models
+    .slice(0, BUDGET_LABELS.length)
+    .map((model, index) => ({ budget: BUDGET_LABELS[index], model }))
+}
+
+/**
  * Sentinela que viaja como clientContext de cada turno (`modelo-seleccionado:
  * <id>`). El contexto de cliente llega al resolver dinámico de modelo como
  * mensaje user-role efímero y no se persiste en el historial durable.
