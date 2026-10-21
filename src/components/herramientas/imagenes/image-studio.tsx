@@ -35,7 +35,6 @@ import { Button } from "@/components/ui/button"
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
@@ -531,11 +530,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
         <TabsContent value="generar" keepMounted>
           <Card>
             <CardHeader>
-              <CardTitle>Generar imagen</CardTitle>
-              <CardDescription>
-                Describe la imagen que quieres crear; se guarda en tu galería y en
-                tu carpeta de almacenamiento.
-              </CardDescription>
+              <CardTitle>Descripción</CardTitle>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               {referenceItems.length > 0 ? (
@@ -575,6 +570,25 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   className="resize-none placeholder:text-foreground/60"
                 />
               </InputGroup>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="w-full sm:w-auto sm:self-start"
+                onClick={() => void enhancePrompt()}
+                disabled={!canEnhance}
+                title="El modelo revisa tu descripción, la hace más concreta y ajusta el aspecto si es ambiguo"
+              >
+                {enhancing ? (
+                  <Spinner className="size-3.5" />
+                ) : (
+                  <WandSparklesIcon
+                    data-icon="inline-start"
+                    className="size-3.5"
+                  />
+                )}
+                {enhancing ? "Revisando…" : "Mejorar instrucciones"}
+              </Button>
               <input
                 {...getInputProps()}
                 className="sr-only"
@@ -667,25 +681,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   </div>
                 ) : null}
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:col-start-3 lg:row-start-2 lg:justify-end">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="w-full sm:w-auto sm:flex-1 lg:flex-none"
-                    onClick={() => void enhancePrompt()}
-                    disabled={!canEnhance}
-                    title="El modelo revisa tu descripción, la hace más concreta y ajusta el aspecto si es ambiguo"
-                  >
-                    {enhancing ? (
-                      <Spinner className="size-3.5" />
-                    ) : (
-                      <WandSparklesIcon
-                        data-icon="inline-start"
-                        className="size-3.5"
-                      />
-                    )}
-                    {enhancing ? "Revisando…" : "Mejorar instrucciones"}
-                  </Button>
                   <Button
                     size="sm"
                     className="w-full sm:w-auto sm:flex-1 lg:flex-none"
