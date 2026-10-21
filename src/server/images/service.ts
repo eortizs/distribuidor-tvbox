@@ -46,7 +46,7 @@ const REQUEST_TIMEOUT_MS = 180_000
  * render no se negocia.
  */
 const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export const ASPECT_RATIOS = [
   "auto",
