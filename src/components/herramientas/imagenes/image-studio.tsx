@@ -63,8 +63,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Slider } from "@/components/ui/slider"
 import { Spinner } from "@/components/ui/spinner"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
@@ -599,16 +599,23 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   para continuar.
                 </p>
               ) : null}
-              <div className="flex flex-wrap items-end gap-2">
-                <div className="flex min-w-36 flex-col gap-1">
-                  <Label htmlFor="aspecto" className="text-xs">
+              <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-[12rem_auto_1fr] lg:gap-y-1.5">
+                <div className="flex flex-col gap-1 lg:contents">
+                  <Label
+                    htmlFor="aspecto"
+                    className="text-muted-foreground text-xs lg:col-start-1 lg:row-start-1"
+                  >
                     Aspecto
                   </Label>
                   <Select
                     value={activeAspect}
                     onValueChange={(value) => setAspectRatio(value as string)}
                   >
-                    <SelectTrigger id="aspecto" size="sm" className="w-full">
+                    <SelectTrigger
+                      id="aspecto"
+                      size="sm"
+                      className="w-full lg:col-start-1 lg:row-start-2"
+                    >
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -619,61 +626,52 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-muted-foreground text-xs">
+                  <p className="text-muted-foreground text-xs lg:col-start-1 lg:row-start-3 lg:self-center">
                     {activeAspect === "auto"
                       ? `Tamaño: ${selectedLevel?.entry.size ?? "—"}`
                       : effectiveSize}
                   </p>
                 </div>
                 {levels.length > 1 ? (
-                  <div className="flex min-w-40 flex-col gap-1">
+                  <div className="flex flex-col gap-1 lg:contents">
                     <Label
                       id="imagenes-calidad"
-                      className="text-muted-foreground text-xs"
+                      className="text-muted-foreground text-xs lg:col-start-2 lg:row-start-1"
                     >
                       Calidad
-                      <span className="sr-only">
-                        : {levels[activeQualityIndex].label}
-                      </span>
                     </Label>
-                    <Slider
+                    <ToggleGroup
+                      variant="outline"
+                      size="sm"
                       aria-labelledby="imagenes-calidad"
-                      value={[activeQualityIndex + 1]}
-                      min={1}
-                      max={levels.length}
-                      step={1}
+                      className="lg:col-start-2 lg:row-start-2"
+                      value={[levels[activeQualityIndex].id]}
                       disabled={generating || enhancing}
                       onValueChange={(value) => {
-                        const next = Array.isArray(value)
-                          ? value[value.length - 1]
-                          : value
-                        if (typeof next === "number") setQualityIndex(next - 1)
+                        const next = value[value.length - 1]
+                        const index = levels.findIndex(
+                          (level) => level.id === next
+                        )
+                        if (index >= 0) setQualityIndex(index)
                       }}
-                    />
-                    <div
-                      aria-hidden="true"
-                      className="text-muted-foreground flex w-full items-center justify-between text-xs font-medium"
                     >
-                      {levels.map((level, index) => (
-                        <span
+                      {levels.map((level) => (
+                        <ToggleGroupItem
                           key={level.id}
-                          className={
-                            index === activeQualityIndex
-                              ? "text-foreground"
-                              : undefined
-                          }
+                          value={level.id}
                         >
                           {level.label}
-                        </span>
+                        </ToggleGroupItem>
                       ))}
-                    </div>
+                    </ToggleGroup>
                   </div>
                 ) : null}
-                <div className="ms-auto flex items-end gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:col-start-3 lg:row-start-2 lg:justify-end">
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
+                    className="w-full sm:w-auto sm:flex-1 lg:flex-none"
                     onClick={() => void enhancePrompt()}
                     disabled={!canEnhance}
                     title="El modelo revisa tu descripción, la hace más concreta y ajusta el aspecto si es ambiguo"
@@ -690,6 +688,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   </Button>
                   <Button
                     size="sm"
+                    className="w-full sm:w-auto sm:flex-1 lg:flex-none"
                     onClick={() => void generate()}
                     disabled={!canGenerate}
                   >
