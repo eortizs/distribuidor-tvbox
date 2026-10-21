@@ -1,18 +1,30 @@
+import { readFile } from "node:fs/promises"
+
 import { pool } from "@/server/db"
 import { fixRates, mxDayKey, type FixRateInfo } from "@/server/banxico"
 import { createSystemExpense } from "@/server/finanzas/gastos"
 import {
   deleteUserFile,
+  getUserFile,
   maxUploadBytes,
   saveUserFile,
+  userFilePath,
   type UserFile,
 } from "@/server/storage/user-files"
 import { AppError } from "@/server/umejson/types"
+import {
+  MAX_REFERENCE_FILES,
+  MAX_REFERENCE_TOTAL_BYTES,
+  REFERENCE_IMAGE_TYPES,
+} from "@/lib/attachments"
 
 const OPENROUTER_IMAGES_URL = "https://openrouter.ai/api/v1/images"
 
 const MAX_PROMPT_LENGTH = 2000
 const REQUEST_TIMEOUT_MS = 180_000
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export const ASPECT_RATIOS = [
   "auto",
@@ -53,6 +65,8 @@ export interface GenerateImageInput {
   prompt: string
   aspectRatio?: AspectRatio
   quality?: Quality
+  /** Ids de los adjuntos del usuario que sirven de imagen de referencia. */
+  referenceIds?: readonly string[]
 }
 
 interface GenerationRow {
@@ -108,16 +122,109 @@ function isQuality(value: unknown): value is Quality {
   )
 }
 
+/**
+ * Parte de contenido con una imagen en línea: el proveedor acepta data URLs
+ * y URLs http(s) tanto en `input_references` como en el chat.
+ */
+interface ImageContentPart {
+  type: "image_url"
+  image_url: { url: string }
+}
+
+/**
+ * Detecta el formato real de una imagen por su firma de bytes. El MIME que
+ * envía el navegador no es confiable (lo declara el cliente), así que el tipo
+ * que se manda al proveedor se deriva del contenido.
+ */
+function detectImageMediaType(bytes: Uint8Array): string | null {
+  const startsWith = (...signature: number[]) =>
+    signature.every((byte, index) => bytes[index] === byte)
+
+  if (startsWith(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) {
+    return "image/png"
+  }
+  if (startsWith(0xff, 0xd8, 0xff)) return "image/jpeg"
+  if (startsWith(0x47, 0x49, 0x46, 0x38)) return "image/gif"
+  if (
+    startsWith(0x52, 0x49, 0x46, 0x46) &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return "image/webp"
+  }
+  return null
+}
+
+/**
+ * Resuelve los adjuntos del usuario y los devuelve como imágenes de
+ * referencia. Solo se aceptan imágenes reales (firma de bytes verificada) y
+ * solo archivos del propio usuario.
+ */
+async function resolveReferenceImages(
+  userId: string,
+  referenceIds: readonly string[]
+): Promise<ImageContentPart[]> {
+  const images: ImageContentPart[] = []
+  let totalBytes = 0
+  for (const id of referenceIds) {
+    const file = await getUserFile(userId, id)
+    if (!file) {
+      throw new AppError(
+        422,
+        "invalid_reference",
+        "Una de las imágenes de referencia ya no está disponible. Vuelve a adjuntarla."
+      )
+    }
+    if (!file.mimeType.startsWith("image/")) {
+      throw new AppError(
+        422,
+        "invalid_reference",
+        "Solo se admiten imágenes como referencia."
+      )
+    }
+    const bytes = await readFile(userFilePath(file))
+    totalBytes += bytes.byteLength
+    if (totalBytes > MAX_REFERENCE_TOTAL_BYTES) {
+      throw new AppError(
+        413,
+        "references_too_large",
+        `Las imágenes de referencia superan el límite de ${MAX_REFERENCE_TOTAL_BYTES} bytes.`
+      )
+    }
+    const mediaType = detectImageMediaType(bytes)
+    if (!mediaType || !REFERENCE_IMAGE_TYPES.includes(mediaType as never)) {
+      throw new AppError(
+        422,
+        "invalid_reference",
+        "Solo se admiten imágenes PNG, JPEG, GIF o WebP como referencia."
+      )
+    }
+    images.push({
+      type: "image_url",
+      image_url: {
+        url: `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`,
+      },
+    })
+  }
+  return images
+}
+
 export function sanitizeImageInput(input: unknown):
   | {
       ok: true
       prompt: string
       aspectRatio?: AspectRatio
       quality?: Quality
+      referenceIds: string[]
     }
   | { ok: false } {
   if (typeof input !== "object" || input === null) return { ok: false }
-  const { prompt, aspectRatio, quality } = input as Record<string, unknown>
+  const { prompt, aspectRatio, quality, referenceIds } = input as Record<
+    string,
+    unknown
+  >
   if (typeof prompt !== "string") return { ok: false }
   const trimmed = prompt.trim()
   if (trimmed.length === 0 || trimmed.length > MAX_PROMPT_LENGTH) {
@@ -127,11 +234,21 @@ export function sanitizeImageInput(input: unknown):
     return { ok: false }
   }
   if (quality !== undefined && !isQuality(quality)) return { ok: false }
+  let references: string[] = []
+  if (referenceIds !== undefined) {
+    if (!Array.isArray(referenceIds)) return { ok: false }
+    if (referenceIds.length > MAX_REFERENCE_FILES) return { ok: false }
+    for (const id of referenceIds) {
+      if (typeof id !== "string" || !UUID_RE.test(id)) return { ok: false }
+    }
+    references = [...(referenceIds as string[])]
+  }
   return {
     ok: true,
     prompt: trimmed,
     aspectRatio: isAspectRatio(aspectRatio) ? aspectRatio : undefined,
     quality: isQuality(quality) ? quality : undefined,
+    referenceIds: references,
   }
 }
 
@@ -326,6 +443,13 @@ export async function generateImage(
     )
   }
 
+  // Las referencias se resuelven antes de llamar al proveedor: un adjunto
+  // inválido debe fallar sin gastarle nada al usuario.
+  const referenceImages = await resolveReferenceImages(
+    userId,
+    input.referenceIds ?? []
+  )
+
   let upstream: Response
   try {
     upstream = await fetch(OPENROUTER_IMAGES_URL, {
@@ -339,6 +463,9 @@ export async function generateImage(
         model,
         prompt: input.prompt,
         n: 1,
+        ...(referenceImages.length > 0
+          ? { input_references: referenceImages }
+          : {}),
         ...(input.aspectRatio && input.aspectRatio !== "auto"
           ? { aspect_ratio: input.aspectRatio }
           : {}),
@@ -561,9 +688,6 @@ export async function listImageGenerations(
   }
 }
 
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
 /*
  * Soft delete: the image leaves the gallery and its binary is removed, but the
  * spend record stays so the accumulated cost keeps matching provider billing.
@@ -616,6 +740,8 @@ export interface EnhancePromptInput {
   prompt: string
   aspectRatio?: AspectRatio
   quality?: Quality
+  /** Ids de los adjuntos del usuario que sirven de imagen de referencia. */
+  referenceIds?: readonly string[]
 }
 
 export interface EnhancePromptResult {
@@ -661,6 +787,7 @@ function parseEnhanceResponse(
 }
 
 export async function enhanceImagePrompt(
+  userId: string,
   input: EnhancePromptInput
 ): Promise<EnhancePromptResult> {
   const apiKey = process.env.OPENROUTER_API_KEY
@@ -679,6 +806,13 @@ export async function enhanceImagePrompt(
     `Calidad seleccionada: ${input.quality ?? "auto"}`,
   ].join("\n")
 
+  // Las referencias se resuelven antes de llamar al proveedor: un adjunto
+  // inválido debe fallar sin gastarle nada al usuario.
+  const referenceImages = await resolveReferenceImages(
+    userId,
+    input.referenceIds ?? []
+  )
+
   let upstream: Response
   try {
     upstream = await fetch(OPENROUTER_CHAT_URL, {
@@ -694,7 +828,16 @@ export async function enhanceImagePrompt(
         max_tokens: ENHANCE_MAX_OUTPUT_TOKENS,
         messages: [
           { role: "system", content: ENHANCE_SYSTEM_PROMPT },
-          { role: "user", content: userContent },
+          {
+            role: "user",
+            content:
+              referenceImages.length > 0
+                ? [
+                    { type: "text", text: userContent },
+                    ...referenceImages,
+                  ]
+                : userContent,
+          },
         ],
       }),
     })

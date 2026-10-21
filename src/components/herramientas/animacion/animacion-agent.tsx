@@ -7,13 +7,26 @@ import {
   ArrowUpIcon,
   ClapperboardIcon,
   ClockIcon,
+  PaperclipIcon,
   RotateCcwIcon,
   SquareIcon,
 } from "lucide-react"
+import type { UserContent } from "ai"
+import { createDataUrlFilePart } from "eve/client"
 import { useEveAgent } from "eve/react"
 
 import { formatDurationMs } from "@/lib/duration"
+import {
+  MAX_AGENT_ATTACHMENT_BYTES,
+  MAX_AGENT_ATTACHMENT_FILES,
+  MAX_AGENT_ATTACHMENT_TOTAL_BYTES,
+} from "@/lib/attachments"
 
+import {
+  AttachmentChips,
+  type AttachmentItem,
+} from "@/components/herramientas/attachment-chips"
+import { formatBytes, useFileUpload } from "@/hooks/use-file-upload"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
@@ -48,6 +61,7 @@ import {
 } from "@/components/ui/message-scroller"
 import { Slider } from "@/components/ui/slider"
 import { Spinner } from "@/components/ui/spinner"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   MODEL_SELECTOR_PREFIX,
   animationBudgetSteps,
@@ -92,6 +106,29 @@ function messageText(parts: readonly { type: string; text?: string }[]): string 
   return parts
     .flatMap((part) => (part.type === "text" && part.text ? [part.text] : []))
     .join("\n\n")
+}
+
+/** Archivos adjuntos que Eve proyecta en el historial del mensaje. */
+function messageFiles(
+  parts: readonly {
+    type: string
+    filename?: string
+    mediaType?: string
+    size?: number
+  }[]
+): AttachmentItem[] {
+  return parts.flatMap((part, index) =>
+    part.type === "file"
+      ? [
+          {
+            id: `file-${index}`,
+            fileName: part.filename ?? "archivo",
+            mimeType: part.mediaType ?? "application/octet-stream",
+            sizeBytes: part.size ?? 0,
+          },
+        ]
+      : []
+  )
 }
 
 type ToolActivity = { id: string; label: string }
@@ -145,6 +182,7 @@ type ChatMessageRowProps = {
   messageId: string
   role: "user" | "assistant"
   text: string
+  files: AttachmentItem[]
   tools: ToolActivity[]
   isStreaming: boolean
 }
@@ -154,6 +192,7 @@ const ChatMessageRow = memo(
     messageId,
     role,
     text,
+    files,
     tools,
     isStreaming,
   }: ChatMessageRowProps) {
@@ -183,6 +222,9 @@ const ChatMessageRow = memo(
               align={isUser ? "end" : "start"}
             >
               <BubbleContent className="space-y-2">
+                {files.length > 0 ? (
+                  <AttachmentChips attachments={files} />
+                ) : null}
                 {tools.length > 0 && !isUser ? (
                   <div className="gap-1 flex flex-col">
                     {tools.map((tool) => (
@@ -222,6 +264,12 @@ const ChatMessageRow = memo(
     prev.role === next.role &&
     prev.text === next.text &&
     prev.isStreaming === next.isStreaming &&
+    prev.files.length === next.files.length &&
+    prev.files.every(
+      (file, index) =>
+        file.fileName === next.files[index].fileName &&
+        file.sizeBytes === next.files[index].sizeBytes
+    ) &&
     prev.tools.length === next.tools.length &&
     prev.tools.every((tool, index) => tool.id === next.tools[index].id && tool.label === next.tools[index].label)
 )
@@ -239,6 +287,25 @@ export function AnimacionAgent({
 }: AnimacionAgentProps = { models: [] }) {
   const agent = useEveAgent({ followIdle: false })
   const [draft, setDraft] = useState("")
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  // `submitting` cierra el envío mientras se leen y codifican los adjuntos:
+  // hasta que el turno no arranca, `isBusy` sigue en false y un segundo Enter
+  // volvería a entrar al handler y mandaría todo dos veces.
+  const [submitting, setSubmitting] = useState(false)
+  const submittingRef = useRef(false)
+  const [
+    { files: pickedFiles },
+    { openFileDialog, getInputProps, removeFile, clearFiles },
+  ] = useFileUpload({
+    multiple: true,
+    maxFiles: MAX_AGENT_ATTACHMENT_FILES,
+    maxSize: MAX_AGENT_ATTACHMENT_BYTES,
+    onError: () => {
+      setAttachmentError(
+        `No se pudo adjuntar: se aceptan hasta ${MAX_AGENT_ATTACHMENT_FILES} archivos de ${formatBytes(MAX_AGENT_ATTACHMENT_BYTES)} cada uno.`
+      )
+    },
+  })
   // El presupuesto (bajo/medio/alto) es lo que elige el usuario; cada paso
   // corresponde al modelo que ocupa esa posición en ANIMATION_MODELS.
   const [budgetIndex, setBudgetIndex] = useState(0)
@@ -339,6 +406,21 @@ export function AnimacionAgent({
 
   const workingTimeMs = accumulatedMs + currentTurnMs
 
+  // Los adjuntos viajan como partes de archivo del turno: Eve los deja en el
+  // sandbox de la sesión y el agente los abre con read_file o bash.
+  const attachments: AttachmentItem[] = pickedFiles.flatMap((item) =>
+    item.file instanceof File
+      ? [
+          {
+            id: item.id,
+            fileName: item.file.name,
+            mimeType: item.file.type || "application/octet-stream",
+            sizeBytes: item.file.size,
+          },
+        ]
+      : []
+  )
+
   function fitTextarea() {
     const el = textareaRef.current
     if (!el) return
@@ -348,18 +430,65 @@ export function AnimacionAgent({
 
   useEffect(fitTextarea, [draft])
 
-  function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
+  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (submittingRef.current || isBusy || inputDisabled) return
     const message = draft.trim()
-    if (!message || isBusy || inputDisabled) return
+    const files = pickedFiles.flatMap((item) =>
+      item.file instanceof File ? [item.file] : []
+    )
+    if (!message && files.length === 0) return
+
+    // El turno viaja entero en el body del POST: los adjuntos se codifican
+    // en base64 (~1.37×), así que el total tiene que quedar bajo el tope.
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0)
+    if (totalBytes > MAX_AGENT_ATTACHMENT_TOTAL_BYTES) {
+      setAttachmentError(
+        `Los adjuntos suman ${formatBytes(totalBytes)}; el máximo por turno es ${formatBytes(MAX_AGENT_ATTACHMENT_TOTAL_BYTES)}.`
+      )
+      return
+    }
+
+    submittingRef.current = true
+    setSubmitting(true)
+    // El texto se vacía de inmediato: lo que el usuario escriba mientras se
+    // leen los archivos se conserva y no se pisa al terminar.
     setDraft("")
+    setAttachmentError(null)
+
+    const content: UserContent = []
+    if (message) content.push({ type: "text", text: message })
+    try {
+      for (const file of files) {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        content.push(
+          createDataUrlFilePart({
+            bytes,
+            filename: file.name,
+            mediaType: file.type || "application/octet-stream",
+          })
+        )
+      }
+    } catch {
+      submittingRef.current = false
+      setSubmitting(false)
+      setDraft((current) => current || message)
+      setAttachmentError("No se pudo leer el archivo adjunto.")
+      return
+    }
+
+    clearFiles()
     // El presupuesto elegido viaja como clientContext del turno: llega al
     // resolver dinámico de modelo y no se persiste en el historial durable.
     void agent
-      .send(message, {
+      .send(content, {
         clientContext: `${MODEL_SELECTOR_PREFIX}${selectedModel?.id ?? ""}`,
       })
       .catch(() => {})
+      .finally(() => {
+        submittingRef.current = false
+        setSubmitting(false)
+      })
   }
 
   function handleStop() {
@@ -369,6 +498,10 @@ export function AnimacionAgent({
   function handleReset() {
     agent.reset()
     setDraft("")
+    clearFiles()
+    setAttachmentError(null)
+    submittingRef.current = false
+    setSubmitting(false)
     turnStartRef.current = null
     setAccumulatedMs(0)
     setCurrentTurnMs(0)
@@ -424,6 +557,7 @@ export function AnimacionAgent({
                         messageId={message.id}
                         role={role}
                         text={messageText(message.parts)}
+                        files={messageFiles(message.parts)}
                         tools={toolActivity(message.parts)}
                         isStreaming={
                           role === "assistant" &&
@@ -559,52 +693,102 @@ export function AnimacionAgent({
           </div>
         ) : null}
         <form className="w-full" onSubmit={handleSubmit}>
-          <InputGroup className="bg-background">
-            <InputGroupTextarea
-              ref={textareaRef}
-              aria-label="Mensaje para el agente de animación"
-              placeholder="Describe tu idea, guion o storyboard… (Enter para enviar, Shift+Enter para salto de línea)"
-              rows={1}
-              maxLength={MAX_INPUT_LENGTH}
-              value={draft}
-              disabled={inputDisabled}
-              onChange={(event) => setDraft(event.target.value)}
-              className="placeholder:text-foreground/60"
-              onKeyDown={(event) => {
-                if (
-                  event.key === "Enter" &&
-                  !event.shiftKey &&
-                  !event.nativeEvent.isComposing
-                ) {
-                  event.preventDefault()
-                  event.currentTarget.form?.requestSubmit()
-                }
-              }}
+          <div className="flex w-full flex-col gap-1.5">
+            {attachments.length > 0 ? (
+              <AttachmentChips
+                attachments={attachments}
+                onRemove={removeFile}
+                disabled={inputDisabled}
+              />
+            ) : null}
+            <InputGroup className="bg-background">
+              <InputGroupAddon align="inline-start">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <InputGroupButton
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        onClick={openFileDialog}
+                        aria-label="Adjuntar archivos al agente"
+                      />
+                    }
+                  >
+                    <PaperclipIcon aria-hidden="true" />
+                  </TooltipTrigger>
+                  <TooltipContent>Adjuntar archivos</TooltipContent>
+                </Tooltip>
+              </InputGroupAddon>
+              <InputGroupTextarea
+                ref={textareaRef}
+                aria-label="Mensaje para el agente de animación"
+                placeholder="Describe tu idea, guion o storyboard… (Enter para enviar, Shift+Enter para salto de línea)"
+                rows={1}
+                maxLength={MAX_INPUT_LENGTH}
+                value={draft}
+                disabled={inputDisabled}
+                onChange={(event) => setDraft(event.target.value)}
+                className="placeholder:text-foreground/60"
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault()
+                    event.currentTarget.form?.requestSubmit()
+                  }
+                }}
+              />
+              <InputGroupAddon align="inline-end">
+                {isBusy ? (
+                  <InputGroupButton
+                    type="button"
+                    size="icon-sm"
+                    variant="outline"
+                    onClick={handleStop}
+                  >
+                    <SquareIcon aria-hidden="true" />
+                    <span className="sr-only">Detener respuesta</span>
+                  </InputGroupButton>
+                ) : submitting ? (
+                  <InputGroupButton
+                    type="button"
+                    size="icon-sm"
+                    variant="default"
+                    disabled
+                  >
+                    <Spinner className="size-3.5" aria-hidden="true" />
+                    <span className="sr-only">Enviando</span>
+                  </InputGroupButton>
+                ) : (
+                  <InputGroupButton
+                    type="submit"
+                    size="icon-sm"
+                    variant="default"
+                    aria-disabled={
+                      (!draft.trim() && attachments.length === 0) || inputDisabled
+                    }
+                  >
+                    <ArrowUpIcon aria-hidden="true" />
+                    <span className="sr-only">Enviar</span>
+                  </InputGroupButton>
+                )}
+              </InputGroupAddon>
+            </InputGroup>
+            <input
+              {...getInputProps()}
+              className="sr-only"
+              aria-hidden="true"
+              tabIndex={-1}
             />
-            <InputGroupAddon align="inline-end">
-              {isBusy ? (
-                <InputGroupButton
-                  type="button"
-                  size="icon-sm"
-                  variant="outline"
-                  onClick={handleStop}
-                >
-                  <SquareIcon aria-hidden="true" />
-                  <span className="sr-only">Detener respuesta</span>
-                </InputGroupButton>
-              ) : (
-                <InputGroupButton
-                  type="submit"
-                  size="icon-sm"
-                  variant="default"
-                  aria-disabled={!draft.trim() || inputDisabled}
-                >
-                  <ArrowUpIcon aria-hidden="true" />
-                  <span className="sr-only">Enviar</span>
-                </InputGroupButton>
-              )}
-            </InputGroupAddon>
-          </InputGroup>
+            {attachmentError ? (
+              <p role="alert" className="text-destructive text-xs">
+                {attachmentError}
+              </p>
+            ) : null}
+          </div>
         </form>
       </CardFooter>
     </Card>

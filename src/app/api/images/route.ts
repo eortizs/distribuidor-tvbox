@@ -1,7 +1,13 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
-import { checkImageRateLimit, generateImage, listImageGenerations, sanitizeImageInput } from "@/server/images/service"
+import {
+  checkImageRateLimit,
+  generateImage,
+  listImageGenerations,
+  sanitizeImageInput,
+} from "@/server/images/service"
 import { errorResponse, readJsonBody } from "@/server/http"
 import { AppError } from "@/server/umejson/types"
+import { MAX_REFERENCE_FILES } from "@/lib/attachments"
 
 export async function GET(request: Request) {
   try {
@@ -44,7 +50,7 @@ export async function POST(request: Request) {
       throw new AppError(
         422,
         "invalid_request",
-        `Solicitud inválida: se esperaba { prompt: string (1-${2000} caracteres) } con aspecto y calidad opcionales.`
+        `Solicitud inválida: se esperaba { prompt: string (1-${2000} caracteres) } con aspecto, calidad y hasta ${MAX_REFERENCE_FILES} imágenes de referencia opcionales.`
       )
     }
 
@@ -52,6 +58,7 @@ export async function POST(request: Request) {
       prompt: input.prompt,
       aspectRatio: input.aspectRatio,
       quality: input.quality,
+      referenceIds: input.referenceIds,
     })
 
     return Response.json({ ok: true, data: result }, { status: 201 })

@@ -4,11 +4,19 @@ import * as React from "react"
 import {
   DownloadIcon,
   ImageIcon,
+  PaperclipIcon,
   SparklesIcon,
   Trash2Icon,
   WandSparklesIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+
+import {
+  MAX_REFERENCE_BYTES,
+  MAX_REFERENCE_FILES,
+  MAX_REFERENCE_TOTAL_BYTES,
+  REFERENCE_IMAGE_TYPES,
+} from "@/lib/attachments"
 
 import { Badge } from "@/components/reui/badge"
 import {
@@ -40,6 +48,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+} from "@/components/ui/input-group"
 import { Label } from "@/components/ui/label"
 import {
   Select,
@@ -51,7 +65,17 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import {
+  AttachmentChips,
+  type AttachmentItem,
+  type AttachmentStatus,
+} from "@/components/herramientas/attachment-chips"
+import {
+  formatBytes,
+  useFileUpload,
+  type FileWithPreview,
+} from "@/hooks/use-file-upload"
 
 interface ImageFile {
   id: string
@@ -74,6 +98,16 @@ interface ImageGeneration {
 }
 
 type ListState = "loading" | "ready" | "error"
+
+type ReferenceState = {
+  id: string
+  /** Id del archivo ya subido al almacenamiento del usuario. */
+  serverId: string | null
+  fileName: string
+  mimeType: string
+  sizeBytes: number
+  status: AttachmentStatus
+}
 
 const MAX_PROMPT_LENGTH = 2000
 
@@ -132,6 +166,13 @@ export function ImageStudio() {
   const [enhancing, setEnhancing] = React.useState(false)
   const [generateError, setGenerateError] = React.useState<string | null>(null)
 
+  const [references, setReferences] = React.useState<Record<string, ReferenceState>>({})
+  const [referenceError, setReferenceError] = React.useState<string | null>(null)
+  // Subidas en vuelo: al quitar un chip se aborta la suya para no dejar el
+  // archivo huérfano en el disco.
+  const uploadControllers = React.useRef(new Map<string, AbortController>())
+  const removedReferenceIds = React.useRef(new Set<string>())
+
   const [viewer, setViewer] = React.useState<ImageGeneration | null>(null)
   const [confirmDelete, setConfirmDelete] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
@@ -141,6 +182,24 @@ export function ImageStudio() {
   const [reloadToken, setReloadToken] = React.useState(0)
 
   const promptRef = React.useRef<HTMLTextAreaElement>(null)
+
+  const [
+    { files: pickedFiles },
+    { openFileDialog, getInputProps, removeFile },
+  ] = useFileUpload({
+    multiple: true,
+    maxFiles: MAX_REFERENCE_FILES,
+    maxSize: MAX_REFERENCE_BYTES,
+    accept: REFERENCE_IMAGE_TYPES.join(","),
+    onFilesAdded: (added) => {
+      void uploadReferences(added)
+    },
+    onError: () => {
+      setReferenceError(
+        `Solo se admiten imágenes (${REFERENCE_IMAGE_TYPES.map((type) => type.replace("image/", "")).join(", ")}) de hasta ${formatBytes(MAX_REFERENCE_BYTES)} y máximo ${MAX_REFERENCE_FILES} por generación.`
+      )
+    },
+  })
 
   React.useEffect(() => {
     const controller = new AbortController()
@@ -177,6 +236,133 @@ export function ImageStudio() {
     setReloadToken((token) => token + 1)
   }
 
+  /**
+   * Sube cada imagen elegida al almacenamiento del usuario (kind `attachment`)
+   * y conserva su id: el servidor la lee del disco y la manda al proveedor
+   * como imagen de referencia.
+   */
+  async function uploadReferences(added: FileWithPreview[]) {
+    await Promise.all(added.map((item) => uploadReference(item)))
+  }
+
+  async function uploadReference(item: FileWithPreview) {
+    const file = item.file
+    if (!(file instanceof File)) return
+    const base: ReferenceState = {
+      id: item.id,
+      serverId: null,
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      sizeBytes: file.size,
+      status: "uploading",
+    }
+    removedReferenceIds.current.delete(item.id)
+    setReferences((current) => ({ ...current, [item.id]: base }))
+
+    const controller = new AbortController()
+    uploadControllers.current.set(item.id, controller)
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("kind", "attachment")
+      const response = await fetch("/api/files", {
+        method: "POST",
+        body: formData,
+        signal: controller.signal,
+      })
+      const body = (await response.json()) as {
+        ok: boolean
+        data?: { id: string }
+        error?: { message?: string }
+      }
+      if (!response.ok || !body.ok || !body.data) {
+        throw new Error(body.error?.message ?? "No se pudo subir la imagen.")
+      }
+      // El chip se quitó mientras el archivo subía: ya está en el servidor y
+      // hay que liberarlo para no dejarlo huérfano en el disco.
+      if (removedReferenceIds.current.has(item.id)) {
+        void fetch(`/api/files/${body.data.id}`, { method: "DELETE" }).catch(
+          () => {}
+        )
+        return
+      }
+      setReferences((current) => ({
+        ...current,
+        [item.id]: {
+          ...(current[item.id] ?? base),
+          serverId: body.data!.id,
+          status: "ready",
+        },
+      }))
+    } catch (error) {
+      if (controller.signal.aborted) return
+      setReferences((current) => ({
+        ...current,
+        [item.id]: { ...(current[item.id] ?? base), status: "error" },
+      }))
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "No se pudo adjuntar la imagen."
+      )
+    } finally {
+      uploadControllers.current.delete(item.id)
+    }
+  }
+
+  function handleRemoveReference(id: string) {
+    const entry = references[id]
+    removedReferenceIds.current.add(id)
+    uploadControllers.current.get(id)?.abort()
+    uploadControllers.current.delete(id)
+    removeFile(id)
+    setReferences((current) => {
+      const next = { ...current }
+      delete next[id]
+      return next
+    })
+    if (entry?.serverId) {
+      void fetch(`/api/files/${entry.serverId}`, { method: "DELETE" }).catch(
+        () => {}
+      )
+    }
+  }
+
+  const referenceItems: AttachmentItem[] = pickedFiles.flatMap((item) => {
+    const entry = references[item.id]
+    if (!entry) return []
+    return [
+      {
+        id: entry.id,
+        fileName: entry.fileName,
+        mimeType: entry.mimeType,
+        sizeBytes: entry.sizeBytes,
+        status: entry.status,
+      },
+    ]
+  })
+
+  const referenceIds = referenceItems.flatMap((item) => {
+    const entry = references[item.id]
+    return entry?.serverId && entry.status === "ready" ? [entry.serverId] : []
+  })
+
+  const uploadingReferences = referenceItems.some(
+    (item) => item.status === "uploading"
+  )
+
+  // Una referencia que no se pudo subir no puede omitirse en silencio: se
+  // bloquea el envío hasta que el usuario la quite.
+  const failedReferences = referenceItems.some(
+    (item) => item.status === "error"
+  )
+
+  const referenceBytes = referenceItems.reduce(
+    (sum, item) => sum + item.sizeBytes,
+    0
+  )
+  const referencesTooBig = referenceBytes > MAX_REFERENCE_TOTAL_BYTES
+
   async function generate() {
     const trimmed = prompt.trim()
     if (!trimmed || generating) return
@@ -186,7 +372,12 @@ export function ImageStudio() {
       const response = await fetch("/api/images", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: trimmed, aspectRatio, quality }),
+        body: JSON.stringify({
+          prompt: trimmed,
+          aspectRatio,
+          quality,
+          referenceIds,
+        }),
       })
       const body = (await response.json()) as {
         ok: boolean
@@ -229,7 +420,12 @@ export function ImageStudio() {
       const response = await fetch("/api/images/enhance", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: trimmed, aspectRatio, quality }),
+        body: JSON.stringify({
+          prompt: trimmed,
+          aspectRatio,
+          quality,
+          referenceIds,
+        }),
       })
       const body = (await response.json()) as {
         ok: boolean
@@ -279,8 +475,19 @@ export function ImageStudio() {
     }
   }
 
-  const canGenerate = prompt.trim().length > 0 && !generating
-  const canEnhance = prompt.trim().length > 0 && !enhancing && !generating
+  const canGenerate =
+    prompt.trim().length > 0 &&
+    !generating &&
+    !uploadingReferences &&
+    !failedReferences &&
+    !referencesTooBig
+  const canEnhance =
+    prompt.trim().length > 0 &&
+    !enhancing &&
+    !generating &&
+    !uploadingReferences &&
+    !failedReferences &&
+    !referencesTooBig
 
   return (
     <div className="flex flex-1 flex-col gap-6">
@@ -300,16 +507,67 @@ export function ImageStudio() {
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
-              <Textarea
-                ref={promptRef}
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                placeholder="Ej.: un ajolote astronauta flotando entre nebulosas, iluminación de estudio, estilo fotográfico"
-                rows={3}
-                maxLength={MAX_PROMPT_LENGTH}
-                aria-label="Prompt de la imagen"
-                className="resize-none"
+              {referenceItems.length > 0 ? (
+                <AttachmentChips
+                  attachments={referenceItems}
+                  onRemove={handleRemoveReference}
+                  disabled={generating || enhancing}
+                />
+              ) : null}
+              <InputGroup className="bg-background">
+                <InputGroupAddon align="inline-start">
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <InputGroupButton
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={openFileDialog}
+                          aria-label="Adjuntar imágenes de referencia"
+                        />
+                      }
+                    >
+                      <PaperclipIcon aria-hidden="true" />
+                    </TooltipTrigger>
+                    <TooltipContent>Adjuntar imágenes de referencia</TooltipContent>
+                  </Tooltip>
+                </InputGroupAddon>
+                <InputGroupTextarea
+                  ref={promptRef}
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="Ej.: un ajolote astronauta flotando entre nebulosas, iluminación de estudio, estilo fotográfico"
+                  rows={3}
+                  maxLength={MAX_PROMPT_LENGTH}
+                  aria-label="Prompt de la imagen"
+                  className="resize-none placeholder:text-foreground/60"
+                />
+              </InputGroup>
+              <input
+                {...getInputProps()}
+                className="sr-only"
+                aria-hidden="true"
+                tabIndex={-1}
               />
+              {referenceError ? (
+                <p role="alert" className="text-destructive text-xs">
+                  {referenceError}
+                </p>
+              ) : null}
+              {referencesTooBig ? (
+                <p role="alert" className="text-destructive text-xs">
+                  Las imágenes de referencia suman {formatBytes(referenceBytes)};
+                  el máximo por generación es{" "}
+                  {formatBytes(MAX_REFERENCE_TOTAL_BYTES)}.
+                </p>
+              ) : null}
+              {failedReferences ? (
+                <p role="alert" className="text-destructive text-xs">
+                  Hay una imagen de referencia que no se pudo subir. Quítala
+                  para continuar.
+                </p>
+              ) : null}
               <div className="flex flex-wrap items-end gap-2">
                 <div className="flex min-w-36 flex-col gap-1">
                   <Label htmlFor="aspecto" className="text-xs">
