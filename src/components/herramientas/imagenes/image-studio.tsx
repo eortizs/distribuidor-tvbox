@@ -796,10 +796,16 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   return (
     <div className="flex flex-1 flex-col gap-6">
       <Tabs value={tab} onValueChange={(value) => setTab(value as string)}>
-        <TabsList variant="line" className="mb-3.5 w-full">
-          <TabsTrigger value="generar">Generar</TabsTrigger>
-          <TabsTrigger value="galeria">Galería</TabsTrigger>
-        </TabsList>
+        {/* Barra de pestañas fija: el contenedor se estira de borde a borde
+            (márgenes negativos) para que su fondo opaco tape el contenido que
+            pasa por debajo, y `top-16` la deja justo bajo la cabecera de la
+            app, que es de 4rem. */}
+        <div className="sticky top-16 z-10 -mx-4 mb-3.5 bg-background px-4 md:-mx-6 md:px-6">
+          <TabsList variant="line" className="w-full">
+            <TabsTrigger value="generar">Generar</TabsTrigger>
+            <TabsTrigger value="galeria">Galería</TabsTrigger>
+          </TabsList>
+        </div>
 
         <TabsContent value="generar" keepMounted>
           <Card>
