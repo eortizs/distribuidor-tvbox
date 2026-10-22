@@ -4,11 +4,11 @@ import * as React from "react"
 import {
   CheckIcon,
   CopyIcon,
-  DownloadIcon,
   ImageDownIcon,
   ImageIcon,
   PaperclipIcon,
   SearchIcon,
+  Share2Icon,
   SparklesIcon,
   Trash2Icon,
 } from "lucide-react"
@@ -20,6 +20,13 @@ import {
   MAX_REFERENCE_TOTAL_BYTES,
   REFERENCE_IMAGE_TYPES,
 } from "@/lib/attachments"
+import {
+  canShareFiles,
+  hasShareSheet,
+  imageToPng,
+  shareImage,
+  type ShareTarget,
+} from "@/lib/share"
 
 import { Badge } from "@/components/reui/badge"
 import {
@@ -183,9 +190,56 @@ function lowSource(file: ImageFile): string {
   return file.variants?.low?.url ?? file.url
 }
 
+/** Nombre del archivo de la versión baja (el que se comparte). */
+function lowFileName(file: ImageFile): string {
+  const variant = file.variants?.low?.fileName
+  if (variant) return variant
+  const base = file.fileName.replace(/\.[^.]+$/, "").trim() || "imagen"
+  return `${base}-baja.webp`
+}
+
+/**
+ * URL de la versión baja. Se arma con el id del archivo para que siempre sea
+ * la variante de 1280 px: si falta, el servidor la deriva del original al
+ * pedarla (`ensureFileVariant`).
+ */
+function lowVariantUrl(file: ImageFile): string {
+  return `/api/files/${file.id}?variant=low`
+}
+
 /** URL de descarga de un archivo o de una variante. */
 function downloadUrl(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}download=1`
+}
+
+/**
+ * Descarga la versión baja de la imagen y la deja lista para compartir: el
+ * archivo tal cual (WebP) y, si el navegador tiene hoja de compartir pero no
+ * acepta el WebP, su versión PNG (compartir no puede esperar a una
+ * conversión: Safari exige que la llamada salga del gesto del usuario).
+ */
+async function fetchShareTarget(
+  file: ImageFile,
+  signal?: AbortSignal
+): Promise<ShareTarget> {
+  const response = await fetch(lowVariantUrl(file), {
+    signal,
+    credentials: "same-origin",
+  })
+  if (!response.ok) throw new Error("share-download-failed")
+  const blob = await response.blob()
+  const shared = new File([blob], lowFileName(file), {
+    type: blob.type || "image/webp",
+  })
+  const target: ShareTarget = { file: shared, png: null }
+  if (hasShareSheet() && !canShareFiles([shared])) {
+    try {
+      target.png = await imageToPng(blob)
+    } catch {
+      target.png = null
+    }
+  }
+  return target
 }
 
 /** Dominio de una fuente, sin "www.": es la etiqueta corta de cada enlace. */
@@ -307,11 +361,16 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   // El botón de copiar avisa durante un par de segundos de que la
   // descripción ya está en el portapapeles.
   const [copied, setCopied] = React.useState(false)
+  // Compartir está en curso (la hoja del sistema o la copia al portapapeles).
+  const [sharing, setSharing] = React.useState(false)
   // Segundo nivel sobre el visor: la imagen sola, a pantalla completa.
   const [zoomed, setZoomed] = React.useState(false)
   const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
+  // Archivo listo para compartir, por id de imagen: se prepara al abrir el
+  // visor para que al compartir no haya que esperar la descarga.
+  const shareTargets = React.useRef(new Map<string, ShareTarget>())
 
   const [tab, setTab] = React.useState("generar")
 
@@ -630,6 +689,54 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
     }
   }, [])
+
+  /**
+   * Prepara el archivo a compartir en cuanto se abre el visor. Así, al pulsar
+   * *Compartir* no hay que esperar la descarga y la Web Share API se puede
+   * llamar dentro del gesto del usuario (Safari lo exige).
+   */
+  React.useEffect(() => {
+    const file = viewer?.file
+    // Solo se guarda la imagen abierta: el archivo pesa (el WebP y su PNG) y
+    // no hace falta llevar más de uno en memoria.
+    shareTargets.current.clear()
+    if (!file) return
+    const controller = new AbortController()
+    void fetchShareTarget(file, controller.signal)
+      .then((target) => {
+        if (controller.signal.aborted) return
+        shareTargets.current.set(file.id, target)
+      })
+      .catch(() => undefined)
+    return () => controller.abort()
+  }, [viewer])
+
+  /**
+   * Comparte la imagen en su versión baja (la que se está viendo): la Web
+   * Share API abre la hoja del sistema y, si el navegador no sabe compartir
+   * archivos, la imagen se copia al portapapeles.
+   */
+  async function shareViewerImage(image: ImageGeneration) {
+    const file = image.file
+    if (!file || sharing) return
+    setSharing(true)
+    try {
+      const target =
+        shareTargets.current.get(file.id) ??
+        (await fetchShareTarget(file))
+      shareTargets.current.set(file.id, target)
+      const outcome = await shareImage(target)
+      if (outcome === "copied") {
+        toast.success(
+          "Imagen copiada al portapapeles. Ya puedes pegarla donde quieras."
+        )
+      }
+    } catch {
+      toast.error("No se pudo compartir la imagen.")
+    } finally {
+      setSharing(false)
+    }
+  }
 
   async function remove(image: ImageGeneration) {
     if (deleting) return
@@ -1207,19 +1314,16 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                 <Button
                   variant="outline"
                   size="sm"
-                  title="Versión reducida en WebP, pensada para verse y descargarse desde el celular"
-                  render={
-                    <a
-                      href={downloadUrl(lowSource(viewer.file))}
-                      download={
-                        viewer.file.variants?.low?.fileName ??
-                        viewer.file.fileName
-                      }
-                    />
-                  }
+                  onClick={() => void shareViewerImage(viewer)}
+                  disabled={sharing}
+                  title="Comparte la versión reducida en WebP (1280 px) con WhatsApp, Telegram o cualquier otra app"
                 >
-                  <DownloadIcon data-icon="inline-start" />
-                  Descargar baja
+                  {sharing ? (
+                    <Spinner className="size-3.5" data-icon="inline-start" />
+                  ) : (
+                    <Share2Icon data-icon="inline-start" />
+                  )}
+                  Compartir
                 </Button>
                 <Button
                   size="sm"
