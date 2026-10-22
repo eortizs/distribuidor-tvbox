@@ -2,6 +2,7 @@ import { generateText } from "ai"
 import { gateway } from "@ai-sdk/gateway"
 
 import { AppError } from "@/server/umejson/types"
+import { isSportsTopic } from "@/server/images/sports"
 import { tavilyConfigured, tavilySearch, type TavilyEvidence, type TavilyTopic } from "@/server/images/tavily"
 
 /**
@@ -44,7 +45,7 @@ const MAX_DETAILS_NOTE_LENGTH = 400
 const MAX_QUERIES = 3
 const MIN_QUERY_LENGTH = 4
 const MAX_QUERY_LENGTH = 200
-const MIN_FACT_SOURCES = 2
+export const MIN_FACT_SOURCES = 2
 const MAX_FACTS = 6
 const MAX_FACT_LENGTH = 300
 /** Un dato volátil solo se acepta con una fuente publicada o actualizada
@@ -317,6 +318,7 @@ function planSystemPrompt(moment: MexicoCityMoment): string {
     `Referencia temporal: ahora en Ciudad de México (${moment.offsetLabel}) es ${moment.long}, ${moment.time} (fecha ISO: ${moment.iso}). Resuelve referencias como "hoy", "esta noche" o "el próximo partido" con esa fecha.`,
     "Tu única tarea es decidir si la petición necesita investigación en internet y con qué búsquedas, nada más.",
     'Necesita investigación ("research": true) cuando la imagen depende de datos externos concretos y verificables: eventos deportivos o de espectáculos, partidos, fechas, horarios, resultados, clasificaciones, cifras, nombres propios actuales o cualquier tema puntual o reciente. No necesita investigación cuando todo sale de la imaginación o del conocimiento estable (personajes ficticios, paisajes, logos, ilustraciones, "un ajolote astronauta"). Ante la duda, investiga.',
+    'Si la petición es de temática DEPORTIVA (cualquier deporte o competición), "research" es SIEMPRE true: los datos deportivos nunca salen del conocimiento del modelo, así que jamás devuelvas "research": false para un tema deportivo, por estable que parezca (ganadores de un campeonato, récords, datos de la temporada, clasificación de una liga).',
     'Genera hasta 3 búsquedas distintas y específicas, en español de México (es-MX), con los nombres propios como se usan en México ("El Tri", "la Selección Mexicana", "liga MX"). Usa el tema "news" para eventos en vivo, partidos, resultados o noticias de los últimos días; "general" para todo lo demás. Marca "volatile": true cuando el dato buscado cambia con el tiempo (tabla de posiciones, puntos, marcador, clasificación, racha, clima, cotización): en esas búsquedas incluye la fecha o la jornada actual ("tabla general Liga MX octubre 2026", "puntos América jornada 13 Apertura 2026") para no recuperar el estado anterior. Si el dato puede haber cambiado hoy (jornada en curso, evento en vivo), incluye una búsqueda orientada a los resultados del día con tema "news" (p. ej., "resultados jornada 13 Liga MX hoy"). Cuando la búsqueda trate de deportes en México (Liga MX, Selección Mexicana, box, F1, cualquier competición o evento deportivo del país), usa "category": "deportes-mx", que restringe la búsqueda a medios deportivos verificados.',
     'Responde ÚNICAMENTE con JSON válido, sin markdown ni explicaciones: {"research": boolean, "queries": [{"q": string, "topic": "general" | "news", "volatile": boolean, "category": "deportes-mx" | null}]}. Si "research" es false, devuelve "queries" vacío.',
   ].join(" ")
@@ -401,7 +403,7 @@ function domainOf(url: string): string | null {
  * aztecadeportes.com son Azteca. La corroboración de un dato debe venir de
  * familias editoriales distintas, no de dos puertas del mismo medio.
  */
-function publisherFamilyOf(domain: string): string {
+export function publisherFamilyOf(domain: string): string {
   if (domain.includes("espn")) return "espn"
   if (domain.includes("azteca")) return "azteca"
   if (domain.includes("mediotiempo")) return "mediotiempo"
@@ -412,7 +414,10 @@ function publisherFamilyOf(domain: string): string {
 
 /** Resultado de la investigación: evidencia, texto para el modelo, índice de
  * URLs reales y si algún dato buscado era volátil (habilita refinamiento). */
-interface ResearchOutcome {
+export interface ResearchOutcome {
+  /** Búsquedas ejecutadas por el motor de búsqueda (Tavily). La ruta de
+   * grounding entrega la evidencia ya sintetizada en `text` y deja esta lista
+   * vacía: no hay consultas que refinar. */
   evidence: TavilyEvidence[]
   text: string
   /** URL normalizada → fuente; es el conjunto único de resultados reales. */
@@ -575,6 +580,7 @@ function refinementPlanPrompt(moment: MexicoCityMoment): string {
     '- Si la evidencia menciona partidos o eventos pendientes o en vivo, busca directamente su resultado final nombrando el enfrentamiento ("Atlas vs América resultado jornada 13").',
     '- Prueba otras formulaciones del dato ("así quedó la tabla jornada 13"), la fuente oficial del organizador, u otros ángulos del mismo dato.',
     "- No repitas búsquedas de la primera ronda.",
+    "Si la petición es de temática DEPORTIVA, busca la fuente oficial de la competencia (formula1.com, fifa.com, nba.com, nfl.com, mlb.com, ligamx.net...) y medios distintos de los ya citados: dos páginas del mismo medio no corroboran un dato deportivo.",
     'Escribe en español de México (es-MX). Usa el tema "news" para eventos en vivo, partidos o resultados de los últimos días; "general" para el resto. Marca "volatile": true cuando el dato cambie con el tiempo. Para deportes en México usa "category": "deportes-mx".',
     'Responde ÚNICAMENTE con JSON válido, sin markdown ni explicaciones: {"queries": [{"q": string, "topic": "general" | "news", "volatile": boolean, "category": "deportes-mx" | null}]}.',
   ].join(" ")
@@ -676,9 +682,10 @@ async function refineResearch(
  * material externo y confirma cada dato con dos fuentes independientes.
  * Sin evidencia (respaldo): solo reescribe con lo que ya sabe.
  */
-function systemPrompt(
+export function systemPrompt(
   moment: MexicoCityMoment,
-  withResearch: boolean
+  withResearch: boolean,
+  options: { sports?: boolean } = {}
 ): string {
   const rules = [
     "Eres el director de arte de la herramienta de imágenes del panel de Distribuidor TVBox.",
@@ -689,7 +696,7 @@ function systemPrompt(
 
   if (withResearch) {
     rules.push(
-      "Primero revisa la EVIDENCIA DE BÚSQUEDA que acompaña a la petición: son resultados reales de Tavily; fuera de ellos no tienes acceso a internet ni más información.",
+      "Primero revisa la EVIDENCIA DE BÚSQUEDA que acompaña a la petición: son resultados reales de la búsqueda web; fuera de ellos no tienes acceso a internet ni más información.",
       "De la evidencia extrae solo los datos concretos que la petición necesita: fechas, horarios, marcadores, cifras, eventos, nombres propios o sedes. Un dato queda confirmado únicamente cuando lo respaldan al menos dos resultados de familias editoriales distintas: dos resultados del mismo dominio cuentan como una sola fuente, y también dos marcas del mismo medio (espn.com.mx y espndeportes.espn.com son ESPN; tvazteca.com y aztecadeportes.com son Azteca). La respuesta del buscador es solo una referencia y nunca cuenta como fuente.",
       "Cada dato confirmado que integres al prompt debe aparecer en el campo \"facts\" con las URLs exactas de los resultados que lo respaldan. Un dato con una sola fuente no se usa: no lo completes, no lo estimes y no lo inventes; descríbelo en \"note\" solo si conviene avisar al usuario.",
       "Los datos que cambian con el tiempo (tablas de posiciones, puntos, marcadores, clasificaciones, rachas) exigen más cuidado: solo cuentan como respaldo fuentes publicadas o actualizadas en los últimos 7 días respecto a la fecha de referencia; una fuente con el estado anterior (la jornada pasada, la fecha de corte vieja) no respalda el dato actual. En \"value\" cita el corte temporal del dato (jornada o fecha: \"jornada 13, al 21 de octubre\") y márcalo con \"volatile\": true.",
@@ -708,6 +715,14 @@ function systemPrompt(
     )
   }
 
+  if (options.sports) {
+    rules.push(
+      withResearch
+        ? "La petición es de temática DEPORTIVA: los datos del tema (ganadores, campeones, resultados, marcadores, clasificaciones, posiciones, sedes, récords, fechas) salen únicamente de la evidencia de búsqueda adjunta. Tu memoria no cuenta como fuente: no completes, no deduzcas y no inventes ningún dato deportivo que la evidencia no confirme; si un dato no está en la evidencia, se omite del prompt y se avisa en \"note\"."
+        : "La petición es de temática DEPORTIVA y no hay evidencia de búsqueda disponible: no completes ningún dato deportivo con lo que sabes (ganadores, campeones, resultados, marcadores, clasificaciones, posiciones, sedes, récords, fechas ni cifras). Describe solo la escena y el estilo que pidió el usuario, sin esos datos concretos, y avísalo en \"note\" (por ejemplo: \"no pude verificar los datos deportivos en la web\")."
+    )
+  }
+
   rules.push(
     "Después reescribe la petición del usuario como un único prompt en español de México (es-MX), listo para generar una imagen: un párrafo descriptivo (máximo 120 palabras), sin comillas, sin listas, sin título y sin frases previas ni posteriores.",
     "Da salida solo a lo que el usuario pidió: no añadas elementos, escenas, símbolos, rótulos ni textos para representar en la imagen, ni datos o afirmaciones que no estén en su petición, aunque sean reales o los hayas encontrado en la búsqueda. La búsqueda solo sirve para completar los datos del tema pedido (fecha, hora, cifra, nombre, sede): si alguno es imprescindible para que la imagen sea fiel, inclúyelo, y nada más.",
@@ -718,7 +733,10 @@ function systemPrompt(
   return rules.join(" ")
 }
 
-function userContent(input: PromptDetailsInput, evidenceText: string | null): string {
+export function userContent(
+  input: PromptDetailsInput,
+  evidenceText: string | null
+): string {
   const parts = [
     `Petición del usuario (puede venir en cualquier idioma; el resultado debe salir siempre en español de México): ${input.prompt}`,
     `Aspecto seleccionado: ${input.aspectRatio ?? "auto"}`,
@@ -894,6 +912,9 @@ async function runDetailsModel(
      * del intento anterior: se anexa al contenido para que el modelo
      * corrija las citas en lugar de repetirlas. */
     feedback?: string
+    /** La petición es de temática deportiva: los datos del tema solo pueden
+     * salir de la evidencia de búsqueda, nunca de la memoria del modelo. */
+    sports?: boolean
   }
 ): Promise<{
   raw: string
@@ -923,7 +944,9 @@ async function runDetailsModel(
 
   const result = await generateText({
     model: gateway.languageModel(resolveModel()),
-    system: systemPrompt(moment, options.evidence !== null),
+    system: systemPrompt(moment, options.evidence !== null, {
+      sports: options.sports === true,
+    }),
     messages: [{ role: "user", content }],
     maxOutputTokens: DETAILS_MAX_OUTPUT_TOKENS,
     abortSignal: AbortSignal.timeout(DETAILS_TIMEOUT_MS),
@@ -937,7 +960,7 @@ async function runDetailsModel(
 }
 
 /** Mensaje correctivo para el re-intento: dice qué dato cayó y por qué. */
-function buildCorrectionFeedback(rejections: FactRejection[]): string {
+export function buildCorrectionFeedback(rejections: FactRejection[]): string {
   const detail = rejections
     .slice(0, 8)
     .map((rejection) => `- «${rejection.value.slice(0, 120)}»: ${rejection.reason}`)
@@ -970,8 +993,6 @@ export async function buildPromptWithDetails(
   // pueden verificar, el error sale claro en vez de reintentarse.
   const moment = mexicoCityNow()
 
-  const hasImages = (input.referenceImages?.length ?? 0) > 0
-
   let research: ResearchOutcome | null = null
   if (tavilyConfigured()) {
     try {
@@ -994,6 +1015,33 @@ export async function buildPromptWithDetails(
       })
     )
   }
+
+  return synthesizePrompt(input, moment, research, {
+    sports: isSportsTopic(input.prompt),
+  })
+}
+
+/*
+ * Fase de síntesis: redacta el prompt final a partir de la evidencia de
+ * búsqueda y valida cada dato contra las fuentes reales. Es la fase que
+ * produce el JSON (facts + prompt + note), así que en ella el modelo ya no
+ * necesita buscar: solo puede usar lo que la evidencia trae. Se separa de
+ * la fase de investigación porque, en Gemini, pedirle a la misma llamada que
+ * devuelva JSON suprime el uso de la herramienta de búsqueda: el modelo
+ * responde con su memoria en cuanto ve el contrato de JSON.
+ *
+ * `research` es la evidencia (nula si la investigación no corrió): con ella,
+ * el modelo solo puede usar lo que las fuentes confirman; sin ella, la regla
+ * del tema deportivo prohíbe completar los datos con memoria.
+ */
+export async function synthesizePrompt(
+  input: PromptDetailsInput,
+  moment: MexicoCityMoment,
+  research: ResearchOutcome | null,
+  options: { sports?: boolean } = {}
+): Promise<PromptDetailsResult> {
+  const hasImages = (input.referenceImages?.length ?? 0) > 0
+  const sports = options.sports === true
 
   const queue: { evidence: ResearchOutcome | null; images: boolean; feedback?: string }[] =
     research
@@ -1022,7 +1070,10 @@ export async function buildPromptWithDetails(
   while (queue.length > 0) {
     const attempt = queue.shift()!
     try {
-      const { raw, finishReason, index } = await runDetailsModel(input, moment, attempt)
+      const { raw, finishReason, index } = await runDetailsModel(input, moment, {
+        ...attempt,
+        sports,
+      })
       const parsed = parseDetailsResponse(raw)
       if (!parsed) {
         throw new Error(
@@ -1074,6 +1125,7 @@ export async function buildPromptWithDetails(
 
       if (
         attempt.evidence !== null &&
+        attempt.evidence.evidence.length > 0 &&
         attempt.evidence.volatile &&
         refinementsLeft > 0 &&
         (facts.length === 0 || evidenceStale)
@@ -1104,11 +1156,15 @@ export async function buildPromptWithDetails(
 
       // Hubo investigación pero ningún dato alcanzó las dos fuentes: el
       // aviso estándar deja claro que el prompt no lleva datos verificados.
+      // Sin investigación, en un tema deportivo, el aviso deja claro que el
+      // prompt se quedó sin los datos que no se pudieron verificar.
       const note =
         parsed.note ??
         (attempt.evidence && facts.length === 0
           ? "No pude confirmar los datos de la búsqueda con al menos dos fuentes independientes; el prompt usa solo tu descripción."
-          : null)
+          : !attempt.evidence && sports
+            ? "No pude verificar los datos deportivos en la web; el prompt describe la escena sin los datos que no alcancé a confirmar."
+            : null)
       return { ...parsed, note, sources, facts }
     } catch (error) {
       console.error(
