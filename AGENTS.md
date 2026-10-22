@@ -25,3 +25,17 @@ Flujo obligatorio para cualquier trabajo de UI:
 5. Validar antes de cerrar con `reui_validate_usage` y `reui_get_audit_checklist`.
 
 Los componentes ya presentes en `src/components/ui` y `src/components/reui` se usan tal como están. Antes de estilizar UI, leer el skill con `reui_get_agent_skill`.
+
+## Mejores prácticas de UX (obligatorio)
+
+Al crear o modificar cualquier componente, se debe buscar ofrecer la **mejor UX posible** aplicando las mejores prácticas de diseño de interfaces:
+
+- **Jerarquía y orden de componentes**: organizar los elementos según su importancia (título → descripción → contenido → acciones). Lo más importante primero y visualmente dominante; agrupar controles relacionados; mantener una sola acción principal por vista.
+- **Organización de botones**: la acción primaria a la derecha (o al final del flujo), secundarias a la izquierda, destructivas separadas y con confirmación. Nunca más de una acción primaria visible por vista; usar variantes correctas (primary/secondary/outline/ghost/destructive).
+- **Tamaño y escala tipográfica**: usar la escala del sistema de diseño (nothing below `text-xs`); títulos con jerarquía clara, cuerpo legible, etiquetas cortas. No usar tamaños arbitrarios.
+- **Espaciado y alineación**: ritmo visual consistente con `gap-*`/márgenes del sistema; alinear a una retícula; densidad adecuada al contexto (tablas densas, formularios aireados).
+- **Estados y feedback**: todo elemento interactivo debe tener estados hover/focus/active/disabled; feedback inmediato para acciones del usuario (loading, toasts, mensajes de error cerca del campo).
+- **Accesibilidad**: contraste suficiente, área táctil mínima, foco visible, labels asociados a inputs, navegación por teclado.
+- **Carga cognitiva**: formularios cortos, opciones limitadas, texto de ayuda solo donde haga falta, iconos con etiqueta de texto cuando el significado no es universal.
+
+Antes de entregar UI, verificar que el resultado cumple estas prácticas (usar `reui_get_audit_checklist` y el skill de ReUI como referencia de calidad).

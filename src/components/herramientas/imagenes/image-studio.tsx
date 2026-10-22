@@ -2,6 +2,8 @@
 
 import * as React from "react"
 import {
+  CheckIcon,
+  CopyIcon,
   DownloadIcon,
   ImageDownIcon,
   ImageIcon,
@@ -271,6 +273,12 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [viewer, setViewer] = React.useState<ImageGeneration | null>(null)
   const [confirmDelete, setConfirmDelete] = React.useState(false)
   const [deleting, setDeleting] = React.useState(false)
+  // El botón de copiar avisa durante un par de segundos de que la
+  // descripción ya está en el portapapeles.
+  const [copied, setCopied] = React.useState(false)
+  const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
 
   const [tab, setTab] = React.useState("generar")
 
@@ -556,6 +564,31 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       setEnhancing(false)
     }
   }
+
+  /**
+   * Copia la descripción completa de la imagen al portapapeles. Antes se
+   * mostraba solo un recorte (el prompt íntegro no cabía), así que el texto
+   * no se podía leer ni reutilizar tal cual.
+   */
+  async function copyDescription() {
+    const text = viewer?.prompt
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(true)
+      toast.success("Descripción copiada al portapapeles.")
+      if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+      copyResetTimer.current = setTimeout(() => setCopied(false), 2000)
+    } catch {
+      toast.error("No se pudo copiar la descripción.")
+    }
+  }
+
+  React.useEffect(() => {
+    return () => {
+      if (copyResetTimer.current) clearTimeout(copyResetTimer.current)
+    }
+  }, [])
 
   async function remove(image: ImageGeneration) {
     if (deleting) return
@@ -904,7 +937,10 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                     >
                       <button
                         type="button"
-                        onClick={() => setViewer(image)}
+                        onClick={() => {
+                          setCopied(false)
+                          setViewer(image)
+                        }}
                         className="block w-full cursor-zoom-in focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                         aria-label={`Ver imagen generada el ${dateFormatter.format(new Date(image.createdAt))}`}
                       >
@@ -958,6 +994,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
           if (!open) {
             setViewer(null)
             setConfirmDelete(false)
+            setCopied(false)
           }
         }}
       >
@@ -982,9 +1019,21 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   onError={fallbackToOriginal(viewer.file.url)}
                 />
               </div>
-              <p className="line-clamp-3 text-sm text-muted-foreground">
-                {viewer.prompt}
-              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="self-start"
+                onClick={() => void copyDescription()}
+                title="Copia la descripción completa de la imagen al portapapeles para poder reusarla"
+              >
+                {copied ? (
+                  <CheckIcon data-icon="inline-start" className="size-3.5" />
+                ) : (
+                  <CopyIcon data-icon="inline-start" className="size-3.5" />
+                )}
+                {copied ? "Copiado" : "Copiar descripción"}
+              </Button>
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="success-light" className="tabular-nums">
                   Costo: {costLabel(viewer)}
