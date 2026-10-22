@@ -30,12 +30,14 @@ import {
 } from "@/server/images/models"
 import { getImageLevels } from "@/server/images/settings"
 import {
+  buildPromptWithDetails,
+  type DetailsSource,
+} from "@/server/images/details"
+import {
   MAX_REFERENCE_FILES,
   MAX_REFERENCE_TOTAL_BYTES,
   REFERENCE_IMAGE_TYPES,
 } from "@/lib/attachments"
-
-const OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 const MAX_PROMPT_LENGTH = 2000
 const REQUEST_TIMEOUT_MS = 180_000
@@ -153,15 +155,6 @@ interface ReferenceImage {
 }
 
 /**
- * Parte de contenido con una imagen en línea: el proveedor de chat acepta
- * data URLs tanto en el mensaje del usuario como en `input_references`.
- */
-interface ImageContentPart {
-  type: "image_url"
-  image_url: { url: string }
-}
-
-/**
  * Detecta el formato real de una imagen por su firma de bytes. El MIME que
  * envía el navegador no es confiable (lo declara el cliente), así que el tipo
  * que se manda al proveedor se deriva del contenido.
@@ -234,15 +227,6 @@ async function resolveReferenceImages(
     images.push({ bytes, mediaType })
   }
   return images
-}
-
-function referenceContentPart(image: ReferenceImage): ImageContentPart {
-  return {
-    type: "image_url",
-    image_url: {
-      url: `data:${image.mediaType};base64,${Buffer.from(image.bytes).toString("base64")}`,
-    },
-  }
 }
 
 export function sanitizeImageInput(input: unknown):
@@ -876,22 +860,11 @@ export async function deleteImageGeneration(
 }
 
 /*
- * LLM prompt enhancement ("Mejorar instrucciones"): the text model rewrites
- * the user's prompt to be concrete and visual, and resolves an aspect ratio
- * that is ambiguous in the text (retrato, banner, paisaje, logo...).
+ * "Insertar detalles": the model reads the user's request, researches it on
+ * the web (AI Gateway search) and returns a single prompt that already
+ * carries the data it found, plus the aspect ratio implied by the text
+ * (retrato, banner, paisaje, logo...).
  */
-
-const ENHANCE_TIMEOUT_MS = 30_000
-// max_tokens includes the model's internal reasoning (muse-spark spends
-// hundreds of tokens thinking before the JSON answer).
-const ENHANCE_MAX_OUTPUT_TOKENS = 2000
-
-const ENHANCE_SYSTEM_PROMPT = [
-  "Eres el asistente de prompts de la herramienta de generación de imágenes del panel.",
-  "Reescribes el prompt del usuario para que sea claro, visual y específico: mantiene su intención e idioma (español), no inventa elementos que contradigan lo pedido y añade solo cuando falten detalles útiles de estilo, iluminación, composición y encuadre. Máximo 80 palabras.",
-  "Si el prompt implica claramente una relación de aspecto (p. ej. 'banner' o 'paisaje' → 16:9, 'retrato' o 'historia' → 9:16, 'logo' o 'icono' → 1:1), sugiere la adecuada; si no, conserva la seleccionada.",
-  'Responde ÚNICAMENTE con JSON válido, sin markdown ni explicaciones: {"prompt": string, "aspectRatio": "auto" | "1:1" | "16:9" | "9:16" | "4:3" | "3:4" | "3:2" | "2:3"}',
-].join(" ")
 
 export interface EnhancePromptInput {
   prompt: string
@@ -903,62 +876,17 @@ export interface EnhancePromptInput {
 export interface EnhancePromptResult {
   prompt: string
   aspectRatio: AspectRatio
-}
-
-function parseEnhanceResponse(
-  raw: string,
-  fallback: EnhancePromptInput
-): EnhancePromptResult | null {
-  const stripped = raw
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```\s*$/, "")
-    .trim()
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(stripped)
-  } catch {
-    // Tolerate prose around the JSON: grab the first balanced {...} block.
-    const match = stripped.match(/\{[\s\S]*\}/)
-    if (!match) return null
-    try {
-      parsed = JSON.parse(match[0])
-    } catch {
-      return null
-    }
-  }
-  if (typeof parsed !== "object" || parsed === null) return null
-  const { prompt, aspectRatio } = parsed as Record<string, unknown>
-  if (typeof prompt !== "string") return null
-  const trimmed = prompt.trim()
-  if (trimmed.length === 0 || trimmed.length > MAX_PROMPT_LENGTH) return null
-  return {
-    prompt: trimmed,
-    aspectRatio: isAspectRatio(aspectRatio)
-      ? aspectRatio
-      : (fallback.aspectRatio ?? "auto"),
-  }
+  /** Aviso para el usuario cuando la petición se apoya en un hecho que no
+   * ocurrió: viaja fuera del prompt para no contaminarlo. */
+  note: string | null
+  /** Fuentes consultadas durante la investigación (pueden ser cero). */
+  sources: DetailsSource[]
 }
 
 export async function enhanceImagePrompt(
   userId: string,
   input: EnhancePromptInput
 ): Promise<EnhancePromptResult> {
-  const apiKey = process.env.OPENROUTER_API_KEY
-  const model = process.env.ASISTENTE_MODEL
-  if (!apiKey || !model) {
-    throw new AppError(
-      500,
-      "enhance_not_configured",
-      "La mejora de instrucciones no está configurada en el servidor (falta OPENROUTER_API_KEY o ASISTENTE_MODEL)."
-    )
-  }
-
-  const userContent = [
-    `Prompt actual: ${input.prompt}`,
-    `Aspecto seleccionado: ${input.aspectRatio ?? "auto"}`,
-  ].join("\n")
-
   // Las referencias se resuelven antes de llamar al proveedor: un adjunto
   // inválido debe fallar sin gastarle nada al usuario.
   const referenceImages = await resolveReferenceImages(
@@ -966,87 +894,18 @@ export async function enhanceImagePrompt(
     input.referenceIds ?? []
   )
 
-  let upstream: Response
-  try {
-    upstream = await fetch(OPENROUTER_CHAT_URL, {
-      method: "POST",
-      signal: AbortSignal.timeout(ENHANCE_TIMEOUT_MS),
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        temperature: 0.4,
-        max_tokens: ENHANCE_MAX_OUTPUT_TOKENS,
-        messages: [
-          { role: "system", content: ENHANCE_SYSTEM_PROMPT },
-          {
-            role: "user",
-            content:
-              referenceImages.length > 0
-                ? [
-                    { type: "text", text: userContent },
-                    ...referenceImages.map(referenceContentPart),
-                  ]
-                : userContent,
-          },
-        ],
-      }),
-    })
-  } catch (error) {
-    if (error instanceof Error && error.name === "TimeoutError") {
-      throw new AppError(
-        504,
-        "enhance_timeout",
-        "El modelo tardó demasiado en revisar las instrucciones. Inténtalo de nuevo."
-      )
-    }
-    console.error(
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        error: `images: enhance fetch failed: ${error instanceof Error ? error.message : String(error)}`,
-      })
-    )
-    throw new AppError(
-      502,
-      "enhance_unreachable",
-      "No pude conectarme con el modelo. Inténtalo de nuevo en unos momentos."
-    )
-  }
+  const details = await buildPromptWithDetails({
+    prompt: input.prompt,
+    aspectRatio: input.aspectRatio ?? "auto",
+    referenceImages,
+  })
 
-  if (!upstream.ok) {
-    console.error(
-      JSON.stringify({
-        ts: new Date().toISOString(),
-        error: `images: enhance openrouter ${upstream.status}`,
-      })
-    )
-    throw new AppError(
-      502,
-      "enhance_error",
-      "El modelo no pudo revisar las instrucciones. Inténtalo de nuevo en unos momentos."
-    )
+  return {
+    prompt: details.prompt,
+    aspectRatio: isAspectRatio(details.aspectRatio)
+      ? details.aspectRatio
+      : (input.aspectRatio ?? "auto"),
+    note: details.note,
+    sources: details.sources,
   }
-
-  const payload = (await upstream.json().catch(() => null)) as {
-    choices?: { message?: { content?: string | null } }[]
-  } | null
-  const raw = payload?.choices?.[0]?.message?.content
-  if (!raw) {
-    throw new AppError(
-      502,
-      "enhance_error",
-      "El modelo no devolvió ninguna propuesta. Inténtalo de nuevo."
-    )
-  }
-  const result = parseEnhanceResponse(raw, input)
-  if (!result) {
-    throw new AppError(
-      502,
-      "enhance_error",
-      "La propuesta del modelo no fue válida. Inténtalo de nuevo."
-    )
-  }
-  return result
 }

@@ -5,9 +5,9 @@ import {
   DownloadIcon,
   ImageIcon,
   PaperclipIcon,
+  SearchIcon,
   SparklesIcon,
   Trash2Icon,
-  WandSparklesIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -170,6 +170,14 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [generating, setGenerating] = React.useState(false)
   const [enhancing, setEnhancing] = React.useState(false)
   const [generateError, setGenerateError] = React.useState<string | null>(null)
+  // Fuentes que el modelo consultó al insertar los detalles: se muestran
+  // bajo el botón para que el usuario sepa de dónde salió la información.
+  const [detailSources, setDetailSources] = React.useState<
+    { title: string; url: string }[]
+  >([])
+  // Aviso del modelo cuando la petición se apoya en un hecho que no
+  // ocurrió: se muestra aparte, para no contaminar el prompt.
+  const [detailNote, setDetailNote] = React.useState<string | null>(null)
 
   const activeQualityIndex = Math.min(
     qualityIndex,
@@ -460,19 +468,31 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       })
       const body = (await response.json()) as {
         ok: boolean
-        data?: { prompt: string; aspectRatio: string }
+        data?: {
+          prompt: string
+          aspectRatio: string
+          note?: string | null
+          sources?: { title: string; url: string }[]
+        }
         error?: { message?: string }
       }
       if (!response.ok || !body.ok || !body.data) {
         setGenerateError(
           body.error?.message ??
-            "No se pudieron mejorar las instrucciones. Inténtalo de nuevo."
+            "No se pudieron insertar los detalles. Inténtalo de nuevo."
         )
         return
       }
       setPrompt(body.data.prompt)
       setAspectRatio(body.data.aspectRatio)
-      toast.success("Instrucciones mejoradas")
+      const sources = body.data.sources ?? []
+      setDetailSources(sources)
+      setDetailNote(body.data.note ?? null)
+      toast.success(
+        sources.length > 0
+          ? `Detalles insertados desde ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"}`
+          : "Instrucciones actualizadas"
+      )
     } catch {
       setGenerateError(
         "No se pudo conectar con el servidor. Inténtalo de nuevo."
@@ -562,7 +582,14 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                 <InputGroupTextarea
                   ref={promptRef}
                   value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
+                  onChange={(event) => {
+                    setPrompt(event.target.value)
+                    // Las fuentes y el aviso vienen de la última
+                    // investigación: si el usuario edita a mano, ya no
+                    // corresponden al texto.
+                    setDetailSources([])
+                    setDetailNote(null)
+                  }}
                   placeholder="Ej.: un ajolote astronauta flotando entre nebulosas, iluminación de estudio, estilo fotográfico"
                   rows={3}
                   maxLength={MAX_PROMPT_LENGTH}
@@ -570,25 +597,48 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   className="resize-none placeholder:text-foreground/60"
                 />
               </InputGroup>
+              {detailNote ? (
+                <p className="text-muted-foreground text-xs">{detailNote}</p>
+              ) : null}
               <Button
                 type="button"
                 variant="outline"
-                size="sm"
                 className="w-full sm:w-auto sm:self-start"
                 onClick={() => void enhancePrompt()}
                 disabled={!canEnhance}
-                title="El modelo revisa tu descripción, la hace más concreta y ajusta el aspecto si es ambiguo"
+                title="El modelo investiga en internet los datos que tu descripción necesita (fechas, cifras, contexto) y los añade al prompt"
               >
                 {enhancing ? (
-                  <Spinner className="size-3.5" />
+                  <Spinner />
                 ) : (
-                  <WandSparklesIcon
-                    data-icon="inline-start"
-                    className="size-3.5"
-                  />
+                  <SearchIcon data-icon="inline-start" />
                 )}
-                {enhancing ? "Revisando…" : "Mejorar instrucciones"}
+                {enhancing ? "Buscando detalles…" : "Insertar detalles"}
               </Button>
+              {detailSources.length > 0 ? (
+                <p className="text-muted-foreground text-xs">
+                  Investigué {detailSources.length}{" "}
+                  {detailSources.length === 1 ? "fuente" : "fuentes"}:{" "}
+                  {detailSources.slice(0, 3).map((source, index) => (
+                    <span key={source.url}>
+                      {index > 0 ? " · " : ""}
+                      <a
+                        href={source.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline underline-offset-2 hover:text-foreground"
+                      >
+                        {source.title.length > 60
+                          ? `${source.title.slice(0, 60)}…`
+                          : source.title}
+                      </a>
+                    </span>
+                  ))}
+                  {detailSources.length > 3
+                    ? ` · +${detailSources.length - 3} más`
+                    : null}
+                </p>
+              ) : null}
               <input
                 {...getInputProps()}
                 className="sr-only"
@@ -627,7 +677,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   >
                     <SelectTrigger
                       id="aspecto"
-                      size="sm"
                       className="w-full lg:col-start-1 lg:row-start-2"
                     >
                       <SelectValue />
@@ -656,7 +705,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                     </Label>
                     <ToggleGroup
                       variant="outline"
-                      size="sm"
                       aria-labelledby="imagenes-calidad"
                       className="lg:col-start-2 lg:row-start-2"
                       value={[levels[activeQualityIndex].id]}
@@ -682,15 +730,14 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                 ) : null}
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:col-start-3 lg:row-start-2 lg:justify-end">
                   <Button
-                    size="sm"
                     className="w-full sm:w-auto sm:flex-1 lg:flex-none"
                     onClick={() => void generate()}
                     disabled={!canGenerate}
                   >
                     {generating ? (
-                      <Spinner className="size-3.5" />
+                      <Spinner />
                     ) : (
-                      <SparklesIcon data-icon="inline-start" className="size-3.5" />
+                      <SparklesIcon data-icon="inline-start" />
                     )}
                     {generating ? "Generando…" : "Generar"}
                   </Button>
