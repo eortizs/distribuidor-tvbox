@@ -154,10 +154,6 @@ function costLabel(image: { costUsd: number | null; costMxn: number | null }): s
   return image.costUsd === null ? "s/d" : `US$${image.costUsd.toFixed(4)}`
 }
 
-function modelName(model: string): string {
-  return model.split("/").pop() ?? model
-}
-
 /**
  * Proporción CSS de la miniatura. Se toma de la miniatura derivada (que
  * conserva la proporción real de la imagen) y, si todavía no existe, del
@@ -190,6 +186,33 @@ function lowSource(file: ImageFile): string {
 /** URL de descarga de un archivo o de una variante. */
 function downloadUrl(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}download=1`
+}
+
+/** Dominio de una fuente, sin "www.": es la etiqueta corta de cada enlace. */
+function domainLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "")
+  } catch {
+    return url
+  }
+}
+
+const sourceDateFormatter = new Intl.DateTimeFormat("es-MX", {
+  day: "numeric",
+  month: "short",
+})
+
+/** Fecha de publicación de la fuente ("20 oct"): deja ver la frescura del
+ * respaldo; si no hay fecha o no se puede leer, no se muestra nada. */
+function sourceDateLabel(raw: string | null | undefined): string {
+  if (!raw) return ""
+  const parsed = Date.parse(raw)
+  if (Number.isNaN(parsed)) return ""
+  const date = new Date(parsed)
+  const sameYear = date.getFullYear() === new Date().getFullYear()
+  return sameYear
+    ? sourceDateFormatter.format(date)
+    : `${sourceDateFormatter.format(date)} ${date.getFullYear()}`
 }
 
 /**
@@ -235,6 +258,14 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   // Aviso del modelo cuando la petición se apoya en un hecho que no
   // ocurrió: se muestra aparte, para no contaminar el prompt.
   const [detailNote, setDetailNote] = React.useState<string | null>(null)
+  // Datos confirmados por la investigación (cada uno con sus fuentes): se
+  // muestran bajo el botón para que el usuario sepa qué se verificó.
+  const [detailFacts, setDetailFacts] = React.useState<
+    {
+      value: string
+      sources: { title: string; url: string; publishedDate?: string | null }[]
+    }[]
+  >([])
 
   const activeQualityIndex = Math.min(
     qualityIndex,
@@ -276,6 +307,8 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   // El botón de copiar avisa durante un par de segundos de que la
   // descripción ya está en el portapapeles.
   const [copied, setCopied] = React.useState(false)
+  // Segundo nivel sobre el visor: la imagen sola, a pantalla completa.
+  const [zoomed, setZoomed] = React.useState(false)
   const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
@@ -535,7 +568,11 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
           prompt: string
           aspectRatio: string
           note?: string | null
-          sources?: { title: string; url: string }[]
+          sources?: { title: string; url: string; publishedDate?: string | null }[]
+          facts?: {
+            value: string
+            sources: { title: string; url: string; publishedDate?: string | null }[]
+          }[]
         }
         error?: { message?: string }
       }
@@ -549,12 +586,16 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       setPrompt(body.data.prompt)
       setAspectRatio(body.data.aspectRatio)
       const sources = body.data.sources ?? []
+      const facts = body.data.facts ?? []
       setDetailSources(sources)
+      setDetailFacts(facts)
       setDetailNote(body.data.note ?? null)
       toast.success(
-        sources.length > 0
-          ? `Detalles insertados desde ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"}`
-          : "Instrucciones actualizadas"
+        facts.length > 0
+          ? `${facts.length} ${facts.length === 1 ? "dato confirmado" : "datos confirmados"} con ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"}`
+          : sources.length > 0
+            ? `Detalles insertados desde ${sources.length} ${sources.length === 1 ? "fuente" : "fuentes"}`
+            : "Instrucciones actualizadas"
       )
     } catch {
       setGenerateError(
@@ -604,6 +645,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       }
       setViewer(null)
       setConfirmDelete(false)
+      setZoomed(false)
       toast.success("Imagen eliminada.")
       reload()
     } catch {
@@ -672,10 +714,11 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   value={prompt}
                   onChange={(event) => {
                     setPrompt(event.target.value)
-                    // Las fuentes y el aviso vienen de la última
-                    // investigación: si el usuario edita a mano, ya no
-                    // corresponden al texto.
+                    // Las fuentes, los datos confirmados y el aviso vienen de
+                    // la última investigación: si el usuario edita a mano, ya
+                    // no corresponden al texto.
                     setDetailSources([])
+                    setDetailFacts([])
                     setDetailNote(null)
                   }}
                   placeholder="Ej.: un ajolote astronauta flotando entre nebulosas, iluminación de estudio, estilo fotográfico"
@@ -694,7 +737,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                 className="w-full sm:w-auto sm:self-start"
                 onClick={() => void enhancePrompt()}
                 disabled={!canEnhance}
-                title="El modelo investiga en internet los datos que tu descripción necesita (fechas, cifras, contexto) y los añade al prompt"
+                title="El modelo investiga en internet (Tavily), confirma cada dato con al menos dos fuentes independientes y los añade al prompt"
               >
                 {enhancing ? (
                   <Spinner />
@@ -703,7 +746,46 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                 )}
                 {enhancing ? "Buscando detalles…" : "Insertar detalles"}
               </Button>
-              {detailSources.length > 0 ? (
+              {detailFacts.length > 0 ? (
+                <div className="flex flex-col gap-1">
+                  <p className="text-muted-foreground text-xs">
+                    Datos confirmados (cada uno con al menos dos fuentes
+                    independientes):
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {detailFacts.map((fact, index) => (
+                      <li
+                        key={`${index}-${fact.value}`}
+                        className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs"
+                      >
+                        <CheckIcon
+                          className="size-3.5 shrink-0 text-primary"
+                          aria-hidden="true"
+                        />
+                        <span>{fact.value}</span>
+                        <span className="text-muted-foreground">
+                          {fact.sources.map((source, sourceIndex) => (
+                            <span key={source.url}>
+                              {sourceIndex > 0 ? " · " : "— "}
+                              <a
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="underline underline-offset-2 hover:text-foreground"
+                              >
+                                {domainLabel(source.url)}
+                              </a>
+                              {sourceDateLabel(source.publishedDate)
+                                ? ` (${sourceDateLabel(source.publishedDate)})`
+                                : ""}
+                            </span>
+                          ))}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : detailSources.length > 0 ? (
                 <p className="text-muted-foreground text-xs">
                   Investigué {detailSources.length}{" "}
                   {detailSources.length === 1 ? "fuente" : "fuentes"}:{" "}
@@ -950,6 +1032,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                           alt={image.prompt}
                           loading="lazy"
                           decoding="async"
+                          draggable={false}
                           // La miniatura respeta la proporción de la imagen: un
                           // recorte al cuadrado escondería (por ejemplo) una
                           // vertical 9:16.
@@ -957,7 +1040,10 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                             image.aspectRatio,
                             image.file.variants?.thumb
                           )}
-                          className="w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
+                          // El toque no debe caer en la imagen: en móvil el
+                          // navegador abre su visor nativo a pantalla
+                          // completa. Lo captura el botón de arriba.
+                          className="pointer-events-none w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
                           onError={fallbackToOriginal(image.file.url)}
                         />
                       </button>
@@ -970,6 +1056,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                           size="sm"
                           radius="full"
                           className="tabular-nums"
+                          aria-label={`Costo: ${costLabel(image)}`}
                           title={
                             image.costMxn !== null
                               ? "Costo de esta imagen en pesos, al TC FIX del día de generación"
@@ -995,10 +1082,11 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
             setViewer(null)
             setConfirmDelete(false)
             setCopied(false)
+            setZoomed(false)
           }
         }}
       >
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="touch-manipulation sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Imagen generada</DialogTitle>
             <DialogDescription>
@@ -1010,100 +1098,77 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
           {viewer && viewer.file ? (
             <div className="flex flex-col gap-3">
               <div className="overflow-hidden rounded-lg bg-muted">
-                {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
-                <img
-                  src={lowSource(viewer.file)}
-                  alt={viewer.prompt}
-                  decoding="async"
-                  className="max-h-[60vh] w-full object-contain"
-                  onError={fallbackToOriginal(viewer.file.url)}
-                />
+                <button
+                  type="button"
+                  onClick={() => setZoomed(true)}
+                  className="block w-full cursor-zoom-in focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  aria-label="Ver la imagen a pantalla completa"
+                  title="Ver a pantalla completa"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
+                  <img
+                    src={lowSource(viewer.file)}
+                    alt={viewer.prompt}
+                    decoding="async"
+                    draggable={false}
+                    // Igual que en la galería: el `<img>` no es el destino del
+                    // toque para que el móvil no abra su visor nativo; lo
+                    // captura este botón, que abre la pantalla completa.
+                    className="pointer-events-none max-h-[60vh] w-full object-contain"
+                    onError={fallbackToOriginal(viewer.file.url)}
+                  />
+                </button>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="self-start"
-                onClick={() => void copyDescription()}
-                title="Copia la descripción completa de la imagen al portapapeles para poder reusarla"
-              >
-                {copied ? (
-                  <CheckIcon data-icon="inline-start" className="size-3.5" />
-                ) : (
-                  <CopyIcon data-icon="inline-start" className="size-3.5" />
-                )}
-                {copied ? "Copiado" : "Copiar descripción"}
-              </Button>
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="success-light" className="tabular-nums">
-                  Costo: {costLabel(viewer)}
+                <Badge
+                  variant="success-light"
+                  className="tabular-nums"
+                  aria-label={`Costo: ${costLabel(viewer)}`}
+                  title={
+                    viewer.costMxn !== null
+                      ? "Costo de esta imagen en pesos, al TC FIX del día de generación"
+                      : "Costo de esta imagen en USD, TC no disponible"
+                  }
+                >
+                  {costLabel(viewer)}
                 </Badge>
                 <Badge variant="outline">
                   {viewer.aspectRatio ?? "auto"}
                 </Badge>
                 <Badge variant="outline">{viewer.quality ?? "auto"}</Badge>
-                <span className="text-muted-foreground ms-auto truncate text-xs">
-                  {modelName(viewer.model)}
-                </span>
               </div>
-              <p className="text-muted-foreground text-xs tabular-nums">
-                Original {formatBytes(viewer.file.sizeBytes)}
-                {viewer.file.variants?.low?.sizeBytes
-                  ? ` · Baja ${formatBytes(viewer.file.variants.low.sizeBytes)}`
-                  : null}
-              </p>
-            </div>
-          ) : null}
-          <DialogFooter>
-            {viewer && viewer.file ? (
-              <>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    title="Versión reducida en WebP, pensada para verse y descargarse desde el celular"
-                    render={
-                      <a
-                        href={downloadUrl(lowSource(viewer.file))}
-                        download={
-                          viewer.file.variants?.low?.fileName ??
-                          viewer.file.fileName
-                        }
-                      />
-                    }
-                  >
-                    <DownloadIcon
-                      data-icon="inline-start"
-                      className="size-3.5"
-                    />
-                    Descargar baja
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    title="Archivo original tal como lo generó el modelo"
-                    render={
-                      <a
-                        href={downloadUrl(viewer.file.url)}
-                        download={viewer.file.fileName}
-                      />
-                    }
-                  >
-                    <ImageDownIcon
-                      data-icon="inline-start"
-                      className="size-3.5"
-                    />
-                    Descargar original
-                  </Button>
-                </div>
+              {/* Acciones sobre la imagen. Eliminar queda aparte de la acción
+                  principal (descargar) y pide confirmación. */}
+              <div className="flex items-center justify-between gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void copyDescription()}
+                  title="Copia la descripción completa de la imagen al portapapeles para poder reusarla"
+                >
+                  {copied ? (
+                    <CheckIcon data-icon="inline-start" />
+                  ) : (
+                    <CopyIcon data-icon="inline-start" />
+                  )}
+                  {copied ? "Copiado" : "Copiar descripción"}
+                </Button>
                 <AlertDialog
                   open={confirmDelete}
                   onOpenChange={setConfirmDelete}
                 >
                   <AlertDialogTrigger
-                    render={<Button variant="destructive" size="sm" />}
+                    render={
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        title="Borra la imagen de tu galería y de tu almacenamiento"
+                      />
+                    }
                   >
-                    <Trash2Icon data-icon="inline-start" className="size-3.5" />
+                    <Trash2Icon data-icon="inline-start" />
                     Eliminar
                   </AlertDialogTrigger>
                   <AlertDialogContent size="sm">
@@ -1133,11 +1198,74 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                     </AlertDialogFooter>
                   </AlertDialogContent>
                 </AlertDialog>
-              </>
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            {viewer && viewer.file ? (
+              <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  title="Versión reducida en WebP, pensada para verse y descargarse desde el celular"
+                  render={
+                    <a
+                      href={downloadUrl(lowSource(viewer.file))}
+                      download={
+                        viewer.file.variants?.low?.fileName ??
+                        viewer.file.fileName
+                      }
+                    />
+                  }
+                >
+                  <DownloadIcon data-icon="inline-start" />
+                  Descargar baja
+                </Button>
+                <Button
+                  size="sm"
+                  title="Archivo original tal como lo generó el modelo"
+                  render={
+                    <a
+                      href={downloadUrl(viewer.file.url)}
+                      download={viewer.file.fileName}
+                    />
+                  }
+                >
+                  <ImageDownIcon data-icon="inline-start" />
+                  Descargar original
+                </Button>
+              </div>
             ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Pantalla completa: solo la imagen, sobre el visor. Toque en cualquier
+          parte, Escape o la X para volver. */}
+      {viewer && viewer.file ? (
+        <Dialog open={zoomed} onOpenChange={setZoomed}>
+          <DialogContent
+            className="touch-manipulation inset-0 flex h-auto w-auto max-w-none translate-x-0 translate-y-0 items-center justify-center rounded-none bg-black p-0 text-white ring-0 sm:max-w-none"
+            onClick={() => setZoomed(false)}
+          >
+            <DialogTitle className="sr-only">
+              Imagen a pantalla completa
+            </DialogTitle>
+            <DialogDescription className="sr-only">
+              Toca la imagen o presiona Escape para volver al visor.
+            </DialogDescription>
+            {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
+            <img
+              src={lowSource(viewer.file)}
+              alt={viewer.prompt}
+              decoding="async"
+              draggable={false}
+              className="pointer-events-none h-dvh w-full object-contain"
+              onError={fallbackToOriginal(viewer.file.url)}
+            />
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </div>
   )
 }

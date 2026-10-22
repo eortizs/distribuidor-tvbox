@@ -39,6 +39,7 @@ import {
 import { getImageLevels } from "@/server/images/settings"
 import {
   buildPromptWithDetails,
+  type DetailsFact,
   type DetailsSource,
 } from "@/server/images/details"
 import {
@@ -950,9 +951,10 @@ export async function deleteImageGeneration(
 
 /*
  * "Insertar detalles": the model reads the user's request, researches it on
- * the web (AI Gateway search) and returns a single prompt that already
- * carries the data it found, plus the aspect ratio implied by the text
- * (retrato, banner, paisaje, logo...).
+ * the web (Tavily), confirms each fact with at least two independent
+ * sources and returns a single prompt that already carries the verified
+ * data, plus the aspect ratio implied by the text (retrato, banner,
+ * paisaje, logo...).
  */
 
 export interface EnhancePromptInput {
@@ -968,8 +970,10 @@ export interface EnhancePromptResult {
   /** Aviso para el usuario cuando la petición se apoya en un hecho que no
    * ocurrió: viaja fuera del prompt para no contaminarlo. */
   note: string | null
-  /** Fuentes consultadas durante la investigación (pueden ser cero). */
+  /** Fuentes que respaldan los datos confirmados (dos o más por dato). */
   sources: DetailsSource[]
+  /** Datos confirmados con al menos dos fuentes independientes. */
+  facts: DetailsFact[]
 }
 
 export async function enhanceImagePrompt(
@@ -996,5 +1000,6 @@ export async function enhanceImagePrompt(
       : (input.aspectRatio ?? "auto"),
     note: details.note,
     sources: details.sources,
+    facts: details.facts,
   }
 }
