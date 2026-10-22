@@ -23,15 +23,21 @@ import { tavilyConfigured, tavilySearch, type TavilyEvidence, type TavilyTopic }
  *    además, una fuente publicada en la última semana.
  */
 
-const DEFAULT_DETAILS_MODEL = "anthropic/claude-haiku-5.5"
-const DETAILS_TIMEOUT_MS = 60_000
+const DEFAULT_DETAILS_MODEL = "deepseek/deepseek-v4.1-flash-1017"
+const DETAILS_TIMEOUT_MS = 75_000
 // El tope incluye el presupuesto de razonamiento del modelo y las citas con
 // URLs largas: si queda corto, el JSON se trunca a media URL (una tabla de
 // cinco equipos con sus citas supera los 8 k tokens con el razonamiento).
+// Los topes están dimensionados para el modelo más exigente que se ha
+// probado (Muse Spark: ≈3.5 k tokens de razonamiento en una síntesis con
+// evidencia), así que cambiar a un modelo más barato no los deja cortos.
 // La validación posterior acota el tamaño real de prompt, facts y note.
-const DETAILS_MAX_OUTPUT_TOKENS = 16_000
-const DETAILS_PLAN_TIMEOUT_MS = 20_000
-const DETAILS_PLAN_MAX_OUTPUT_TOKENS = 1500
+const DETAILS_MAX_OUTPUT_TOKENS = 24_000
+// El planificador también razona antes de devolver el JSON de búsquedas: con
+// 1.5 k tokens de tope el JSON se truncaba a media consulta, así que el tope y
+// el margen de tiempo suben con el modelo.
+const DETAILS_PLAN_TIMEOUT_MS = 40_000
+const DETAILS_PLAN_MAX_OUTPUT_TOKENS = 4_000
 const MAX_DETAILS_PROMPT_LENGTH = 2000
 const MAX_SOURCES = 8
 const MAX_DETAILS_NOTE_LENGTH = 400
@@ -192,7 +198,7 @@ function weekdayFromIso(iso: string): string | null {
  * desfase que la propia zona reporta. Si las dos no coinciden, o si el día de
  * la semana no corresponde a la fecha, la validación falla.
  */
-function mexicoCityNow(): MexicoCityMoment {
+export function mexicoCityNow(): MexicoCityMoment {
   const now = new Date()
 
   const iso = formatPart(MX_DATE_FORMATTER, "year", now)
@@ -372,7 +378,7 @@ async function planResearch(
  * ── Paso 2: investigación con Tavily ──────────────────────────────────────
  */
 
-function normalizeUrl(url: string): string {
+export function normalizeUrl(url: string): string {
   try {
     const parsed = new URL(url)
     return `${parsed.protocol}//${parsed.host.toLowerCase()}${parsed.pathname.replace(/\/+$/, "")}${parsed.search}`
@@ -789,7 +795,7 @@ interface FactRejection {
  * siempre la detecta). Las fuentes que se muestran al usuario son
  * exclusivamente las que respaldan datos confirmados.
  */
-function validateFacts(
+export function validateFacts(
   rawFacts: unknown,
   index: Map<string, DetailsSource> | null
 ): { facts: DetailsFact[]; sources: DetailsSource[]; rejections: FactRejection[] } {

@@ -41,7 +41,11 @@ import {
   buildPromptWithDetails,
   type DetailsFact,
   type DetailsSource,
+  type PromptDetailsInput,
+  type PromptDetailsResult,
 } from "@/server/images/details"
+import { buildPromptWithGrounding, groundingConfigured } from "@/server/images/grounding"
+import { accrueDetailsCost, consumeDetailsCost } from "@/server/images/details-cost"
 import {
   MAX_REFERENCE_FILES,
   MAX_REFERENCE_TOTAL_BYTES,
@@ -743,7 +747,7 @@ export async function generateImage(
     throw imageProviderError(error)
   }
 
-  const { bytes, mimeType, costUsd, model, quality, aspect } = generated
+  const { bytes, mimeType, costUsd: providerCostUsd, model, quality, aspect } = generated
   if (bytes.byteLength === 0) {
     throw new AppError(
       502,
@@ -758,6 +762,15 @@ export async function generateImage(
       "La imagen generada excede el límite de almacenamiento."
     )
   }
+
+  // Prorrateo: si el usuario insertó detalles con búsqueda (grounding) antes
+  // de generar, ese costo —que no va dentro de ninguna generación— se carga
+  // a esta, la primera posterior a la búsqueda (ventana de 30 minutos).
+  const detailsCostUsd = consumeDetailsCost(userId)
+  const costUsd =
+    providerCostUsd === null && detailsCostUsd === null
+      ? null
+      : round6((providerCostUsd ?? 0) + (detailsCostUsd ?? 0))
 
   // The provider bills completed generations in full: resolve the user's
   // running total (USD and MXN) before persisting anything, so a later
@@ -987,13 +1000,13 @@ export async function enhanceImagePrompt(
     input.referenceIds ?? []
   )
 
-  const details = await buildPromptWithDetails({
+  const detailsInput: PromptDetailsInput = {
     prompt: input.prompt,
     aspectRatio: input.aspectRatio ?? "auto",
     referenceImages,
-  })
+  }
 
-  return {
+  const toResult = (details: PromptDetailsResult): EnhancePromptResult => ({
     prompt: details.prompt,
     aspectRatio: isAspectRatio(details.aspectRatio)
       ? details.aspectRatio
@@ -1001,5 +1014,31 @@ export async function enhanceImagePrompt(
     note: details.note,
     sources: details.sources,
     facts: details.facts,
+  })
+
+  // Ruta rápida: una sola llamada a Gemini con Google Search grounding
+  // (busca dentro del modelo; ~un tercio del tiempo del pipeline completo).
+  // Si falla (timeout, JSON inválido, error del proveedor), cae al pipeline
+  // de respaldo sin que el usuario note nada. Cuando la búsqueda corrió, su
+  // costo estimado se acumula para prorratearlo a la próxima generación.
+  if (groundingConfigured()) {
+    try {
+      const grounding = await buildPromptWithGrounding(detailsInput)
+      if (grounding.searched && grounding.costUsd !== null) {
+        accrueDetailsCost(userId, grounding.costUsd)
+      }
+      return toResult(grounding.details)
+    } catch (error) {
+      console.error(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          error: `images: grounding fast path failed, cayendo al pipeline de respaldo: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        })
+      )
+    }
   }
+
+  return toResult(await buildPromptWithDetails(detailsInput))
 }
