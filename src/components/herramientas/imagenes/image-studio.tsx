@@ -300,8 +300,6 @@ type ImageStudioProps = {
 export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [images, setImages] = React.useState<ImageGeneration[]>([])
   const [total, setTotal] = React.useState(0)
-  const [totalCostUsd, setTotalCostUsd] = React.useState(0)
-  const [totalCostMxn, setTotalCostMxn] = React.useState<number | null>(null)
   const [listState, setListState] = React.useState<ListState>("loading")
 
   const [prompt, setPrompt] = React.useState("")
@@ -419,8 +417,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
           data?: {
             images: ImageGeneration[]
             total: number
-            totalCostUsd: number
-            totalCostMxn: number | null
           }
           error?: { message?: string }
         }
@@ -429,8 +425,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
         }
         setImages(body.data.images)
         setTotal(body.data.total)
-        setTotalCostUsd(body.data.totalCostUsd)
-        setTotalCostMxn(body.data.totalCostMxn)
         setListState("ready")
       })
       .catch((error: unknown) => {
@@ -592,8 +586,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
         ok: boolean
         data?: {
           image: ImageGeneration
-          totalCostUsd: number
-          totalCostMxn: number | null
         }
         error?: { message?: string }
       }
@@ -606,8 +598,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       }
       setImages((current) => [body.data!.image, ...current])
       setTotal((current) => current + 1)
-      setTotalCostUsd(body.data.totalCostUsd)
-      setTotalCostMxn(body.data.totalCostMxn)
       toast.success(
         `Imagen generada · costo ${costLabel(body.data.image)}`
       )
@@ -1125,7 +1115,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
             aria-labelledby="galeria-titulo"
             className="flex flex-col gap-3"
           >
-            <div className="flex flex-wrap items-end justify-between gap-3">
+            <div className="flex flex-wrap items-end gap-3">
               <div className="flex flex-col gap-0.5">
                 <h2
                   id="galeria-titulo"
@@ -1136,20 +1126,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                 <p className="text-muted-foreground text-xs tabular-nums">
                   {listState === "loading" ? "Cargando…" : `${total} imágenes`}
                 </p>
-              </div>
-              <div className="flex flex-col items-end gap-0.5">
-                <span className="text-muted-foreground text-xs">
-                  Costo acumulado
-                </span>
-                {listState === "loading" ? (
-                  <Skeleton className="h-5 w-20" />
-                ) : (
-                  <span className="text-base font-semibold tabular-nums">
-                    {totalCostMxn !== null
-                      ? mxn(totalCostMxn)
-                      : `US$${totalCostUsd.toFixed(4)}`}
-                  </span>
-                )}
               </div>
             </div>
 
