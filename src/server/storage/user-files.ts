@@ -7,6 +7,15 @@ import { AppError } from "@/server/umejson/types"
 export const FILE_KINDS = ["attachment", "generated"] as const
 export type FileKind = (typeof FILE_KINDS)[number]
 
+/**
+ * Variantes derivadas que el servidor guarda junto al archivo original:
+ * `low` (versión en baja resolución, la que se ve en el celular) y `thumb`
+ * (miniatura de la galería). Los binarios viven en disco, en
+ * `<kind>/variants/`, y se indexan en `user_file_variants`.
+ */
+export const FILE_VARIANTS = ["low", "thumb"] as const
+export type FileVariant = (typeof FILE_VARIANTS)[number]
+
 export interface UserFile {
   id: string
   userId: string
@@ -45,6 +54,13 @@ export function isFileKind(value: unknown): value is FileKind {
   )
 }
 
+export function isFileVariant(value: unknown): value is FileVariant {
+  return (
+    typeof value === "string" &&
+    (FILE_VARIANTS as readonly string[]).includes(value)
+  )
+}
+
 function requireValidUserId(userId: string): string {
   if (!UUID_RE.test(userId)) {
     throw new AppError(500, "invalid_user_id", "Invalid user id for storage")
@@ -64,12 +80,41 @@ export function userStorageDir(userId: string, kind?: FileKind): string {
     : userDir
 }
 
+/** Carpeta donde viven las variantes derivadas de los archivos del usuario. */
+export function userVariantStorageDir(
+  userId: string,
+  kind: FileKind
+): string {
+  return path.join(
+    /* turbopackIgnore: true */ userStorageDir(userId, kind),
+    "variants"
+  )
+}
+
+/**
+ * Ruta en disco de una variante derivada. Es determinista a partir del
+ * archivo original: el mismo archivo y la misma variante siempre caen en la
+ * misma ruta, sin guardar el nombre en la base.
+ */
+export function userFileVariantPath(
+  file: UserFile,
+  variant: FileVariant,
+  extension = "webp"
+): string {
+  return path.join(
+    /* turbopackIgnore: true */ userVariantStorageDir(file.userId, file.kind),
+    `${file.storedName}.${variant}.${extension}`
+  )
+}
+
 /** Creates the user's storage folders (idempotent). */
 export async function ensureUserStorage(userId: string): Promise<string> {
   requireValidUserId(userId)
   const userDir = userStorageDir(userId)
   await mkdir(userStorageDir(userId, "attachment"), { recursive: true })
   await mkdir(userStorageDir(userId, "generated"), { recursive: true })
+  await mkdir(userVariantStorageDir(userId, "attachment"), { recursive: true })
+  await mkdir(userVariantStorageDir(userId, "generated"), { recursive: true })
   return userDir
 }
 
@@ -224,5 +269,12 @@ export async function deleteUserFile(
     requireValidUserId(userId),
   ])
   await unlink(userFilePath(file)).catch(() => {})
+  // Las variantes derivadas no caen en cascada (la cascada es de la fila, no
+  // del fichero): se borran a mano para no dejar huérfanos en disco.
+  await Promise.all(
+    FILE_VARIANTS.map((variant) =>
+      unlink(userFileVariantPath(file, variant)).catch(() => {})
+    )
+  )
   return true
 }

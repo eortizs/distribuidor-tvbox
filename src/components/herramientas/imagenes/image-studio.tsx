@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
   DownloadIcon,
+  ImageDownIcon,
   ImageIcon,
   PaperclipIcon,
   SearchIcon,
@@ -81,12 +82,29 @@ import {
   type FileWithPreview,
 } from "@/hooks/use-file-upload"
 
+interface ImageVariant {
+  variant: "low" | "thumb"
+  url: string
+  fileName: string
+  mimeType: string
+  /** null mientras la variante no se ha derivado. */
+  sizeBytes: number | null
+  width: number | null
+  height: number | null
+}
+
 interface ImageFile {
   id: string
   fileName: string
   mimeType: string
   sizeBytes: number
   url: string
+  /** Versiones derivadas del original (la que se ve en el celular y la
+   * miniatura de la galería). */
+  variants?: {
+    low: ImageVariant
+    thumb: ImageVariant
+  }
 }
 
 interface ImageGeneration {
@@ -139,15 +157,52 @@ function modelName(model: string): string {
 }
 
 /**
- * Proporción CSS de la miniatura a partir del aspecto con el que se generó
- * la imagen ("9:16" → "9 / 16"). Sin aspecto conocido, la imagen se muestra
- * con su tamaño natural.
+ * Proporción CSS de la miniatura. Se toma de la miniatura derivada (que
+ * conserva la proporción real de la imagen) y, si todavía no existe, del
+ * aspecto con el que se generó ("9:16" → "9 / 16"). Sin aspecto conocido,
+ * la imagen se muestra con su tamaño natural.
  */
-function aspectStyle(aspect: string | null): React.CSSProperties | undefined {
+function aspectStyle(
+  aspect: string | null,
+  variant?: ImageVariant | null
+): React.CSSProperties | undefined {
+  if (variant?.width && variant?.height) {
+    return { aspectRatio: `${variant.width} / ${variant.height}` }
+  }
   if (!aspect || aspect === "auto") return undefined
   const [width, height] = aspect.split(":")
   if (!width || !height) return undefined
   return { aspectRatio: `${width} / ${height}` }
+}
+
+/** Miniatura de la galería: lo único que baja el listado. */
+function thumbSource(file: ImageFile): string {
+  return file.variants?.thumb?.url ?? file.url
+}
+
+/** Versión que se ve al abrir la imagen: cabe en la pantalla del celular. */
+function lowSource(file: ImageFile): string {
+  return file.variants?.low?.url ?? file.url
+}
+
+/** URL de descarga de un archivo o de una variante. */
+function downloadUrl(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}download=1`
+}
+
+/**
+ * Si una variante no se puede cargar (formato no soportado, archivo sin
+ * derivar) se cae al original en vez de dejar un hueco en la galería.
+ */
+function fallbackToOriginal(
+  originalUrl: string
+): (event: React.SyntheticEvent<HTMLImageElement>) => void {
+  return (event) => {
+    const img = event.currentTarget
+    if (img.dataset.fallback === "1") return
+    img.dataset.fallback = "1"
+    img.src = originalUrl
+  }
 }
 
 type ImageStudioProps = {
@@ -855,14 +910,19 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                       >
                         {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
                         <img
-                          src={image.file.url}
+                          src={thumbSource(image.file)}
                           alt={image.prompt}
                           loading="lazy"
+                          decoding="async"
                           // La miniatura respeta la proporción de la imagen: un
                           // recorte al cuadrado escondería (por ejemplo) una
                           // vertical 9:16.
-                          style={aspectStyle(image.aspectRatio)}
+                          style={aspectStyle(
+                            image.aspectRatio,
+                            image.file.variants?.thumb
+                          )}
                           className="w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
+                          onError={fallbackToOriginal(image.file.url)}
                         />
                       </button>
                       <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2">
@@ -915,9 +975,11 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
               <div className="overflow-hidden rounded-lg bg-muted">
                 {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
                 <img
-                  src={viewer.file.url}
+                  src={lowSource(viewer.file)}
                   alt={viewer.prompt}
+                  decoding="async"
                   className="max-h-[60vh] w-full object-contain"
+                  onError={fallbackToOriginal(viewer.file.url)}
                 />
               </div>
               <p className="line-clamp-3 text-sm text-muted-foreground">
@@ -935,20 +997,56 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   {modelName(viewer.model)}
                 </span>
               </div>
+              <p className="text-muted-foreground text-xs tabular-nums">
+                Original {formatBytes(viewer.file.sizeBytes)}
+                {viewer.file.variants?.low?.sizeBytes
+                  ? ` · Baja ${formatBytes(viewer.file.variants.low.sizeBytes)}`
+                  : null}
+              </p>
             </div>
           ) : null}
           <DialogFooter>
             {viewer && viewer.file ? (
               <>
-                <Button variant="outline" size="sm" render={
-                  <a
-                    href={`${viewer.file.url}?download=1`}
-                    download={viewer.file.fileName}
-                  />
-                }>
-                  <DownloadIcon data-icon="inline-start" className="size-3.5" />
-                  Descargar
-                </Button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    title="Versión reducida en WebP, pensada para verse y descargarse desde el celular"
+                    render={
+                      <a
+                        href={downloadUrl(lowSource(viewer.file))}
+                        download={
+                          viewer.file.variants?.low?.fileName ??
+                          viewer.file.fileName
+                        }
+                      />
+                    }
+                  >
+                    <DownloadIcon
+                      data-icon="inline-start"
+                      className="size-3.5"
+                    />
+                    Descargar baja
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    title="Archivo original tal como lo generó el modelo"
+                    render={
+                      <a
+                        href={downloadUrl(viewer.file.url)}
+                        download={viewer.file.fileName}
+                      />
+                    }
+                  >
+                    <ImageDownIcon
+                      data-icon="inline-start"
+                      className="size-3.5"
+                    />
+                    Descargar original
+                  </Button>
+                </div>
                 <AlertDialog
                   open={confirmDelete}
                   onOpenChange={setConfirmDelete}

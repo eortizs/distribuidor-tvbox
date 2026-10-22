@@ -48,6 +48,15 @@ try {
     }
     const target = path.join(root, userId, "attachments", row.stored_name);
     await unlink(target).catch(() => {});
+    // Variantes derivadas del adjunto, por si alguien pidió una versión
+    // reducida de él (sus filas caen por la FK al borrar el archivo).
+    await Promise.all(
+      ["low", "thumb"].map((variant) =>
+        unlink(
+          path.join(root, userId, "attachments", "variants", `${row.stored_name}.${variant}.webp`)
+        ).catch(() => {})
+      )
+    );
     await client.query("DELETE FROM user_files WHERE id = $1", [row.id]);
     removed += 1;
     bytes += Number(row.size_bytes ?? 0);

@@ -20,6 +20,14 @@ import {
   userFilePath,
   type UserFile,
 } from "@/server/storage/user-files"
+import {
+  VARIANT_MIME_TYPE,
+  listFileVariants,
+  saveImageVariants,
+  variantFileName,
+  type FileVariantRecord,
+} from "@/server/storage/file-variants"
+import type { FileVariant } from "@/server/storage/user-files"
 import { AppError } from "@/server/umejson/types"
 import {
   QUALITY_STEPS,
@@ -63,12 +71,31 @@ export const ASPECT_RATIOS = [
 
 export type AspectRatio = (typeof ASPECT_RATIOS)[number]
 
+export interface ImageVariantPayload {
+  variant: FileVariant
+  /** URL de la variante; el servidor la deriva del original si aún no existe. */
+  url: string
+  /** Nombre con el que se descarga. */
+  fileName: string
+  mimeType: string
+  /** null mientras la variante no se ha derivado. */
+  sizeBytes: number | null
+  width: number | null
+  height: number | null
+}
+
 export interface ImageFilePayload {
   id: string
   fileName: string
   mimeType: string
   sizeBytes: number
   url: string
+  /** Versiones derivadas del original: la que se ve en el celular y la
+   * miniatura de la galería. El original se conserva para la descarga. */
+  variants: {
+    low: ImageVariantPayload
+    thumb: ImageVariantPayload
+  }
 }
 
 export interface ImageGenerationPayload {
@@ -293,9 +320,34 @@ function round6(value: number): number {
   return Math.round(value * 1e6) / 1e6
 }
 
+type VariantIndex = Map<string, Partial<Record<FileVariant, FileVariantRecord>>>
+
+/**
+ * Datos de una variante para el cliente. La URL siempre está: si la variante
+ * todavía no se ha derivado, el servidor la deriva del original al primer
+ * pedido (así la galería no depende de un backfill previo).
+ */
+function variantPayload(
+  fileId: string,
+  fileName: string,
+  variant: FileVariant,
+  record: FileVariantRecord | undefined
+): ImageVariantPayload {
+  return {
+    variant,
+    url: `/api/files/${fileId}?variant=${variant}`,
+    fileName: variantFileName(fileName, variant),
+    mimeType: record?.mimeType ?? VARIANT_MIME_TYPE,
+    sizeBytes: record?.sizeBytes ?? null,
+    width: record?.width ?? null,
+    height: record?.height ?? null,
+  }
+}
+
 function mapGenerationRow(
   row: GenerationRow,
-  rate: number | null = null
+  rate: number | null = null,
+  variants: VariantIndex = new Map()
 ): ImageGenerationPayload {
   const file =
     row.file_id && row.file_name && row.mime_type
@@ -305,6 +357,20 @@ function mapGenerationRow(
           mimeType: row.mime_type,
           sizeBytes: Number(row.size_bytes ?? 0),
           url: `/api/files/${row.file_id}`,
+          variants: {
+            low: variantPayload(
+              row.file_id,
+              row.file_name,
+              "low",
+              variants.get(row.file_id)?.low
+            ),
+            thumb: variantPayload(
+              row.file_id,
+              row.file_name,
+              "thumb",
+              variants.get(row.file_id)?.thumb
+            ),
+          },
         }
       : null
   const costUsd = row.cost_usd === null ? null : Number(row.cost_usd)
@@ -725,6 +791,20 @@ export async function generateImage(
     throw error
   }
 
+  // Las variantes se derivan de una vez: la galería carga la miniatura y el
+  // visor carga la versión baja, así que con cientos de imágenes el celular
+  // no arrastra los megabytes del original. El original se conserva intacto.
+  const derivedVariants = await saveImageVariants(saved, bytes)
+  const variantIndex: VariantIndex = new Map([
+    [
+      saved.id,
+      {
+        low: derivedVariants.find((record) => record.variant === "low"),
+        thumb: derivedVariants.find((record) => record.variant === "thumb"),
+      },
+    ],
+  ])
+
   const generationId = crypto.randomUUID()
   try {
     const result = await pool.query(
@@ -759,7 +839,11 @@ export async function generateImage(
         rate: todayRate,
       })
     }
-    const image = mapGenerationRow(result.rows[0] as GenerationRow, todayRate)
+    const image = mapGenerationRow(
+      result.rows[0] as GenerationRow,
+      todayRate,
+      variantIndex
+    )
     return {
       image,
       totalCostUsd: round6(before.totalUsd + (costUsd ?? 0)),
@@ -817,11 +901,16 @@ export async function listImageGenerations(
     [userId, limit, offset]
   )
   const lifetime = await lifetimeCost(userId)
+  const fileIds = result.rows
+    .map((row) => (row as GenerationRow).file_id)
+    .filter((id): id is string => typeof id === "string")
+  const variants = await listFileVariants(fileIds)
   return {
     images: result.rows.map((row) =>
       mapGenerationRow(
         row as GenerationRow,
-        lifetime.rates.get(mxDayKey((row as GenerationRow).created_at)) ?? null
+        lifetime.rates.get(mxDayKey((row as GenerationRow).created_at)) ?? null,
+        variants
       )
     ),
     total: Number(totalResult.rows[0].count),

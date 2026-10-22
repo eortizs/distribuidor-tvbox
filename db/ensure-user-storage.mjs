@@ -29,6 +29,9 @@ try {
     const userDir = path.join(root, userId);
     await mkdir(path.join(userDir, "attachments"), { recursive: true });
     await mkdir(path.join(userDir, "generated"), { recursive: true });
+    // Carpetas de las variantes derivadas (versión baja y miniatura).
+    await mkdir(path.join(userDir, "attachments", "variants"), { recursive: true });
+    await mkdir(path.join(userDir, "generated", "variants"), { recursive: true });
     created += 1;
   }
   console.log(`Ensured storage folders for ${created} user(s) under ${root}`);
