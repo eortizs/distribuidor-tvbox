@@ -6,7 +6,7 @@ import {
   CopyIcon,
   ImageDownIcon,
   ImageIcon,
-  PaperclipIcon,
+  PlusIcon,
   SearchIcon,
   Share2Icon,
   SparklesIcon,
@@ -29,6 +29,14 @@ import {
 } from "@/lib/share"
 
 import { Badge } from "@/components/reui/badge"
+import {
+  Stepper,
+  StepperIndicator,
+  StepperItem,
+  StepperNav,
+  StepperSeparator,
+  StepperTrigger,
+} from "@/components/reui/stepper"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -297,6 +305,12 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [listState, setListState] = React.useState<ListState>("loading")
 
   const [prompt, setPrompt] = React.useState("")
+  // Paso del flujo de un solo botón: `false` = el texto todavía no se ha
+  // procesado (paso 1, *Procesar descripción*); `true` = la investigación ya
+  // reescribió el prompt y el mismo botón pasa a *Generar* (paso 2). Cualquier
+  // edición manual del texto regresa al paso 1: lo procesado ya no corresponde
+  // a lo que hay en el área.
+  const [promptProcessed, setPromptProcessed] = React.useState(false)
   // Por omisión la herramienta genera en formato póster (9:16): es la
   // relación que más usa este panel.
   const [aspectRatio, setAspectRatio] = React.useState<string>("9:16")
@@ -644,6 +658,9 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       }
       setPrompt(body.data.prompt)
       setAspectRatio(body.data.aspectRatio)
+      // La descripción ya está procesada: el botón pasa de *Procesar
+      // descripción* a *Generar*.
+      setPromptProcessed(true)
       const sources = body.data.sources ?? []
       const facts = body.data.facts ?? []
       setDetailSources(sources)
@@ -797,8 +814,15 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   disabled={generating || enhancing}
                 />
               ) : null}
-              <InputGroup className="bg-background">
-                <InputGroupAddon align="inline-start">
+              {/* Bitono: la celda de adjuntos lleva un fondo propio (sin
+                  borde: solo cambio de tono) y el símbolo + grande, para que
+                  se lea como botón y no como decoración del área de texto; el
+                  prompt vive en la zona de la derecha. */}
+              <InputGroup className="overflow-hidden bg-background">
+                <InputGroupAddon
+                  align="inline-start"
+                  className="self-stretch bg-muted/50 pl-1 pr-1 has-[>button]:ml-0"
+                >
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -811,7 +835,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                         />
                       }
                     >
-                      <PaperclipIcon aria-hidden="true" />
+                      <PlusIcon aria-hidden="true" className="size-5" />
                     </TooltipTrigger>
                     <TooltipContent>Adjuntar imágenes de referencia</TooltipContent>
                   </Tooltip>
@@ -821,14 +845,15 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   value={prompt}
                   onChange={(event) => {
                     setPrompt(event.target.value)
-                    // Las fuentes, los datos confirmados y el aviso vienen de
-                    // la última investigación: si el usuario edita a mano, ya
-                    // no corresponden al texto.
+                    // Editar a mano regresa al paso 1: las fuentes, los datos
+                    // confirmados y el aviso vienen de la última investigación
+                    // y ya no corresponden al texto nuevo.
+                    setPromptProcessed(false)
                     setDetailSources([])
                     setDetailFacts([])
                     setDetailNote(null)
                   }}
-                  placeholder="Ej.: un ajolote astronauta flotando entre nebulosas, iluminación de estudio, estilo fotográfico"
+                  placeholder="Ejemplo: Crea un póster con el siguiente partido de la selección mexicana de fútbol."
                   rows={3}
                   maxLength={MAX_PROMPT_LENGTH}
                   aria-label="Prompt de la imagen"
@@ -838,21 +863,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
               {detailNote ? (
                 <p className="text-muted-foreground text-xs">{detailNote}</p>
               ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                className="w-full sm:w-auto sm:self-start"
-                onClick={() => void enhancePrompt()}
-                disabled={!canEnhance}
-                title="El modelo investiga en internet (Tavily), confirma cada dato con al menos dos fuentes independientes y los añade al prompt"
-              >
-                {enhancing ? (
-                  <Spinner />
-                ) : (
-                  <SearchIcon data-icon="inline-start" />
-                )}
-                {enhancing ? "Buscando detalles…" : "Insertar detalles"}
-              </Button>
               {detailFacts.length > 0 ? (
                 <div className="flex flex-col gap-1">
                   <p className="text-muted-foreground text-xs">
@@ -940,13 +950,17 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   para continuar.
                 </p>
               ) : null}
-              <div className="grid grid-cols-1 gap-x-4 gap-y-3 lg:grid-cols-[12rem_auto_1fr] lg:gap-y-1.5">
+              {/* Renglón compacto: en móvil *Formato* y *Calidad* comparten
+                  fila (el select toma el ancho restante y los toggles el suyo)
+                  y el botón queda debajo a todo el ancho; en ≥lg es la fila
+                  alineada de tres columnas de siempre. */}
+              <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-3 lg:grid-cols-[12rem_auto_1fr] lg:gap-x-4 lg:gap-y-1.5">
                 <div className="flex flex-col gap-1 lg:contents">
                   <Label
                     htmlFor="aspecto"
                     className="text-muted-foreground text-xs lg:col-start-1 lg:row-start-1"
                   >
-                    Aspecto
+                    Formato
                   </Label>
                   <Select
                     value={activeAspect}
@@ -984,7 +998,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                       Calidad
                     </Label>
                     <ToggleGroup
-                      variant="outline"
+                      variant="default"
                       aria-labelledby="imagenes-calidad"
                       className="lg:col-start-2 lg:row-start-2"
                       value={[levels[activeQualityIndex].id]}
@@ -1008,19 +1022,84 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                     </ToggleGroup>
                   </div>
                 ) : null}
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center lg:col-start-3 lg:row-start-2 lg:justify-end">
-                  <Button
-                    className="w-full sm:w-auto sm:flex-1 lg:flex-none"
-                    onClick={() => void generate()}
-                    disabled={!canGenerate}
+                <div className="col-span-2 flex flex-col gap-2 lg:col-span-1 lg:col-start-3 lg:row-start-2 lg:items-end">
+                  {/* Pista de progreso del flujo (stepper ReUI en modo display:
+                      ítems deshabilitados y valor controlado, patrón tracking).
+                      El avance real lo marca el botón; los círculos solo hacen
+                      evidente en qué paso está el flujo sin leer la etiqueta. */}
+                  <Stepper
+                    value={promptProcessed ? 2 : 1}
+                    className="max-w-56 self-center lg:self-end"
+                    aria-label="Progreso de la generación"
+                    indicators={{ loading: <Spinner className="size-3.5" /> }}
                   >
-                    {generating ? (
+                    <StepperNav>
+                      <StepperItem step={1} disabled loading={enhancing}>
+                        <StepperTrigger>
+                          <StepperIndicator>1</StepperIndicator>
+                        </StepperTrigger>
+                        <StepperSeparator />
+                      </StepperItem>
+                      <StepperItem step={2} disabled loading={generating}>
+                        <StepperTrigger>
+                          <StepperIndicator>2</StepperIndicator>
+                        </StepperTrigger>
+                      </StepperItem>
+                    </StepperNav>
+                  </Stepper>
+                  <span className="sr-only">
+                    {promptProcessed
+                      ? "Paso 2 de 2: generar la imagen"
+                      : "Paso 1 de 2: investigar y mejorar la descripción"}
+                  </span>
+                  {/* Un solo botón, dos pasos: primero *Investigar y mejorar
+                      descripción* (investiga y reescribe el prompt) y, cuando
+                      el texto ya está procesado, el mismo botón pasa a
+                      *Generar*. */}
+                  <Button
+                    className="w-full sm:w-auto sm:self-center lg:self-end"
+                    onClick={() =>
+                      promptProcessed ? void generate() : void enhancePrompt()
+                    }
+                    disabled={promptProcessed ? !canGenerate : !canEnhance}
+                    title={
+                      promptProcessed
+                        ? undefined
+                        : "El modelo investiga en internet, confirma cada dato con al menos dos fuentes independientes y los añade a la descripción"
+                    }
+                  >
+                    {enhancing || generating ? (
                       <Spinner />
-                    ) : (
+                    ) : promptProcessed ? (
                       <SparklesIcon data-icon="inline-start" />
+                    ) : (
+                      <SearchIcon data-icon="inline-start" />
                     )}
-                    {generating ? "Generando…" : "Generar"}
+                    {enhancing
+                      ? "Investigando…"
+                      : generating
+                        ? "Generando…"
+                        : promptProcessed
+                          ? "Generar"
+                          : "Investigar y mejorar descripción"}
                   </Button>
+                  {/* Atajo discreto para quien no necesita investigación
+                      (prompts imaginativos): genera con el texto tal cual.
+                      Solo aparece con texto escrito y sin procesar, para no
+                      competir con la acción principal. */}
+                  {!promptProcessed && prompt.trim().length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="link"
+                      size="sm"
+                      className="self-center lg:self-end"
+                      onClick={() => void generate()}
+                      disabled={!canGenerate || enhancing}
+                      title="Genera directamente con el texto tal como está, sin investigarlo antes"
+                    >
+                      Generar sin procesar
+                    </Button>
+                  ) : null}
                 </div>
               </div>
               {generateError ? (
