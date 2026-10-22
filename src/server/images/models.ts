@@ -82,7 +82,7 @@ export const ASPECT_OPTIONS: readonly { value: string; label: string }[] = [
   { value: "auto", label: "Automático" },
   { value: "1:1", label: "1:1 · Cuadrada" },
   { value: "16:9", label: "16:9 · Panorámica" },
-  { value: "9:16", label: "9:16 · Vertical" },
+  { value: "9:16", label: "9:16 · Póster" },
   { value: "4:3", label: "4:3 · Clásica" },
   { value: "3:4", label: "3:4 · Retrato" },
   { value: "3:2", label: "3:2 · Foto" },

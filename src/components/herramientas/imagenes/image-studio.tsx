@@ -297,10 +297,17 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [listState, setListState] = React.useState<ListState>("loading")
 
   const [prompt, setPrompt] = React.useState("")
-  const [aspectRatio, setAspectRatio] = React.useState<string>("auto")
+  // Por omisión la herramienta genera en formato póster (9:16): es la
+  // relación que más usa este panel.
+  const [aspectRatio, setAspectRatio] = React.useState<string>("9:16")
   // El nivel (media/alta) es lo que elige el usuario; cada nivel trae el
-  // modelo, la calidad y el tamaño configurados en Configuración.
-  const [qualityIndex, setQualityIndex] = React.useState(0)
+  // modelo, la calidad y el tamaño configurados en Configuración. Por
+  // omisión se abre en "Alta" (si el usuario no configuró ese nivel, en el
+  // primero disponible).
+  const [qualityIndex, setQualityIndex] = React.useState(() => {
+    const alta = levels.findIndex((level) => level.id === "alta")
+    return alta >= 0 ? alta : 0
+  })
   const [generating, setGenerating] = React.useState(false)
   const [enhancing, setEnhancing] = React.useState(false)
   const [generateError, setGenerateError] = React.useState<string | null>(null)
@@ -340,13 +347,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   )
     ? aspectRatio
     : "auto"
-
-  // Tamaño efectivo de la generación: el aspecto elegido manda; si es
-  // "Automático", manda el tamaño configurado para el nivel.
-  const effectiveSize =
-    aspectOptions.find((option) => option.value === activeAspect)?.label ??
-    selectedLevel?.entry.size ??
-    ""
 
   const [references, setReferences] = React.useState<Record<string, ReferenceState>>({})
   const [referenceError, setReferenceError] = React.useState<string | null>(null)
@@ -950,6 +950,9 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   </Label>
                   <Select
                     value={activeAspect}
+                    // Con `items`, el trigger muestra la etiqueta de la
+                    // opción elegida ("9:16 · Póster") y no el valor crudo.
+                    items={aspectOptions}
                     onValueChange={(value) => setAspectRatio(value as string)}
                   >
                     <SelectTrigger
@@ -966,11 +969,11 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-muted-foreground text-xs lg:col-start-1 lg:row-start-3 lg:self-center">
-                    {activeAspect === "auto"
-                      ? `Tamaño: ${selectedLevel?.entry.size ?? "—"}`
-                      : effectiveSize}
-                  </p>
+                  {activeAspect === "auto" ? (
+                    <p className="text-muted-foreground text-xs lg:col-start-1 lg:row-start-3 lg:self-center">
+                      Tamaño: {selectedLevel?.entry.size ?? "—"}
+                    </p>
+                  ) : null}
                 </div>
                 {levels.length > 1 ? (
                   <div className="flex flex-col gap-1 lg:contents">
