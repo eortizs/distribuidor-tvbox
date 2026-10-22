@@ -1,10 +1,8 @@
-import { AppBreadcrumb } from "@/components/dashboard/app-breadcrumb"
 import { AppSidebar } from "@/components/app-sidebar"
 import { requireUser } from "@/server/auth/guards"
 
 export const instant = false
 
-import { Separator } from "@/components/ui/separator"
 import {
   SidebarInset,
   SidebarProvider,
@@ -25,8 +23,6 @@ export default async function DashboardLayout({
         <header className="bg-background sticky top-0 z-20 flex h-16 shrink-0 items-center gap-2 border-b">
           <div className="flex items-center gap-2 px-4">
             <SidebarTrigger className="-ml-1" />
-            <Separator orientation="vertical" className="my-auto h-4" />
-            <AppBreadcrumb />
           </div>
         </header>
         {children}
