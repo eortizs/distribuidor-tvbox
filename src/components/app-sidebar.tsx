@@ -6,6 +6,7 @@ import {
   ChartLineIcon,
   ChevronsUpDownIcon,
   LogOutIcon,
+  XIcon,
 } from "lucide-react"
 
 import { logoutAction } from "@/app/actions/auth"
@@ -21,6 +22,7 @@ import {
   navSecondary,
   profileNav,
 } from "@/components/dashboard/nav-config"
+import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -57,14 +59,25 @@ export function AppSidebar({ user }: { user: AuthUser }) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
-        <div className="px-2 py-1.5">
-          <div className="flex items-center gap-2">
-            <TvboxWordmark className="group-data-[collapsible=icon]:hidden" />
-            <MascotaLogo />
+        <div className="flex items-start justify-between gap-2 px-2 py-1.5">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <TvboxWordmark className="group-data-[collapsible=icon]:hidden" />
+              <MascotaLogo />
+            </div>
+            <span className="mt-1.5 block truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+              Distribuidor
+            </span>
           </div>
-          <span className="mt-1.5 block truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-            Distribuidor
-          </span>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:hidden"
+            onClick={closeMobilePanel}
+          >
+            <XIcon aria-hidden="true" />
+            <span className="sr-only">Cerrar menú</span>
+          </Button>
         </div>
       </SidebarHeader>
       <SidebarContent>
