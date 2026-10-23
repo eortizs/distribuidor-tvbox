@@ -1626,6 +1626,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                         <ToggleGroupItem
                           key={level.id}
                           value={level.id}
+                          className="aria-pressed:bg-primary aria-pressed:text-primary-foreground aria-pressed:hover:bg-primary/90 aria-pressed:hover:text-primary-foreground"
                         >
                           {level.label}
                         </ToggleGroupItem>
