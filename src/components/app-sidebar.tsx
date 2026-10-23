@@ -11,7 +11,8 @@ import {
 import { logoutAction } from "@/app/actions/auth"
 import type { AuthUser } from "@/server/auth/types"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { ToguLogo } from "@/components/togu-logo"
+import { MascotaLogo } from "@/components/mascota-logo"
+import { TvboxWordmark } from "@/components/tvbox-wordmark"
 import {
   finanzasNav,
   groupLabels,
@@ -56,16 +57,14 @@ export function AppSidebar({ user }: { user: AuthUser }) {
   return (
     <Sidebar collapsible="icon">
       <SidebarHeader>
-        <div className="flex items-center gap-2 px-2 py-1.5">
-          <ToguLogo />
-          <div className="flex min-w-0 flex-col group-data-[collapsible=icon]:hidden">
-            <span className="truncate text-sm font-semibold tracking-tight">
-              Togu
-            </span>
-            <span className="text-muted-foreground truncate text-xs">
-              {user.role === "admin" ? "Admin" : "Distributor"}
-            </span>
+        <div className="px-2 py-1.5">
+          <div className="flex items-center gap-2">
+            <TvboxWordmark className="group-data-[collapsible=icon]:hidden" />
+            <MascotaLogo />
           </div>
+          <span className="mt-1.5 block truncate text-sm font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
+            Distribuidor
+          </span>
         </div>
       </SidebarHeader>
       <SidebarContent>
@@ -206,9 +205,6 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                 <div className="flex min-w-0 flex-col text-start">
                   <span className="truncate text-sm font-medium">
                     {user.username}
-                  </span>
-                  <span className="text-muted-foreground truncate text-xs">
-                    {user.role}
                   </span>
                 </div>
                 <ChevronsUpDownIcon className="ms-auto" aria-hidden="true" />

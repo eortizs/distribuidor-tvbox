@@ -1,5 +1,6 @@
 import { AppHeaderDate } from "@/components/app-header-date"
 import { AppSidebar } from "@/components/app-sidebar"
+import { MascotaLogo } from "@/components/mascota-logo"
 import { mxToday } from "@/lib/finanzas"
 import { requireUser } from "@/server/auth/guards"
 
@@ -25,6 +26,7 @@ export default async function DashboardLayout({
         <header className="bg-background sticky top-0 z-20 flex h-16 shrink-0 items-center gap-2 border-b">
           <div className="flex items-center gap-2 px-4">
             <SidebarTrigger className="-ml-1" />
+            <MascotaLogo />
           </div>
           <div className="ml-auto flex items-center gap-2 px-4">
             <AppHeaderDate initialDate={mxToday()} />
