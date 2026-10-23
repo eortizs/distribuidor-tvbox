@@ -1,6 +1,7 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import {
   checkImageRateLimit,
+  deleteImageGenerations,
   generateImage,
   listImageGenerations,
   sanitizeImageInput,
@@ -8,6 +9,19 @@ import {
 import { errorResponse, readJsonBody } from "@/server/http"
 import { AppError } from "@/server/umejson/types"
 import { MAX_REFERENCE_FILES } from "@/lib/attachments"
+
+/** Tope de ids por borrado por lote: es el máximo de la galería paginada. */
+const MAX_BATCH_DELETE = 200
+
+/** Lee `{ ids: string[] }` del cuerpo de la petición. */
+function sanitizeDeleteIds(input: unknown): string[] {
+  if (typeof input !== "object" || input === null) return []
+  const { ids } = input as Record<string, unknown>
+  if (!Array.isArray(ids)) return []
+  if (ids.length > MAX_BATCH_DELETE) return []
+  if (!ids.every((id) => typeof id === "string")) return []
+  return ids as string[]
+}
 
 export async function GET(request: Request) {
   try {
@@ -24,6 +38,41 @@ export async function GET(request: Request) {
     })
 
     return Response.json({ ok: true, data: result })
+  } catch (error) {
+    return errorResponse(error)
+  }
+}
+
+/**
+ * Borrado por lote: la galería en modo selección manda los ids de las
+ * imágenes marcadas y el servidor las borra en una sola operación.
+ */
+export async function DELETE(request: Request) {
+  try {
+    const user = await requireApiUser()
+    if (!user) return unauthorizedResponse()
+
+    const body = await readJsonBody(request)
+    if (!body.ok) return body.response
+
+    const ids = sanitizeDeleteIds(body.body)
+    if (!ids.length) {
+      throw new AppError(
+        422,
+        "invalid_request",
+        `Solicitud inválida: se esperaba { ids: string[] } con al menos un id de imagen y hasta ${MAX_BATCH_DELETE}.`
+      )
+    }
+
+    const result = await deleteImageGenerations(user.id, ids)
+
+    return Response.json({
+      ok: true,
+      data: {
+        deleted: result.deleted.length,
+        missing: result.missing.length,
+      },
+    })
   } catch (error) {
     return errorResponse(error)
   }

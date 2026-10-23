@@ -962,6 +962,53 @@ export async function deleteImageGeneration(
   return true
 }
 
+/**
+ * Soft delete por lote: el mismo borrado que {@link deleteImageGeneration},
+ * pero para varias generaciones de una sola vez (la galería en modo
+ * selección). Se resuelven en una consulta para no abrir una transacción por
+ * imagen; los ids que no encajan o no son del usuario se ignoran en silencio
+ * y se devuelven como `missing`.
+ */
+export async function deleteImageGenerations(
+  userId: string,
+  generationIds: readonly string[]
+): Promise<{ deleted: string[]; missing: string[] }> {
+  const ids = generationIds.filter((id) => UUID_RE.test(id))
+  const unique = [...new Set(ids)]
+  if (!unique.length) {
+    return { deleted: [], missing: [...generationIds] }
+  }
+  const found = await pool.query(
+    `SELECT id, file_id FROM image_generations
+      WHERE id = ANY($1::uuid[]) AND user_id = $2 AND deleted_at IS NULL`,
+    [unique, userId]
+  )
+  const rows = found.rows as { id: string; file_id: string | null }[]
+  if (!rows.length) {
+    return { deleted: [], missing: unique }
+  }
+  const deleted = rows.map((row) => row.id)
+  await pool.query(
+    `UPDATE image_generations
+        SET deleted_at = now(), file_id = NULL
+      WHERE id = ANY($1::uuid[])`,
+    [deleted]
+  )
+  // Los binarios se borran después del UPDATE: el archivo se libera por
+  // fuera de la transacción, como en el borrado de a uno.
+  await Promise.all(
+    rows
+      .map((row) => row.file_id)
+      .filter((fileId): fileId is string => typeof fileId === "string")
+      .map((fileId) => deleteUserFile(userId, fileId).catch(() => {}))
+  )
+  const deletedSet = new Set(deleted)
+  return {
+    deleted,
+    missing: unique.filter((id) => !deletedSet.has(id)),
+  }
+}
+
 /*
  * "Insertar detalles": the model reads the user's request, researches it on
  * the web (Tavily), confirms each fact with at least two independent

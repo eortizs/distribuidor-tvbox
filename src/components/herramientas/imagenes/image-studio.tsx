@@ -12,10 +12,12 @@ import {
   SearchIcon,
   Share2Icon,
   SparklesIcon,
+  SquareCheckBigIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
+import { cn } from "cn"
 
 import {
   MAX_REFERENCE_BYTES,
@@ -60,6 +62,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogClose,
@@ -102,6 +105,7 @@ import {
   useFileUpload,
   type FileWithPreview,
 } from "@/hooks/use-file-upload"
+import { useLongPress } from "@/hooks/use-long-press"
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
 
 interface ImageVariant {
@@ -211,6 +215,16 @@ const mxnFormatter = new Intl.NumberFormat("es-MX", {
   style: "currency",
   currency: "MXN",
 })
+
+/**
+ * Estilo del botón *Eliminar* (el de la selección de la galería y el del
+ * visor). La variante `destructive` pinta un rojo diluido que en el tema
+ * oscuro se pierde contra el fondo: en ese tema el botón pasa a blanco, como
+ * los botones primarios (el tema oscuro invierte el primario), para que la
+ * acción siga a la vista.
+ */
+const DESTRUCTIVE_BUTTON_CLASS =
+  "dark:bg-primary dark:text-primary-foreground dark:hover:bg-primary/90"
 
 function mxn(value: number): string {
   return `${mxnFormatter.format(value)} MXN`
@@ -373,10 +387,214 @@ type ImageStudioProps = {
   levels: readonly ImageLevel[]
 }
 
+type GalleryTileProps = {
+  /** La generación con su archivo: la galería solo muestra las que lo tienen. */
+  image: ImageGeneration & { file: ImageFile }
+  /** La galería está en modo selección: el clic marca en vez de abrir. */
+  selectionMode: boolean
+  /** La imagen está marcada. */
+  selected: boolean
+  /** Abre el visor con la imagen. */
+  onOpen: (image: ImageGeneration) => void
+  /** Marca o desmarca la imagen. */
+  onToggle: (id: string) => void
+  /** Pulsación larga: marca la imagen y activa el modo selección. */
+  onLongPress: (id: string) => void
+}
+
+/**
+ * Tile de la galería. El mismo botón sirve para las dos acciones: abrir el
+ * visor y marcar la imagen, según esté la galería en modo selección o no. La
+ * pulsación larga (tap sostenido en móvil, clic sostenido en escritorio) es
+ * la que enciende el modo selección.
+ */
+function GalleryTile({
+  image,
+  selectionMode,
+  selected,
+  onOpen,
+  onToggle,
+  onLongPress,
+}: GalleryTileProps) {
+  const longPress = useLongPress({
+    onLongPress: () => onLongPress(image.id),
+  })
+
+  const createdAt = dateFormatter.format(new Date(image.createdAt))
+
+  return (
+    <figure
+      className={cn(
+        "group relative overflow-hidden rounded-xl bg-muted ring-1 ring-foreground/10",
+        // La imagen marcada se distingue con el anillo primario: el resto
+        // conserva su tono, para que la lista siga siendo legible.
+        selected && "ring-2 ring-primary"
+      )}
+    >
+      <button
+        type="button"
+        onClick={(event) => {
+          // El clic que cierra una pulsación larga ya lo consumió el gesto:
+          // marcar una imagen no puede abrir el visor.
+          if (longPress.onClick(event)) return
+          if (selectionMode) {
+            onToggle(image.id)
+            return
+          }
+          onOpen(image)
+        }}
+        onPointerDown={longPress.onPointerDown}
+        onPointerMove={longPress.onPointerMove}
+        onPointerUp={longPress.onPointerUp}
+        onPointerLeave={longPress.onPointerLeave}
+        onPointerCancel={longPress.onPointerCancel}
+        onContextMenu={longPress.onContextMenu}
+        aria-label={
+          selectionMode
+            ? `Seleccionar imagen generada el ${createdAt}`
+            : `Ver imagen generada el ${createdAt}`
+        }
+        aria-pressed={selectionMode ? selected : undefined}
+        className={cn(
+          "block w-full select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+          selectionMode ? "cursor-pointer" : "cursor-zoom-in"
+        )}
+        // El callout de iOS (guardar, copiar) es el menú nativo del sistema:
+        // compite con la pulsación larga, así que se desactiva en el tile.
+        style={{ WebkitTouchCallout: "none" }}
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
+        <img
+          src={thumbSource(image.file)}
+          alt={image.prompt}
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+          // La miniatura respeta la proporción de la imagen: un
+          // recorte al cuadrado escondería (por ejemplo) una
+          // vertical 9:16.
+          style={aspectStyle(image.aspectRatio, image.file.variants?.thumb)}
+          // El toque no debe caer en la imagen: en móvil el
+          // navegador abre su visor nativo a pantalla
+          // completa. Lo captura el botón de arriba.
+          className={cn(
+            "pointer-events-none w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            // En modo selección el zoom al pasar el mouse no aplica: el
+            // clic ya no abre el visor.
+            !selectionMode && "group-hover:scale-[1.03]"
+          )}
+          onError={fallbackToOriginal(image.file.url)}
+        />
+      </button>
+      {selectionMode ? (
+        // Indicador de estado: lo lee el botón (con `aria-pressed`), así que
+        // aquí es solo la señal visual y no intercepta el toque.
+        <span aria-hidden="true" className="pointer-events-none absolute top-2 right-2">
+          <Checkbox
+            checked={selected}
+            readOnly
+            tabIndex={-1}
+            className="size-5 rounded-full border-white/80 bg-black/40 text-white shadow-sm data-checked:border-primary data-checked:bg-primary data-checked:text-primary-foreground"
+          />
+        </span>
+      ) : null}
+      <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2">
+        <span className="text-muted-foreground truncate text-xs">{createdAt}</span>
+        <Badge
+          variant="success-light"
+          size="sm"
+          radius="full"
+          className="tabular-nums"
+          aria-label={`Costo: ${costLabel(image)}`}
+          title={
+            image.costMxn !== null
+              ? "Costo de esta imagen en pesos, al TC FIX del día de generación"
+              : "Costo de esta imagen en USD, TC no disponible"
+          }
+        >
+          {costLabel(image)}
+        </Badge>
+      </figcaption>
+    </figure>
+  )
+}
+
+type GallerySelectionBarProps = {
+  /** Imágenes marcadas ahora mismo. */
+  selectedCount: number
+  /** Imágenes visibles en la galería (las que se pueden marcar). */
+  visibleCount: number
+  /** Marca todas las imágenes visibles. */
+  onSelectAll: () => void
+  /** Sale del modo selección. */
+  onCancel: () => void
+  /** Pide el borrado de lo marcado. */
+  onDelete: () => void
+}
+
+/**
+ * Barra de acciones de la selección. Vive en la cabecera pegajosa de la
+ * pestaña, así que acompaña al scroll: la acción destructiva queda siempre
+ * a la vista, a la derecha, y la secundaria (cancelar) a su izquierda.
+ */
+function GallerySelectionBar({
+  selectedCount,
+  visibleCount,
+  onSelectAll,
+  onCancel,
+  onDelete,
+}: GallerySelectionBarProps) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <p role="status" className="text-sm font-medium tabular-nums">
+        {selectedCount === 0
+          ? "Ninguna imagen seleccionada"
+          : selectedCount === 1
+            ? "1 imagen seleccionada"
+            : `${selectedCount} imágenes seleccionadas`}
+      </p>
+      {selectedCount < visibleCount ? (
+        <Button variant="link" size="sm" onClick={onSelectAll}>
+          Seleccionar todas
+        </Button>
+      ) : null}
+      {/* La acción destructiva queda a la derecha del todo (la primaria al
+          final del flujo) y la de salir, a su izquierda. */}
+      <div className="ml-auto flex items-center gap-2">
+        <Button variant="ghost" size="sm" onClick={onCancel}>
+          Cancelar
+        </Button>
+        <Button
+          variant="destructive"
+          size="sm"
+          onClick={onDelete}
+          disabled={selectedCount === 0}
+          className={DESTRUCTIVE_BUTTON_CLASS}
+        >
+          <Trash2Icon data-icon="inline-start" />
+          Eliminar
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [images, setImages] = React.useState<ImageGeneration[]>([])
   const [total, setTotal] = React.useState(0)
   const [listState, setListState] = React.useState<ListState>("loading")
+
+  // Modo selección de la galería: lo enciende la pulsación larga sobre una
+  // imagen (o el botón *Seleccionar* del encabezado). Mientras está activo,
+  // el clic sobre un tile marca en vez de abrir el visor.
+  const [selectionMode, setSelectionMode] = React.useState(false)
+  // Ids de las imágenes marcadas.
+  const [selectedIds, setSelectedIds] = React.useState<ReadonlySet<string>>(
+    () => new Set<string>()
+  )
+  // Confirmación del borrado por lote (las imágenes marcadas).
+  const [confirmBatchDelete, setConfirmBatchDelete] = React.useState(false)
+  const [deletingMany, setDeletingMany] = React.useState(false)
 
   const [prompt, setPrompt] = React.useState("")
   // Paso del flujo de un solo botón: `false` = el texto todavía no se ha
@@ -961,6 +1179,115 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     }
   }
 
+  /* --------------------------------------------------------------------- *
+   * Selección de la galería (pulsación larga + borrado por lote).
+   * --------------------------------------------------------------------- */
+
+  // Las generaciones que se ven en la galería: sin archivo no hay tile.
+  const galleryImages = React.useMemo(
+    () =>
+      images.filter(
+        (image): image is ImageGeneration & { file: ImageFile } =>
+          image.file !== null
+      ),
+    [images]
+  )
+
+  function toggleSelected(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  function selectAllImages() {
+    setSelectedIds(new Set(galleryImages.map((image) => image.id)))
+  }
+
+  function exitSelection() {
+    setSelectionMode(false)
+    setSelectedIds(new Set<string>())
+    setConfirmBatchDelete(false)
+  }
+
+  /**
+   * Pulsación larga sobre una imagen: enciende el modo selección y marca esa
+   * imagen. Si ya había modo selección, solo la marca o la desmarca.
+   */
+  function handleLongPress(id: string) {
+    // Respuesta háptica al empezar la selección. En iOS no hay vibración y
+    // el método ni existe; en el escritorio tampoco.
+    try {
+      navigator.vibrate?.(15)
+    } catch {
+      // El navegador puede negar la vibración: no es motivo para fallar.
+    }
+    if (!selectionMode) {
+      setSelectionMode(true)
+      setSelectedIds(new Set([id]))
+      return
+    }
+    toggleSelected(id)
+  }
+
+  /**
+   * Escape sale del modo selección: es la tecla que todo el mundo espera
+   * para cerrar lo que está abierto.
+   */
+  React.useEffect(() => {
+    if (!selectionMode) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      // El diálogo de confirmación lleva su propio Escape: si está abierto,
+      // cerrar la selección debajo sería un efecto inesperado.
+      if (document.querySelector('[data-slot="alert-dialog-content"]')) return
+      setSelectionMode(false)
+      setSelectedIds(new Set<string>())
+      setConfirmBatchDelete(false)
+    }
+    document.addEventListener("keydown", onKeyDown)
+    return () => document.removeEventListener("keydown", onKeyDown)
+  }, [selectionMode])
+
+  /** Borra las imágenes marcadas en una sola llamada al servidor. */
+  async function removeSelected() {
+    const ids = [...selectedIds]
+    if (!ids.length || deletingMany) return
+    setDeletingMany(true)
+    try {
+      const response = await fetch("/api/images", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      })
+      const body = (await response.json()) as {
+        ok: boolean
+        data?: { deleted: number; missing: number }
+        error?: { message?: string }
+      }
+      if (!response.ok || !body.ok) {
+        toast.error(
+          body.error?.message ?? "No se pudieron eliminar las imágenes."
+        )
+        return
+      }
+      const deleted = body.data?.deleted ?? 0
+      toast.success(
+        `${deleted} ${
+          deleted === 1 ? "imagen eliminada" : "imágenes eliminadas"
+        }.`
+      )
+      exitSelection()
+      reload()
+    } catch {
+      toast.error("No se pudieron eliminar las imágenes.")
+    } finally {
+      setDeletingMany(false)
+    }
+  }
+
   const canGenerate =
     prompt.trim().length > 0 &&
     !generating &&
@@ -983,12 +1310,23 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
         {/* Barra de pestañas fija: el contenedor se estira de borde a borde
             (márgenes negativos) para que su fondo opaco tape el contenido que
             pasa por debajo, y `top-16` la deja justo bajo la cabecera de la
-            app, que es de 4rem. */}
-        <div className="sticky top-16 z-10 -mx-4 mb-3.5 bg-background px-4 md:-mx-6 md:px-6">
+            app, que es de 4rem. Cuando la galería está en modo selección, la
+            barra de acciones se pega aquí (debajo de las pestañas) para que
+            el botón de eliminar acompañe al scroll sin tapar el contenido. */}
+        <div className="sticky top-16 z-10 -mx-4 mb-3.5 flex flex-col gap-2 bg-background px-4 md:-mx-6 md:px-6">
           <TabsList variant="line" className="w-full">
             <TabsTrigger value="generar">Crear</TabsTrigger>
             <TabsTrigger value="galeria">Galería</TabsTrigger>
           </TabsList>
+          {tab === "galeria" && selectionMode ? (
+            <GallerySelectionBar
+              selectedCount={selectedIds.size}
+              visibleCount={galleryImages.length}
+              onSelectAll={selectAllImages}
+              onCancel={exitSelection}
+              onDelete={() => setConfirmBatchDelete(true)}
+            />
+          ) : null}
         </div>
 
         <TabsContent value="generar" keepMounted>
@@ -1405,6 +1743,20 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   {listState === "loading" ? "Cargando…" : `${total} imágenes`}
                 </p>
               </div>
+              {/* La pulsación larga sobre una imagen enciende el modo
+                  selección, pero es un gesto invisible: este botón lo hace
+                  descubrible (y sirve con el teclado). */}
+              {listState === "ready" && galleryImages.length > 0 && !selectionMode ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="ml-auto"
+                  onClick={() => setSelectionMode(true)}
+                >
+                  <SquareCheckBigIcon data-icon="inline-start" />
+                  Seleccionar
+                </Button>
+              ) : null}
             </div>
 
             {listState === "loading" ? (
@@ -1426,7 +1778,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
               </div>
             ) : null}
 
-            {listState === "ready" && images.length === 0 ? (
+            {listState === "ready" && galleryImages.length === 0 ? (
               <Empty className="rounded-xl border">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">
@@ -1455,72 +1807,66 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
               </Empty>
             ) : null}
 
-            {listState === "ready" && images.length > 0 ? (
+            {listState === "ready" && galleryImages.length > 0 ? (
               <div className="grid grid-cols-2 items-start gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
                 {generating ? (
                   <Skeleton className="aspect-square w-full rounded-xl" />
                 ) : null}
-                {images.map((image) =>
-                  image.file ? (
-                    <figure
-                      key={image.id}
-                      className="group relative overflow-hidden rounded-xl bg-muted ring-1 ring-foreground/10"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCopied(false)
-                          setViewer(image)
-                        }}
-                        className="block w-full cursor-zoom-in focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
-                        aria-label={`Ver imagen generada el ${dateFormatter.format(new Date(image.createdAt))}`}
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
-                        <img
-                          src={thumbSource(image.file)}
-                          alt={image.prompt}
-                          loading="lazy"
-                          decoding="async"
-                          draggable={false}
-                          // La miniatura respeta la proporción de la imagen: un
-                          // recorte al cuadrado escondería (por ejemplo) una
-                          // vertical 9:16.
-                          style={aspectStyle(
-                            image.aspectRatio,
-                            image.file.variants?.thumb
-                          )}
-                          // El toque no debe caer en la imagen: en móvil el
-                          // navegador abre su visor nativo a pantalla
-                          // completa. Lo captura el botón de arriba.
-                          className="pointer-events-none w-full object-cover transition-transform duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] group-hover:scale-[1.03]"
-                          onError={fallbackToOriginal(image.file.url)}
-                        />
-                      </button>
-                      <figcaption className="flex items-center justify-between gap-2 px-2.5 py-2">
-                        <span className="text-muted-foreground truncate text-xs">
-                          {dateFormatter.format(new Date(image.createdAt))}
-                        </span>
-                        <Badge
-                          variant="success-light"
-                          size="sm"
-                          radius="full"
-                          className="tabular-nums"
-                          aria-label={`Costo: ${costLabel(image)}`}
-                          title={
-                            image.costMxn !== null
-                              ? "Costo de esta imagen en pesos, al TC FIX del día de generación"
-                              : "Costo de esta imagen en USD, TC no disponible"
-                          }
-                        >
-                          {costLabel(image)}
-                        </Badge>
-                      </figcaption>
-                    </figure>
-                  ) : null
-                )}
+                {galleryImages.map((image) => (
+                  <GalleryTile
+                    key={image.id}
+                    image={image}
+                    selectionMode={selectionMode}
+                    selected={selectedIds.has(image.id)}
+                    onOpen={(opened) => {
+                      setCopied(false)
+                      setViewer(opened)
+                    }}
+                    onToggle={toggleSelected}
+                    onLongPress={handleLongPress}
+                  />
+                ))}
               </div>
             ) : null}
           </section>
+
+          {/* Confirmación del borrado por lote: es una acción que no se
+              puede deshacer, así que pide confirmación y dice cuántas
+              imágenes van a desaparecer. */}
+          <AlertDialog
+            open={confirmBatchDelete}
+            onOpenChange={setConfirmBatchDelete}
+          >
+            <AlertDialogContent size="sm">
+              <AlertDialogHeader>
+                <AlertDialogMedia>
+                  <Trash2Icon aria-hidden="true" />
+                </AlertDialogMedia>
+                <AlertDialogTitle>
+                  {selectedIds.size === 1
+                    ? "¿Eliminar esta imagen?"
+                    : `¿Eliminar ${selectedIds.size} imágenes?`}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  Se borrarán de tu galería y de tu carpeta de almacenamiento.
+                  Esta acción no se puede deshacer.
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel size="sm">Cancelar</AlertDialogCancel>
+                <AlertDialogAction
+                  variant="destructive"
+                  size="sm"
+                  disabled={deletingMany}
+                  className={DESTRUCTIVE_BUTTON_CLASS}
+                  onClick={() => void removeSelected()}
+                >
+                  {deletingMany ? <Spinner className="size-3.5" /> : null}
+                  Eliminar
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </AlertDialogContent>
+          </AlertDialog>
         </TabsContent>
       </Tabs>
 
@@ -1643,6 +1989,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                         variant="destructive"
                         size="sm"
                         disabled={deleting}
+                        className={DESTRUCTIVE_BUTTON_CLASS}
                         onClick={() => void remove(viewer)}
                       >
                         {deleting ? <Spinner className="size-3.5" /> : null}
