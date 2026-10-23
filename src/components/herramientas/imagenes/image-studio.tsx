@@ -8,10 +8,12 @@ import {
   ImageIcon,
   MicIcon,
   PlusIcon,
+  RefreshCwIcon,
   SearchIcon,
   Share2Icon,
   SparklesIcon,
   Trash2Icon,
+  XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -60,10 +62,10 @@ import {
 } from "@/components/ui/card"
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
-  DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
@@ -198,6 +200,11 @@ function dictationCopy(supported: boolean, listening: boolean) {
 const dateFormatter = new Intl.DateTimeFormat("es", {
   dateStyle: "medium",
   timeStyle: "short",
+})
+
+// Solo el día: el visor lleva la fecha bajo la imagen, sin la hora.
+const dayFormatter = new Intl.DateTimeFormat("es", {
+  dateStyle: "medium",
 })
 
 const mxnFormatter = new Intl.NumberFormat("es-MX", {
@@ -337,6 +344,30 @@ function fallbackToOriginal(
   }
 }
 
+/**
+ * Cerrar del diálogo: el de la librería es *ghost* y su fondo solo aparece al
+ * pasar el mouse, así que en móvil la X quedaba invisible sobre la imagen.
+ * Este lleva un fondo redondo siempre visible.
+ */
+function ViewerCloseButton() {
+  return (
+    <DialogClose
+      render={
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          className="absolute top-2 right-2 rounded-full bg-black/55 text-white backdrop-blur-sm hover:bg-black/70"
+          title="Cerrar"
+        />
+      }
+    >
+      <XIcon aria-hidden="true" />
+      <span className="sr-only">Cerrar</span>
+    </DialogClose>
+  )
+}
+
 type ImageStudioProps = {
   /** Niveles del control de calidad (modelo por nivel) del usuario. */
   levels: readonly ImageLevel[]
@@ -354,6 +385,11 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   // edición manual del texto regresa al paso 1: lo procesado ya no corresponde
   // a lo que hay en el área.
   const [promptProcessed, setPromptProcessed] = React.useState(false)
+  // Descripción del usuario tal como la escribió, antes de que el modelo la
+  // reescribiera con la investigación: es la base limpia de cada intento, para
+  // que *Regenerar* repita la búsqueda desde cero y no desde el texto ya
+  // expandido. Se descarta cuando el usuario edita a mano el texto.
+  const [sourcePrompt, setSourcePrompt] = React.useState<string | null>(null)
   // Por omisión la herramienta genera en formato póster (9:16): es la
   // relación que más usa este panel.
   const [aspectRatio, setAspectRatio] = React.useState<string>("9:16")
@@ -444,6 +480,9 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const applyPromptEdit = React.useCallback((next: string) => {
     setPrompt(next)
     setPromptProcessed(false)
+    // El texto ya no viene del modelo: la base limpia que guardaba el
+    // intento anterior deja de servir y el flujo vuelve al paso 1.
+    setSourcePrompt(null)
     setDetailSources([])
     setDetailFacts([])
     setDetailNote(null)
@@ -741,8 +780,14 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     }
   }
 
-  async function enhancePrompt() {
-    const trimmed = prompt.trim()
+  /**
+   * Investiga y reescribe la descripción. `source` fija la base del intento:
+   * sin él se parte del texto que hay en el área; con él (lo que hace
+   * *Regenerar*) se parte de la descripción original, para que la búsqueda
+   * arranque en limpio y no sobre el texto ya expandido.
+   */
+  async function enhancePrompt(source?: string) {
+    const trimmed = (source ?? prompt).trim()
     if (!trimmed || enhancing || generating) return
     setEnhancing(true)
     setGenerateError(null)
@@ -782,6 +827,10 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       // La descripción ya está procesada: el botón pasa de *Procesar
       // descripción* a *Generar*.
       setPromptProcessed(true)
+      // La base limpia del intento: la descripción del usuario tal como la
+      // escribió, para que *Regenerar* pueda repetir la investigación desde
+      // el inicio.
+      setSourcePrompt(trimmed)
       const sources = body.data.sources ?? []
       const facts = body.data.facts ?? []
       setDetailSources(sources)
@@ -801,6 +850,18 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     } finally {
       setEnhancing(false)
     }
+  }
+
+  /**
+   * Deja el prompt en blanco para escribir uno nuevo desde cero: el texto
+   * procesado y sus fuentes se van con él. Los adjuntos se conservan (quitarlos
+   * es la acción de cada chip).
+   */
+  function clearPrompt() {
+    if (enhancing || generating) return
+    applyPromptEdit("")
+    setGenerateError(null)
+    promptRef.current?.focus()
   }
 
   /**
@@ -925,7 +986,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
             app, que es de 4rem. */}
         <div className="sticky top-16 z-10 -mx-4 mb-3.5 bg-background px-4 md:-mx-6 md:px-6">
           <TabsList variant="line" className="w-full">
-            <TabsTrigger value="generar">Generar</TabsTrigger>
+            <TabsTrigger value="generar">Crear</TabsTrigger>
             <TabsTrigger value="galeria">Galería</TabsTrigger>
           </TabsList>
         </div>
@@ -1014,6 +1075,43 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   className="resize-none placeholder:text-foreground/60"
                 />
               </InputGroup>
+              {/* *Regenerar* repite la investigación desde la descripción
+                  original del usuario, no desde el texto ya reescrito: otro
+                  intento en limpio cuando la búsqueda no trajo lo esperado.
+                  *Limpiar* deja el área en blanco para escribir un prompt
+                  nuevo desde cero. Los dos van juntos, a la derecha. */}
+              {sourcePrompt || prompt.trim() ? (
+                <div className="flex justify-end gap-2">
+                  {sourcePrompt ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => void enhancePrompt(sourcePrompt)}
+                      disabled={enhancing || generating}
+                      title="Repite la investigación desde tu descripción original, sin partir del texto ya reescrito"
+                    >
+                      {enhancing ? (
+                        <Spinner />
+                      ) : (
+                        <RefreshCwIcon data-icon="inline-start" aria-hidden="true" />
+                      )}
+                      Regenerar
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={clearPrompt}
+                    disabled={enhancing || generating}
+                    title="Borra la descripción para escribir un prompt nuevo desde cero"
+                  >
+                    <Trash2Icon data-icon="inline-start" aria-hidden="true" />
+                    Limpiar
+                  </Button>
+                </div>
+              ) : null}
               {dictating ? (
                 <p
                   role="status"
@@ -1224,13 +1322,13 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   </Stepper>
                   <span className="sr-only">
                     {promptProcessed
-                      ? "Paso 2 de 2: generar la imagen"
+                      ? "Paso 2 de 2: crear la imagen"
                       : "Paso 1 de 2: investigar y mejorar la descripción"}
                   </span>
                   {/* Un solo botón, dos pasos: primero *Investigar y mejorar
                       descripción* (investiga y reescribe el prompt) y, cuando
                       el texto ya está procesado, el mismo botón pasa a
-                      *Generar*. */}
+                      *Crear*. */}
                   <Button
                     className="w-full sm:w-auto sm:self-center lg:self-end"
                     onClick={() =>
@@ -1253,9 +1351,9 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                     {enhancing
                       ? "Investigando…"
                       : generating
-                        ? "Generando…"
+                        ? "Creando…"
                         : promptProcessed
-                          ? "Generar"
+                          ? "Crear"
                           : "Investigar y mejorar descripción"}
                   </Button>
                   {/* Atajo discreto para quien no necesita investigación
@@ -1273,7 +1371,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                       disabled={!canGenerate || enhancing}
                       title="Genera directamente con el texto tal como está, sin investigarlo antes"
                     >
-                      Generar sin procesar
+                      Crear sin investigar
                     </Button>
                   ) : null}
                 </div>
@@ -1437,15 +1535,14 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
           }
         }}
       >
-        <DialogContent className="touch-manipulation sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Imagen generada</DialogTitle>
-            <DialogDescription>
-              {viewer
-                ? dateFormatter.format(new Date(viewer.createdAt))
-                : null}
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent
+          className="touch-manipulation sm:max-w-2xl"
+          showCloseButton={false}
+        >
+          <ViewerCloseButton />
+          {/* El visor no lleva título visible: el nombre accesible se queda
+              solo para lectores de pantalla. */}
+          <DialogTitle className="sr-only">Imagen generada</DialogTitle>
           {viewer && viewer.file ? (
             <div className="flex flex-col gap-3">
               <div className="overflow-hidden rounded-lg bg-muted">
@@ -1487,6 +1584,11 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   {viewer.aspectRatio ?? "auto"}
                 </Badge>
                 <Badge variant="outline">{viewer.quality ?? "auto"}</Badge>
+                {/* La fecha (sin hora) en el mismo renglón de los datos, pegada
+                    al margen derecho. */}
+                <span className="text-muted-foreground ml-auto text-xs">
+                  {dayFormatter.format(new Date(viewer.createdAt))}
+                </span>
               </div>
               {/* Acciones sobre la imagen. Eliminar queda aparte de la acción
                   principal (descargar) y pide confirmación. */}
@@ -1594,8 +1696,10 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
         <Dialog open={zoomed} onOpenChange={setZoomed}>
           <DialogContent
             className="touch-manipulation inset-0 flex h-auto w-auto max-w-none translate-x-0 translate-y-0 items-center justify-center rounded-none bg-black p-0 text-white ring-0 sm:max-w-none"
+            showCloseButton={false}
             onClick={() => setZoomed(false)}
           >
+            <ViewerCloseButton />
             <DialogTitle className="sr-only">
               Imagen a pantalla completa
             </DialogTitle>
