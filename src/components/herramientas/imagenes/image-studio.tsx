@@ -6,6 +6,7 @@ import {
   CopyIcon,
   ImageDownIcon,
   ImageIcon,
+  MicIcon,
   PlusIcon,
   SearchIcon,
   Share2Icon,
@@ -52,6 +53,7 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   Card,
+  CardAction,
   CardContent,
   CardHeader,
   CardTitle,
@@ -98,6 +100,7 @@ import {
   useFileUpload,
   type FileWithPreview,
 } from "@/hooks/use-file-upload"
+import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
 
 interface ImageVariant {
   variant: "low" | "thumb"
@@ -149,6 +152,48 @@ type ReferenceState = {
 }
 
 const MAX_PROMPT_LENGTH = 2000
+
+/**
+ * Junta el texto que ya estaba en el área con lo que se dictó. Cada sesión de
+ * dictado se agrega a lo escrito antes y el resultado nunca pasa del límite
+ * del área.
+ */
+function joinPrompt(base: string, spoken: string): string {
+  const clean = spoken.trim()
+  const previous = base.trim()
+  const joined = clean ? (previous ? `${previous} ${clean}` : clean) : base
+  return joined.length > MAX_PROMPT_LENGTH
+    ? joined.slice(0, MAX_PROMPT_LENGTH)
+    : joined
+}
+
+/** Copy del dictado según su estado: una sola fuente para botón, tooltip,
+ *  estado de escucha y avisos. */
+function dictationCopy(supported: boolean, listening: boolean) {
+  if (!supported) {
+    return {
+      label: "Dictado por voz no disponible",
+      tooltip: "El dictado por voz no está disponible aquí",
+      error:
+        "El dictado por voz no está disponible aquí. Usa Chrome, Edge o Safari en una conexión segura.",
+      status: "",
+    }
+  }
+  if (listening) {
+    return {
+      label: "Detener el dictado",
+      tooltip: "Detener el dictado",
+      error: "",
+      status: "Escuchando… detén el micrófono cuando termines.",
+    }
+  }
+  return {
+    label: "Dictar la descripción",
+    tooltip: "Dictar la descripción con la voz",
+    error: "",
+    status: "",
+  }
+}
 
 const dateFormatter = new Intl.DateTimeFormat("es", {
   dateStyle: "medium",
@@ -389,6 +434,92 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [reloadToken, setReloadToken] = React.useState(0)
 
   const promptRef = React.useRef<HTMLTextAreaElement>(null)
+
+  /**
+   * Cambia el prompt (a mano o por voz): el texto deja de corresponder a lo
+   * que el modelo procesó, así que el flujo regresa al paso 1. Es la única
+   * puerta de escritura del prompt con reinicio, para que no deriven copias
+   * de este bloque.
+   */
+  const applyPromptEdit = React.useCallback((next: string) => {
+    setPrompt(next)
+    setPromptProcessed(false)
+    setDetailSources([])
+    setDetailFacts([])
+    setDetailNote(null)
+  }, [])
+
+  // Dictado por voz: `dictationBase` es lo que había escrito cuando empezó la
+  // sesión, para que cada sesión se agregue a lo escrito antes. Va en un ref
+  // porque el reconocedor puede devolver palabras antes de que el área se
+  // vuelva a pintar.
+  const dictationBaseRef = React.useRef("")
+  // Si el usuario escribe mientras se dicta, lo escrito manda: la sesión se
+  // cierra sin guardar lo dictado.
+  const dictationCancelledRef = React.useRef(false)
+
+  const {
+    isSupported: dictationSupported,
+    isListening: dictating,
+    error: dictationError,
+    start: startDictation,
+    stop: stopDictation,
+  } = useSpeechRecognition({
+    lang: "es-MX",
+    // El texto dictado entra por `applyPromptEdit`: solo cuando de verdad
+    // cambia el texto se reinicia lo procesado (una sesión vacía no toca
+    // nada).
+    onTranscript: (text) => {
+      if (dictationCancelledRef.current || !text.trim()) return
+      applyPromptEdit(joinPrompt(dictationBaseRef.current, text))
+    },
+    onEnd: (text) => {
+      const base = dictationBaseRef.current
+      dictationBaseRef.current = ""
+      if (dictationCancelledRef.current) {
+        dictationCancelledRef.current = false
+        return
+      }
+      if (text.trim()) {
+        applyPromptEdit(joinPrompt(base, text))
+      }
+      promptRef.current?.focus()
+    },
+  })
+
+  // Copy del dictado disponible desde aquí: el toast de "no soportado" y el
+  // botón comparten la misma fuente.
+  const dictation = dictationCopy(dictationSupported, dictating)
+
+  const toggleDictation = React.useCallback(() => {
+    if (dictating) {
+      stopDictation()
+      return
+    }
+    if (!dictationSupported) {
+      toast.error(dictation.error)
+      return
+    }
+    // Mientras vuela una investigación o una generación no se dicta: la
+    // respuesta llegaría y pisaría el texto dictado (o al revés).
+    if (enhancing || generating) return
+    dictationBaseRef.current = prompt
+    startDictation()
+  }, [
+    dictating,
+    dictation,
+    dictationSupported,
+    enhancing,
+    generating,
+    prompt,
+    startDictation,
+    stopDictation,
+  ])
+
+  React.useEffect(() => {
+    if (!dictationError) return
+    toast.error(dictationError)
+  }, [dictationError])
 
   const [
     { files: pickedFiles },
@@ -772,6 +903,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const canGenerate =
     prompt.trim().length > 0 &&
     !generating &&
+    !dictating &&
     !uploadingReferences &&
     !failedReferences &&
     !referencesTooBig
@@ -779,6 +911,7 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     prompt.trim().length > 0 &&
     !enhancing &&
     !generating &&
+    !dictating &&
     !uploadingReferences &&
     !failedReferences &&
     !referencesTooBig
@@ -801,6 +934,32 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
           <Card>
             <CardHeader>
               <CardTitle>Descripción</CardTitle>
+              {/* El micrófono va a la derecha de la etiqueta, a su misma
+                  altura: dictar es la otra forma de escribir el prompt.
+                  Deshabilitado mientras vuela una investigación o una
+                  generación, para que su respuesta no pise el texto dictado. */}
+              <CardAction>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <Button
+                        type="button"
+                        variant={dictating ? "destructive" : "ghost"}
+                        size="icon-sm"
+                        onClick={toggleDictation}
+                        disabled={enhancing || generating}
+                        aria-label={dictation.label}
+                        aria-pressed={dictating}
+                        aria-disabled={!dictationSupported}
+                        className="aria-disabled:opacity-50"
+                      />
+                    }
+                  >
+                    <MicIcon aria-hidden="true" />
+                  </TooltipTrigger>
+                  <TooltipContent>{dictation.tooltip}</TooltipContent>
+                </Tooltip>
+              </CardAction>
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               {referenceItems.length > 0 ? (
@@ -840,14 +999,13 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   ref={promptRef}
                   value={prompt}
                   onChange={(event) => {
-                    setPrompt(event.target.value)
-                    // Editar a mano regresa al paso 1: las fuentes, los datos
-                    // confirmados y el aviso vienen de la última investigación
-                    // y ya no corresponden al texto nuevo.
-                    setPromptProcessed(false)
-                    setDetailSources([])
-                    setDetailFacts([])
-                    setDetailNote(null)
+                    // Escribir mientras se dicta manda sobre lo dictado: la
+                    // sesión se cierra sin guardar lo que se estaba oyendo.
+                    if (dictating) {
+                      dictationCancelledRef.current = true
+                      stopDictation()
+                    }
+                    applyPromptEdit(event.target.value)
                   }}
                   placeholder="Ejemplo: Crea un póster con el siguiente partido de la selección mexicana de fútbol."
                   rows={3}
@@ -856,6 +1014,27 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   className="resize-none placeholder:text-foreground/60"
                 />
               </InputGroup>
+              {dictating ? (
+                <p
+                  role="status"
+                  className="text-muted-foreground flex items-center gap-2 text-xs"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="bg-destructive size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+                  />
+                  {dictation.status}
+                </p>
+              ) : null}
+              {prompt.length >= MAX_PROMPT_LENGTH ? (
+                <p
+                  role="status"
+                  className="text-muted-foreground text-xs"
+                >
+                  Límite de {MAX_PROMPT_LENGTH} caracteres alcanzado: lo que
+                  sigas dictando o escribiendo no se agrega.
+                </p>
+              ) : null}
               {detailNote ? (
                 <p className="text-muted-foreground text-xs">{detailNote}</p>
               ) : null}
@@ -1082,8 +1261,9 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   {/* Atajo discreto para quien no necesita investigación
                       (prompts imaginativos): genera con el texto tal cual.
                       Solo aparece con texto escrito y sin procesar, para no
-                      competir con la acción principal. */}
-                  {!promptProcessed && prompt.trim().length > 0 ? (
+                      competir con la acción principal. Mientras se dicta no
+                      aparece: el texto todavía está en camino. */}
+                  {!promptProcessed && !dictating && prompt.trim().length > 0 ? (
                     <Button
                       type="button"
                       variant="link"
