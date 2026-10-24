@@ -3,7 +3,7 @@ import { requireRole } from "@/server/auth/guards"
 import { listUsers } from "@/server/auth/users"
 
 export const metadata = {
-  title: "Users",
+  title: "Usuarios",
 }
 
 function formatDate(date: Date): string {
@@ -18,7 +18,7 @@ export default async function UsersPage() {
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-col gap-0.5">
-          <h1 className="text-lg font-semibold tracking-tight">Users</h1>
+          <h1 className="text-lg font-semibold tracking-tight">Usuarios</h1>
           <p className="text-muted-foreground text-sm">
             Admin and distributor accounts with access to this dashboard.
           </p>

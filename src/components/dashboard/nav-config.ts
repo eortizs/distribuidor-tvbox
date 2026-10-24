@@ -1,6 +1,6 @@
 import {
   BotIcon,
-  BoxesIcon,
+  CircleUserRoundIcon,
   ClapperboardIcon,
   CreditCardIcon,
   ImageIcon,
@@ -10,7 +10,7 @@ import {
   SettingsIcon,
   TrendingDownIcon,
   TrendingUpIcon,
-  UsersIcon,
+  UsersRoundIcon,
 } from "lucide-react"
 
 export const groupLabels = {
@@ -22,10 +22,10 @@ export const groupLabels = {
 
 export const navMain = [
   { title: "Dashboard", icon: LayoutDashboardIcon, href: "/" },
-  { title: "Entities", icon: BoxesIcon, href: "/entities" },
+  { title: "Clientes", icon: UsersRoundIcon, href: "/entities" },
   {
-    title: "Users",
-    icon: UsersIcon,
+    title: "Usuarios",
+    icon: CircleUserRoundIcon,
     href: "/users",
     adminOnly: true,
   },
