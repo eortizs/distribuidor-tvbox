@@ -3,6 +3,7 @@ import {
   BotIcon,
   CircleUserRoundIcon,
   ClapperboardIcon,
+  FlaskConicalIcon,
   HouseIcon,
   ImageIcon,
   LifeBuoyIcon,
@@ -109,7 +110,7 @@ export const navSections: NavSection[] = [
     title: "Soporte",
     icon: LifeBuoyIcon,
     kind: "menu",
-    match: { mode: "prefix", paths: ["/asistente", "/configuracion"] },
+    match: { mode: "prefix", paths: ["/asistente", "/configuracion", "/lab"] },
     children: [
       { title: "Asistente", icon: BotIcon, href: "/asistente" },
       {
@@ -117,6 +118,7 @@ export const navSections: NavSection[] = [
         icon: SettingsIcon,
         href: "/configuracion",
       },
+      { title: "Lab", icon: FlaskConicalIcon, href: "/lab" },
     ],
   },
 ]
