@@ -1,3 +1,4 @@
+import { ConfiguracionMenu } from "@/components/configuracion/configuracion-menu"
 import { ConfiguracionView } from "@/components/configuracion/configuracion-view"
 import { requireUser } from "@/server/auth/guards"
 import { allImageModels } from "@/server/images/models"
@@ -18,11 +19,12 @@ export default async function ConfiguracionPage() {
       <div className="flex flex-col gap-0.5">
         <h1 className="text-lg font-semibold tracking-tight">Configuración</h1>
         <p className="text-muted-foreground text-sm">
-          Ajustes de tu cuenta: qué modelo de imagen, con qué calidad y a qué
-          tamaño usa cada nivel del control de calidad de la herramienta
-          Imágenes.
+          Ajustes del panel: los modelos de imagen de cada nivel de calidad y la
+          API de licencias de FlujoTV.
         </p>
       </div>
+
+      <ConfiguracionMenu active="modelos-imagen" />
 
       <ConfiguracionView models={allImageModels()} levels={levels} />
     </div>
