@@ -1309,11 +1309,12 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
       <Tabs value={tab} onValueChange={(value) => setTab(value as string)}>
         {/* Barra de pestañas fija: el contenedor se estira de borde a borde
             (márgenes negativos) para que su fondo opaco tape el contenido que
-            pasa por debajo, y `top-16` la deja justo bajo la cabecera de la
-            app, que es de 4rem. Cuando la galería está en modo selección, la
-            barra de acciones se pega aquí (debajo de las pestañas) para que
-            el botón de eliminar acompañe al scroll sin tapar el contenido. */}
-        <div className="sticky top-16 z-10 -mx-4 mb-3.5 flex flex-col gap-2 bg-background px-4 md:-mx-6 md:px-6">
+            pasa por debajo, y `top-[var(--shell-header-height)]` la deja justo
+            bajo la cabecera de la app, que es de 4rem más el safe area
+            superior. Cuando la galería está en modo selección, la barra de
+            acciones se pega aquí (debajo de las pestañas) para que el botón de
+            eliminar acompañe al scroll sin tapar el contenido. */}
+        <div className="sticky top-[var(--shell-header-height)] z-10 -mx-4 mb-3.5 flex flex-col gap-2 bg-background px-4 md:-mx-6 md:px-6">
           <TabsList variant="line" className="w-full">
             <TabsTrigger value="generar">Crear</TabsTrigger>
             <TabsTrigger value="galeria">Galería</TabsTrigger>

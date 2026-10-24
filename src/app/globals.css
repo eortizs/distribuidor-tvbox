@@ -104,6 +104,12 @@
   --invert-foreground: var(--color-zinc-50);
   --mascota-face: #fcfcfb;
   --mascota-ink: #171717;
+
+  /* Shell del dashboard: cabecera, barra inferior y alto útil del viewport. */
+  --shell-header-height: calc(4rem + env(safe-area-inset-top));
+  --shell-bottom-nav-height: calc(4rem + env(safe-area-inset-bottom));
+  --shell-bottom-nav-space: 0px;
+  --shell-viewport-height: 100svh;
 }
 
 .dark {

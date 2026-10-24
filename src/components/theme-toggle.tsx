@@ -13,9 +13,9 @@ import {
 import { mobileNavClass } from "@/components/dashboard/nav-layout"
 
 const themeOptions = [
-  { value: "light", label: "Light", icon: SunIcon },
-  { value: "dark", label: "Dark", icon: MoonIcon },
-  { value: "system", label: "System", icon: MonitorIcon },
+  { value: "light", label: "Claro", icon: SunIcon },
+  { value: "dark", label: "Oscuro", icon: MoonIcon },
+  { value: "system", label: "Sistema", icon: MonitorIcon },
 ] as const
 
 function ThemeToggle() {
@@ -26,7 +26,7 @@ function ThemeToggle() {
       <DropdownMenuSubTrigger className={mobileNavClass.dropdownSubTrigger}>
         <SunIcon className="dark:hidden" aria-hidden="true" />
         <MoonIcon className="hidden dark:block" aria-hidden="true" />
-        <span>Theme</span>
+        <span>Tema</span>
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className={mobileNavClass.dropdownSubContent}>
         <DropdownMenuRadioGroup value={theme} onValueChange={setTheme}>

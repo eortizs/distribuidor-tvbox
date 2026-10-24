@@ -34,6 +34,8 @@ export const viewport: Viewport = {
     { media: "(prefers-color-scheme: light)", color: "#fcfcfb" },
     { media: "(prefers-color-scheme: dark)", color: "#171717" },
   ],
+  viewportFit: "cover",
+  interactiveWidget: "resizes-visual",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -49,7 +51,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <AppSplash />
             {children}
           </TooltipProvider>
-          <Toaster />
+          <Toaster
+            offset={{ bottom: "var(--shell-bottom-nav-space)" }}
+            mobileOffset={{ bottom: "var(--shell-bottom-nav-space)" }}
+          />
         </ThemeProvider>
       </body>
     </html>

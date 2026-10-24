@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function AnimacionPage() {
   return (
-    <div className="flex h-[calc(100svh-4rem)] flex-col gap-4 p-4 md:p-6">
+    <div className="flex h-[calc(var(--shell-viewport-height)-var(--shell-header-height)-var(--shell-bottom-nav-space))] flex-col gap-4 p-4 md:p-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="flex flex-col gap-0.5">
           <h1 className="text-lg font-semibold tracking-tight">Animación</h1>

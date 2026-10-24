@@ -8,7 +8,7 @@ export const metadata: Metadata = {
 
 export default function AsistentePage() {
   return (
-    <div className="flex h-[calc(100svh-4rem)] flex-col p-4 md:p-6">
+    <div className="flex h-[calc(var(--shell-viewport-height)-var(--shell-header-height)-var(--shell-bottom-nav-space))] flex-col p-4 md:p-6">
       <AsistenteChat />
     </div>
   )
