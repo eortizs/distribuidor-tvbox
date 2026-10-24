@@ -261,7 +261,7 @@ El agente EVE no vive bajo `/api`: sus rutas (`/eve/v1/health`, `/eve/v1/session
 
 ```
 db/                      # DDL normativo (schema.sql, auth-schema.sql, storage-schema.sql, images-schema.sql, expenses-schema.sql, animation-schema.sql, eve-sessions-schema.sql, settings-schema.sql, variants-schema.sql) + create-user.mjs, ensure-user-storage.mjs, backfill-image-expenses.mjs, backfill-image-variants.mjs, sweep-attachments.mjs
-assets/                  # Artework de marca (mascota y logotipo TVBOX) usado como fuente de los SVG en línea
+assets/                  # Artework de marca (mascota y logotipo TVBOX) usado como fuente de los SVG en línea + generate-icons.mjs (genera los iconos de la app)
 agent/                   # Agente EVE: agent.ts (modelo dinámico por turno + defaultTools off), instructions.md, channels/eve.ts, hooks/tarificador.ts y tools/
 src/server/
   db.ts                  # Pool pg singleton
@@ -283,6 +283,7 @@ src/hooks/
   use-long-press.ts      # Pulsación larga por eventos de puntero (tap sostenido / clic sostenido): descarta el clic de salida y el menú nativo
 src/components/
   app-header-date.tsx    # Indicador de fecha del header (rótulo `Vie 23 Oct` + popover con calendario)
+  app-splash.tsx         # Splash de arranque (mascota + wordmark) que se retira cuando la ruta termina de cargar
   mascot-logo.tsx        # Mascota TVBOX (SVG en línea, se invierte en tema oscuro)
   tvbox-wordmark.tsx     # Logotipo TVBOX NETWORK (SVG en línea, un path con fill-rule="evenodd")
   finanzas/              # GastosView (grid + KPIs + form) y EstadoCuentaView (KPIs + gráfico + desglose)
@@ -294,7 +295,12 @@ src/app/
   actions/               # Server actions (login, registro, logout, perfil, configuracion, crear usuario)
   login/                 # Login (card ReUI)
   register/              # Autorregistro (crea user distribuidor + entidad Cuenta)
+  loading.tsx            # Estado de carga de la ruta raíz (marca `data-app-loading`)
+  manifest.ts            # Manifiesto PWA (iconos de la app)
+  icon.svg               # Favicon con la mascota
+  apple-icon.png         # Icono para iOS (180x180)
   proxy.ts (en src/)     # Gate de sesión/rol antes de renderizar
+public/icons/            # Iconos PWA de la mascota: 192, 512 y 512 con máscara
 ```
 
 ## Tema y marca
@@ -305,7 +311,16 @@ src/app/
   - `src/components/tvbox-wordmark.tsx` (`TvboxWordmark`): el logotipo *TVBOX NETWORK*. Todos los trazos del artwork —**incluidos los contadores blancos de la B y la O**— van en **un solo `<path>` con `fill-rule="evenodd"`**: al superponerse, los contadores se recortan como huecos reales y quedan transparentes. Sin eso, al invertir los colores las letras quedarían blancas y sus huecos también, y el logotipo se perdería. El relleno es `fill-sidebar-foreground`, que se invierte solo con el tema.
   - Los tokens viven en `globals.css` (`--mascota-ink` / `--mascota-face`, con su par invertido en `.dark`) y se exponen como utilidades de Tailwind (`fill-mascota-ink`, `fill-mascota-face`) desde `@theme inline`.
   - **Dónde se usan**: la cabecera del sidebar muestra el wordmark y la mascota (en ese orden) con la etiqueta *Distribuidor* debajo (`text-sm font-semibold`); el header del dashboard lleva la mascota junto al botón de hamburguesa. Al colapsar el sidebar a modo iconos se ocultan el wordmark y la etiqueta, y queda solo la mascota.
-  - El monograma "T" (`src/components/togu-logo.tsx`, `fill-primary`/`fill-primary-foreground`) sigue en login/register (`auth-shell.tsx`) y en los metadatos; sus assets estáticos viven en `public/togu-icon-light.svg` y `public/togu-icon-dark.svg` (colores explícitos `#171717`/`#fafafa`), y el favicon es `src/app/icon.svg`, que alterna claro/oscuro según el `prefers-color-scheme` del navegador (sustituye al antiguo `favicon.ico`).
+  - El monograma "T" (`src/components/togu-logo.tsx`, `fill-primary`/`fill-primary-foreground`) sigue en login/register (`auth-shell.tsx`) y en los metadatos; sus assets estáticos viven en `public/togu-icon-light.svg` y `public/togu-icon-dark.svg` (colores explícitos `#171717`/`#fafafa`).
+- **Icono de la app**: la mascota es el icono de la app, y **todos los formatos se generan desde el artwork** con `node assets/generate-icons.mjs` (no se editan a mano): el script mide la caja real de la mascota (renderizando los paths sin el rectángulo de fondo y recortando con `sharp`), la centra en un lienzo de 512×512 y escribe:
+  - `src/app/icon.svg`: el favicon. Cuadro redondeado (radio 22%) con las clases `.tile`, `.body`, `.face` y `.eye`, que **alternan claro/oscuro según el `prefers-color-scheme` del navegador** (igual que hacía el monograma anterior): en claro el cuadro es `#fcfcfb` y la mascota `#171717`; en oscuro se invierten. Sustituye al antiguo `favicon.ico`.
+  - `src/app/apple-icon.png` (180×180, cuadrado sin radio porque iOS aplica su propia máscara), `public/icons/icon-192.png`, `public/icons/icon-512.png` y `public/icons/icon-maskable-512.png` (este último a sangre completa y con la mascota dentro del círculo seguro del 80%).
+  - `src/app/manifest.ts`: el manifiesto PWA (nombre *Distribuidor TVBox*, `display: standalone`, `theme_color`/`background_color` `#fcfcfb` e iconos 192/512 + el de máscara). Next.js lo enlaza solo; **`manifest.webmanifest` está excluido del `matcher` de `src/proxy.ts`**, porque si no el gate de sesión lo redirigía a `/login` y el navegador recibía un 307 en vez del manifiesto.
+  - El layout raíz declara `applicationName`, `appleWebApp` y un `viewport` con `themeColor` por tema (`#fcfcfb` claro / `#171717` oscuro).
+- **Splash de arranque**: al cargar la app se muestra una **ventana de splash** con la marca: la mascota (`h-24`), el wordmark *TVBOX NETWORK* (`h-10`) y un `Spinner` con el rótulo *Cargando…*, sobre `bg-background` a pantalla completa (`src/components/app-splash.tsx`, montado en el layout raíz). Puntos que conviene no romper:
+  - El splash **se retira cuando la ruta termina de cargar**: los `loading.tsx` marcan su estado con `data-app-loading`, y un `MutationObserver` detecta cuándo ese marcado sale del DOM (el fallback y el contenido entran en el mismo commit). Como respaldo se usa el evento `load` del navegador y un máximo de 5 s.
+  - **Dura al menos 800 ms** para que no parpadee en cargas rápidas, y se desvanece en 300 ms (`transition-opacity`, curva de casa); con `prefers-reduced-motion` el desvanecido es instantáneo y la entrada del lockup (`splash-enter` en `globals.css`) no se anima.
+  - El splash es **del layout raíz**, así que no reaparece al navegar dentro de la app; los `loading.tsx` (raíz y grupo `(dashboard)`) son los que cubren las navegaciones internas, sin desmontar el sidebar.
 
 ## Convenciones de UI
 
