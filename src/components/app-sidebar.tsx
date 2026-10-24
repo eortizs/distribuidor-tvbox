@@ -22,6 +22,7 @@ import {
   navSecondary,
   profileNav,
 } from "@/components/dashboard/nav-config"
+import { mobileNavClass } from "@/components/dashboard/nav-layout"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -58,8 +59,8 @@ export function AppSidebar({ user }: { user: AuthUser }) {
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader>
-        <div className="flex items-start justify-between gap-2 px-2 py-1.5">
+      <SidebarHeader className="pt-[calc(0.5rem+env(safe-area-inset-top))] md:pt-2">
+        <div className="flex items-start justify-between gap-2 px-3 py-2 md:px-2 md:py-1.5">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <TvboxWordmark className="group-data-[collapsible=icon]:hidden" />
@@ -69,22 +70,26 @@ export function AppSidebar({ user }: { user: AuthUser }) {
               Distribuidor
             </span>
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:hidden"
-            onClick={closeMobilePanel}
-          >
-            <XIcon aria-hidden="true" />
-            <span className="sr-only">Cerrar menú</span>
-          </Button>
+          <div className="-m-1 p-1 md:hidden">
+            <Button
+              variant="ghost"
+              size="icon-lg"
+              className="text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+              onClick={closeMobilePanel}
+            >
+              <XIcon aria-hidden="true" />
+              <span className="sr-only">Cerrar menú</span>
+            </Button>
+          </div>
         </div>
       </SidebarHeader>
-      <SidebarContent>
+      <SidebarContent className="gap-3 md:gap-0">
         <SidebarGroup>
-          <SidebarGroupLabel>{groupLabels.main}</SidebarGroupLabel>
+          <SidebarGroupLabel className={mobileNavClass.groupLabel}>
+            {groupLabels.main}
+          </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className={mobileNavClass.menu}>
               {items.map((item) => {
                 const isActive =
                   item.href === "/"
@@ -96,6 +101,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                       tooltip={item.title}
                       isActive={isActive}
                       aria-current={isActive ? "page" : undefined}
+                      className={mobileNavClass.item}
                       render={
                         <Link href={item.href} onClick={closeMobilePanel} />
                       }
@@ -109,6 +115,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   tooltip="Analytics"
+                  className={mobileNavClass.item}
                   render={
                     <Link href="#" onClick={closeMobilePanel} />
                   }
@@ -121,9 +128,11 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           </SidebarGroupContent>
         </SidebarGroup>
         <SidebarGroup>
-          <SidebarGroupLabel>{herramientasNav.group}</SidebarGroupLabel>
+          <SidebarGroupLabel className={mobileNavClass.groupLabel}>
+            {herramientasNav.group}
+          </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className={mobileNavClass.menu}>
               {herramientasNav.children.map((child) => {
                 const isActive = pathname.startsWith(child.href)
                 return (
@@ -132,6 +141,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                       tooltip={child.title}
                       isActive={isActive}
                       aria-current={isActive ? "page" : undefined}
+                      className={mobileNavClass.item}
                       render={
                         <Link href={child.href} onClick={closeMobilePanel} />
                       }
@@ -146,9 +156,11 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           </SidebarGroupContent>
         </SidebarGroup>
         <SidebarGroup>
-          <SidebarGroupLabel>{finanzasNav.group}</SidebarGroupLabel>
+          <SidebarGroupLabel className={mobileNavClass.groupLabel}>
+            {finanzasNav.group}
+          </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className={mobileNavClass.menu}>
               {finanzasNav.children.map((child) => {
                 const isActive = pathname.startsWith(child.href)
                 return (
@@ -157,6 +169,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                       tooltip={child.title}
                       isActive={isActive}
                       aria-current={isActive ? "page" : undefined}
+                      className={mobileNavClass.item}
                       render={
                         <Link href={child.href} onClick={closeMobilePanel} />
                       }
@@ -171,9 +184,11 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           </SidebarGroupContent>
         </SidebarGroup>
         <SidebarGroup>
-          <SidebarGroupLabel>{groupLabels.support}</SidebarGroupLabel>
+          <SidebarGroupLabel className={mobileNavClass.groupLabel}>
+            {groupLabels.support}
+          </SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
+            <SidebarMenu className={mobileNavClass.menu}>
                 {navSecondary.map((item) => {
                   const isActive = item.href
                     ? pathname.startsWith(item.href)
@@ -184,6 +199,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                         tooltip={item.title}
                         isActive={isActive}
                         aria-current={isActive ? "page" : undefined}
+                        className={mobileNavClass.item}
                         render={
                           item.href ? (
                             <Link
@@ -205,14 +221,19 @@ export function AppSidebar({ user }: { user: AuthUser }) {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter>
+      <SidebarFooter className="pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:pb-2">
         <SidebarMenu>
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger
-                render={<SidebarMenuButton size="lg" className="w-full" />}
+                render={
+                  <SidebarMenuButton
+                    size="lg"
+                    className="w-full px-3 text-base md:px-2 md:text-sm"
+                  />
+                }
               >
-                <div className="bg-primary text-primary-foreground flex size-7 shrink-0 items-center justify-center rounded-xs text-xs font-semibold">
+                <div className="bg-primary text-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-xs text-xs font-semibold md:size-7">
                   {user.username.slice(0, 2).toUpperCase()}
                 </div>
                 <div className="flex min-w-0 flex-col text-start">
@@ -222,17 +243,26 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                 </div>
                 <ChevronsUpDownIcon className="ms-auto" aria-hidden="true" />
               </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" className="w-56">
+              <DropdownMenuContent
+                side="top"
+                align="start"
+                className={mobileNavClass.dropdownContent}
+              >
                 <DropdownMenuGroup>
                   <DropdownMenuItem
+                    className={mobileNavClass.dropdownItem}
                     render={
                       <Link href={profileNav.href} onClick={closeMobilePanel} />
                     }
                   >
                     {profileNav.title}
                   </DropdownMenuItem>
-                  <DropdownMenuItem>Billing</DropdownMenuItem>
-                  <DropdownMenuItem>Notifications</DropdownMenuItem>
+                  <DropdownMenuItem className={mobileNavClass.dropdownItem}>
+                    Billing
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className={mobileNavClass.dropdownItem}>
+                    Notifications
+                  </DropdownMenuItem>
                 </DropdownMenuGroup>
                 <DropdownMenuSeparator />
                 <ThemeToggle />
@@ -241,6 +271,7 @@ export function AppSidebar({ user }: { user: AuthUser }) {
                   <DropdownMenuItem
                     variant="destructive"
                     closeOnClick={false}
+                    className={mobileNavClass.dropdownItem}
                     render={<button type="submit" className="w-full" />}
                   >
                     <LogOutIcon aria-hidden="true" />
