@@ -99,6 +99,7 @@ const STATUS_ALIASES: Record<string, string> = {
   enabled: "activo",
   vigente: "activo",
   valida: "activo",
+  válido: "activo",
   valid: "activo",
   true: "activo",
   expired: "vencido",
@@ -135,6 +136,7 @@ const CLIENT_USER_KEYS = [
 const CLIENT_EMAIL_KEYS = ["email", "correo", "correo_electronico", "mail"]
 const CLIENT_STATUS_KEYS = ["status", "estado", "state", "situacion"]
 const CLIENT_EXPIRES_KEYS = [
+  "end_date",
   "expires_at",
   "expiration",
   "expiry",
