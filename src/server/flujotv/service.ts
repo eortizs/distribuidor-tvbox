@@ -13,6 +13,7 @@ import type {
   FlujoLicenseRecord,
   FlujoRawResult,
   FlujoRenewalResult,
+  FlujoResellersResponse,
   FlujoStatus,
   RenewalMonths,
 } from "@/lib/flujotv"
@@ -440,6 +441,79 @@ export async function listFlujoClients(
       : null
 
   return { clients, total, endpoint }
+}
+
+/**
+ * Lista los resellers del panel con sus clientes asignados. Es una lectura de
+ * disponibilidad: la API responde desde su caché, así que junto al listado se
+ * devuelve la antigüedad reportada para que el operador sepa qué tan fresco
+ * es el dato.
+ */
+export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
+  // El `search_term` vacío viaja en la ruta porque buildQuery descarta los
+  // valores vacíos: sin él, la API aplica su término por defecto y sirve la
+  // caché de otro término en lugar del listado completo.
+  const response = await flujoRequest<unknown>("/resellers?search_term=", {
+    method: "GET",
+    timeoutMs: FLUJO_READ_TIMEOUT_MS,
+  })
+
+  const meta = isRecord(response.data) ? response.data : {}
+
+  // La API señala fallo con HTTP 200 y `success: false` (p. ej. sin caché
+  // para el término): se propaga como error en vez de listado vacío.
+  if (meta.success === false) {
+    throw new FlujoApiError(
+      502,
+      "upstream_error",
+      pickString(meta, ["message", "detail", "error"]) ??
+        "La API de FlujoTV no pudo entregar la disponibilidad de resellers.",
+      { details: response.data }
+    )
+  }
+
+  const rows = findArray(response.data, [
+    "resellers",
+    "items",
+    "results",
+    "data",
+  ])
+  const resellers = (rows ?? []).filter(isRecord).map((row, index) => {
+    const name =
+      pickString(row, ["name", "nombre", "reseller", "user_name", "username"]) ??
+      `#${index + 1}`
+    return {
+      id: name,
+      name,
+      clientsCount: pickNumber(row, [
+        "clients_count",
+        "clientsCount",
+        "clients",
+        "clientes",
+        "total_clients",
+      ]),
+      raw: row,
+    }
+  })
+
+  return {
+    resellers,
+    totalResellers: pickNumber(meta, [
+      "total_resellers",
+      "totalResellers",
+      "total",
+    ]),
+    clientsWithoutDistributor: pickNumber(meta, [
+      "clients_without_distributor",
+      "clients_without_reseller",
+      "clientsWithoutDistributor",
+      "clientsWithoutReseller",
+    ]),
+    fromCache: pickBoolean(meta, ["from_cache", "fromCache"]),
+    cacheAge: pickString(meta, ["cache_age", "cacheAge"]),
+    searchTerm: pickString(meta, ["search_term", "searchTerm"]),
+    endpoint: "/resellers",
+  }
 }
 
 export async function getFlujoClient(

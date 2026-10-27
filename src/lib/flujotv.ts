@@ -38,6 +38,28 @@ export interface FlujoLicenseRecord {
   raw: Record<string, unknown>
 }
 
+export interface FlujoReseller {
+  /** Identificador estable de la fila: el nombre del reseller. */
+  id: string
+  name: string
+  clientsCount: number | null
+  raw: Record<string, unknown>
+}
+
+export interface FlujoResellersResponse {
+  resellers: FlujoReseller[]
+  totalResellers: number | null
+  /** Clientes que aún no pertenecen a ningún reseller (distribuidor). */
+  clientsWithoutDistributor: number | null
+  /** Si la respuesta viene de la caché del panel de FlujoTV. */
+  fromCache: boolean | null
+  /** Antigüedad de la caché, tal como la reporta la API. */
+  cacheAge: string | null
+  /** Término de búsqueda que aplicó la API (vacío = listado completo). */
+  searchTerm: string | null
+  endpoint: string
+}
+
 export interface FlujoHealth {
   reachable: boolean
   status: string | null

@@ -5,6 +5,7 @@ import type {
   FlujoLicensesResponse,
   FlujoRawResult,
   FlujoRenewalResult,
+  FlujoResellersResponse,
   FlujoStatus,
 } from "@/lib/flujotv"
 
@@ -72,6 +73,11 @@ export async function fetchFlujoClients(params: {
 export async function fetchFlujoLicenses(): Promise<FlujoLicensesResponse> {
   const response = await fetch("/api/flujotv/licenses", { cache: "no-store" })
   return parse<FlujoLicensesResponse>(response)
+}
+
+export async function fetchFlujoResellers(): Promise<FlujoResellersResponse> {
+  const response = await fetch("/api/flujotv/resellers", { cache: "no-store" })
+  return parse<FlujoResellersResponse>(response)
 }
 
 export async function renewFlujoLicense(params: {

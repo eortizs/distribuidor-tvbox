@@ -24,8 +24,9 @@ import { fetchFlujoStatus } from "./flujo-api"
 import { FlujoStatusCard } from "./flujo-status-card"
 import { LicenciasPanel } from "./licencias-panel"
 import { RenovacionPanel } from "./renovacion-panel"
+import { ResellersPanel } from "./resellers-panel"
 
-type LabTab = "clientes" | "licencias" | "renovacion" | "consola"
+type LabTab = "clientes" | "resellers" | "licencias" | "renovacion" | "consola"
 
 interface FlujoLabProps {
   /** Estado resuelto en el servidor: la primera pintura ya es real. */
@@ -131,6 +132,7 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
         >
           <TabsList variant="line" className="w-full justify-start overflow-x-auto">
             <TabsTrigger value="clientes">Clientes</TabsTrigger>
+            <TabsTrigger value="resellers">Resellers</TabsTrigger>
             <TabsTrigger value="licencias">Historial</TabsTrigger>
             <TabsTrigger value="renovacion">Renovación</TabsTrigger>
             <TabsTrigger value="consola">Consola</TabsTrigger>
@@ -141,6 +143,10 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
               reloadToken={reloadToken}
               onRenew={goToRenewal}
             />
+          </TabsContent>
+
+          <TabsContent value="resellers" className="mt-4">
+            <ResellersPanel reloadToken={reloadToken} />
           </TabsContent>
 
           <TabsContent value="licencias" className="mt-4">
