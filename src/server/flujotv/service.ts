@@ -607,6 +607,10 @@ export async function renewFlujoLicense(params: {
 /**
  * Refresco real contra el panel de FlujoTV. Cuesta ~90 s y solo se dispara
  * cuando el operador lo pide de forma explícita.
+ *
+ * `skip_cache=true` es obligatorio: sin él la API sirve el snapshot de la
+ * caché al instante (`/list_clients`) o lanza el refresco en segundo plano
+ * (`/cache`), y el operador creería que refrescó cuando no.
  */
 export async function refreshFlujoCache(
   target: "list_clients" | "cache"
@@ -614,6 +618,7 @@ export async function refreshFlujoCache(
   const path = target === "cache" ? "/cache" : "/list_clients"
   const response = await flujoRequest<unknown>(path, {
     method: "GET",
+    query: { skip_cache: true },
     timeoutMs: FLUJO_LONG_TIMEOUT_MS,
   })
   return {

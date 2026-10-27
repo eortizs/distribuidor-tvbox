@@ -290,7 +290,7 @@ Toda mutación es una transacción atómica: `UPDATE entities ... WHERE id = $1 
 | `GET` | `/api/flujotv/licenses` | Historial de licencias (`/licencias`) normalizado |
 | `POST` | `/api/flujotv/renewals` | Renovación (`{ user_name, months: 1\|3\|6\|12 }`); exige header `Idempotency-Key` (1-200 imprimibles) y la reenvía tal cual; 409 en conflicto |
 | `POST` | `/api/flujotv/raw` | Consola del Lab: paso directo a la API (`{ method: GET\|POST, path, query?, body? }`), solo rutas relativas y valores sensibles redactados |
-| `POST` | `/api/flujotv/refresh` | Refresco real contra el panel (`{ target: "list_clients"\|"cache" }`, ~90 s); acción explícita del operador |
+| `POST` | `/api/flujotv/refresh` | Refresco real contra el panel (`{ target: "list_clients"\|"cache" }`); envía `skip_cache=true` — sin él la API sirve la caché al instante —: `list_clients` sincroniza en ~90 s y `cache` lanza el refresco en segundo plano; acción explícita del operador |
 | `DELETE` | `/api/files/[id]` | Elimina un archivo propio (del índice y del disco) |
 
 Todas las rutas requieren sesión; el `actor` de la bitácora se deriva de la sesión (`user:<username>`), nunca del cliente.
