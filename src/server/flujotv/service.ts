@@ -106,6 +106,8 @@ const STATUS_ALIASES: Record<string, string> = {
   vencido: "vencido",
   vencida: "vencido",
   inactive: "vencido",
+  invalid: "vencido",
+  inválido: "vencido",
   cancelado: "vencido",
   cancelada: "vencido",
   false: "vencido",
@@ -446,10 +448,32 @@ export async function listFlujoClients(
 }
 
 /**
+ * Cuenta usuarios válidos/inválidos por distribuidor a partir de una de las
+ * listas de `/users/validity` (`valid_users` / `invalid_users`). Devuelve
+ * null si la lista no llegó con la forma esperada.
+ */
+function countByDistributor(value: unknown): Map<string, number> | null {
+  if (!Array.isArray(value)) return null
+  const counts = new Map<string, number>()
+  for (const row of value) {
+    if (!isRecord(row)) continue
+    const distributor = pickString(row, ["distributor", "distribuidor", "reseller"])
+    if (!distributor) continue
+    counts.set(distributor, (counts.get(distributor) ?? 0) + 1)
+  }
+  return counts
+}
+
+/**
  * Lista los resellers del panel con sus clientes asignados. Es una lectura de
  * disponibilidad: la API responde desde su caché, así que junto al listado se
  * devuelve la antigüedad reportada para que el operador sepa qué tan fresco
  * es el dato.
+ *
+ * El desglose activo/inactivo no viene en `/resellers`: se cuenta desde
+ * `/users/validity`, que separa vigentes de expirados y etiqueta cada usuario
+ * con su distribuidor (los conteos cuadran con `clients_count`). Si esa
+ * lectura falla, las columnas quedan en null (—) sin romper el listado.
  */
 export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
   // El `search_term` vacío viaja en la ruta porque buildQuery descarta los
@@ -480,6 +504,29 @@ export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
     "results",
     "data",
   ])
+
+  let activeByDistributor: Map<string, number> | null = null
+  let inactiveByDistributor: Map<string, number> | null = null
+  try {
+    const validity = await flujoRequest<unknown>("/users/validity", {
+      method: "GET",
+      timeoutMs: FLUJO_READ_TIMEOUT_MS,
+    })
+    if (isRecord(validity.data)) {
+      activeByDistributor = countByDistributor(validity.data.valid_users)
+      inactiveByDistributor = countByDistributor(validity.data.invalid_users)
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `flujotv: no se pudieron contar los clientes por reseller: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      })
+    )
+  }
+
   const resellers = (rows ?? []).filter(isRecord).map((row, index) => {
     const name =
       pickString(row, ["name", "nombre", "reseller", "user_name", "username"]) ??
@@ -494,6 +541,14 @@ export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
         "clientes",
         "total_clients",
       ]),
+      activeClients:
+        activeByDistributor === null
+          ? null
+          : (activeByDistributor.get(name) ?? 0),
+      inactiveClients:
+        inactiveByDistributor === null
+          ? null
+          : (inactiveByDistributor.get(name) ?? 0),
       raw: row,
     }
   })

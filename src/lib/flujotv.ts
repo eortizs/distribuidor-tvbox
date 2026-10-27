@@ -43,6 +43,10 @@ export interface FlujoReseller {
   id: string
   name: string
   clientsCount: number | null
+  /** Clientes con licencia vigente (`Válido`); null si la API no lo reportó. */
+  activeClients: number | null
+  /** Clientes con licencia expirada (`Inválido`); null si la API no lo reportó. */
+  inactiveClients: number | null
   raw: Record<string, unknown>
 }
 

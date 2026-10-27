@@ -112,6 +112,42 @@ export function ResellersPanel({ reloadToken }: ResellersPanelProps) {
         size: 220,
       },
       {
+        accessorKey: "activeClients",
+        id: "activeClients",
+        header: "Clientes activos",
+        meta: {
+          headerClassName: "text-end [&>div]:justify-end",
+          cellClassName: "text-end",
+        },
+        cell: ({ row }) => (
+          <span className="text-foreground text-sm whitespace-nowrap tabular-nums">
+            {row.original.activeClients ?? "—"}
+          </span>
+        ),
+        size: 140,
+      },
+      {
+        accessorKey: "inactiveClients",
+        id: "inactiveClients",
+        header: "Clientes inactivos",
+        meta: {
+          headerClassName: "text-end [&>div]:justify-end",
+          cellClassName: "text-end",
+        },
+        cell: ({ row }) => (
+          <span
+            className={
+              row.original.inactiveClients
+                ? "text-destructive text-sm whitespace-nowrap tabular-nums"
+                : "text-muted-foreground text-sm whitespace-nowrap tabular-nums"
+            }
+          >
+            {row.original.inactiveClients ?? "—"}
+          </span>
+        ),
+        size: 150,
+      },
+      {
         accessorKey: "clientsCount",
         id: "clientsCount",
         header: "Clientes asignados",
