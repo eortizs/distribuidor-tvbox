@@ -18,9 +18,9 @@ import {
 /**
  * Coincidencia de rutas:
  * - `exact`: solo el camino exacto cuenta (la raíz `/`).
- * - `prefix`: el camino exacto o cualquier hijo (`/entities`, `/entities/new`,
- *   `/entities/[id]`). El separador `/` evita falsos positivos como
- *   `/entities-old`.
+ * - `prefix`: el camino exacto o cualquier hijo (`/clientes`, `/clientes/new`,
+ *   `/clientes/[id]`). El separador `/` evita falsos positivos como
+ *   `/clientes-old`.
  */
 export type NavMatchMode = "exact" | "prefix"
 
@@ -65,8 +65,8 @@ export const navSections: NavSection[] = [
   {
     title: "Clientes",
     icon: UsersRoundIcon,
-    href: "/entities",
-    match: { mode: "prefix", paths: ["/entities"] },
+    href: "/clientes",
+    match: { mode: "prefix", paths: ["/clientes"] },
   },
   {
     title: "Herramientas",

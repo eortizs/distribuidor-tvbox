@@ -46,7 +46,7 @@ export async function loginAction(
     role: user.role,
   })
 
-  redirect("/entities")
+  redirect("/clientes")
 }
 
 export async function registerAction(
@@ -83,7 +83,7 @@ export async function registerAction(
     role: user.role,
   })
 
-  redirect("/entities")
+  redirect("/clientes")
 }
 
 export async function logoutAction(): Promise<void> {

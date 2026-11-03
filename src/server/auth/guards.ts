@@ -14,7 +14,7 @@ export async function requireUser(): Promise<AuthUser> {
 export async function requireRole(role: UserRole): Promise<AuthUser> {
   const user = await requireUser()
   if (user.role !== role) {
-    redirect("/entities")
+    redirect("/clientes")
   }
   return user
 }

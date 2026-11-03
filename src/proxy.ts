@@ -52,6 +52,13 @@ export async function proxy(request: NextRequest) {
   const session = token ? await getSession(token) : null
   const { pathname } = request.nextUrl
 
+  // La pantalla de clientes vivía en /entities; los enlaces antiguos siguen.
+  if (pathname === "/entities") {
+    const url = request.nextUrl.clone()
+    url.pathname = "/clientes"
+    return NextResponse.redirect(url)
+  }
+
   if (isRateLimited(request)) {
     return new NextResponse("Too Many Requests", { status: 429 })
   }
@@ -64,13 +71,13 @@ export async function proxy(request: NextRequest) {
 
   if (session && PUBLIC_PATHS.has(pathname)) {
     const url = request.nextUrl.clone()
-    url.pathname = "/entities"
+    url.pathname = "/clientes"
     return NextResponse.redirect(url)
   }
 
   if (session && session.role !== "admin" && pathname.startsWith("/users")) {
     const url = request.nextUrl.clone()
-    url.pathname = "/entities"
+    url.pathname = "/clientes"
     return NextResponse.redirect(url)
   }
 

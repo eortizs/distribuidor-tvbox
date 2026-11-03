@@ -13,7 +13,7 @@ export const metadata = {
 export default async function RegisterPage() {
   const user = await getSessionUser()
   if (user) {
-    redirect("/entities")
+    redirect("/clientes")
   }
 
   return (
