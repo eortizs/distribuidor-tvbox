@@ -2,6 +2,8 @@ import Link from "next/link"
 import { ImageIcon, KeyRoundIcon } from "lucide-react"
 import { cn } from "cn"
 
+import { sectionTabClass } from "@/components/dashboard/nav-layout"
+
 export type ConfiguracionSection = "modelos-imagen" | "api-licencias"
 
 const SECTIONS: {
@@ -13,20 +15,21 @@ const SECTIONS: {
   {
     id: "modelos-imagen",
     title: "Modelos de imagen",
-    href: "/configuracion",
+    href: "/soporte/configuracion",
     icon: ImageIcon,
   },
   {
     id: "api-licencias",
     title: "API de licencias",
-    href: "/configuracion/api-licencias",
+    href: "/soporte/configuracion/api-licencias",
     icon: KeyRoundIcon,
   },
 ]
 
 /**
  * Menú interno de Configuración: enlaces reales (cada sección tiene su URL)
- * para moverse entre los grupos de ajustes sin recargar el panel.
+ * para moverse entre los grupos de ajustes sin recargar el panel. Usa el
+ * mismo riel de pestañas que las secciones de la barra inferior.
  */
 export function ConfiguracionMenu({
   active,
@@ -35,19 +38,19 @@ export function ConfiguracionMenu({
 }) {
   return (
     <nav aria-label="Secciones de configuración" className="border-b">
-      <ul className="-mb-px flex gap-1 overflow-x-auto">
+      <ul className={sectionTabClass.list}>
         {SECTIONS.map((section) => {
           const isActive = section.id === active
           return (
-            <li key={section.id}>
+            <li key={section.id} className="flex">
               <Link
                 href={section.href}
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "flex items-center gap-2 border-b-2 px-3 py-2 text-sm whitespace-nowrap transition-colors",
+                  sectionTabClass.item,
                   isActive
-                    ? "border-primary text-foreground font-medium"
-                    : "text-muted-foreground hover:text-foreground border-transparent"
+                    ? sectionTabClass.itemActive
+                    : sectionTabClass.itemIdle
                 )}
               >
                 <section.icon className="size-4" aria-hidden="true" />

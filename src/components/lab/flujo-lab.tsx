@@ -75,7 +75,7 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
       <div className="flex flex-col gap-3">
         <Link
-          href="/lab"
+          href="/soporte/lab"
           className="text-muted-foreground hover:text-foreground inline-flex w-fit items-center gap-1 text-xs transition-colors"
         >
           <ArrowLeftIcon aria-hidden="true" />

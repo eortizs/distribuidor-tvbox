@@ -178,7 +178,7 @@ export function LicenciasApiView({
               variant="outline"
               size="xs"
               nativeButton={false}
-              render={<Link href="/lab/flujotv" />}
+              render={<Link href="/soporte/lab/flujotv" />}
             >
               Abrir API FlujoTV
               <ArrowRightIcon aria-hidden="true" />

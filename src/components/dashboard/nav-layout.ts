@@ -38,3 +38,17 @@ export const bottomNavClass = {
   icon: "size-5",
   label: "text-xs leading-tight tracking-tight whitespace-nowrap",
 } as const
+
+/**
+ * Riel de pestañas de navegación (una sola fuente para el look): lista con
+ * alto fijo de `--shell-section-tabs-height` y enlaces subrayados activos.
+ * El `ul` comparte `-mb-px` para montar el subrayado sobre el borde; cada
+ * consumidor añade su padding horizontal según su contenedor.
+ */
+export const sectionTabClass = {
+  list: "-mb-px flex h-10 items-stretch gap-1 overflow-x-auto",
+  item:
+    "flex items-center gap-2 border-b-2 px-3 text-sm whitespace-nowrap transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+  itemActive: "border-primary text-foreground font-medium",
+  itemIdle: "border-transparent text-muted-foreground hover:text-foreground",
+} as const

@@ -33,11 +33,9 @@ export interface NavChild {
 export interface NavSection {
   title: string
   icon: LucideIcon
-  /** `link`: navega directo; `menu`: abre un menú ascendente. */
-  kind: "link" | "menu"
-  /** Destino de las secciones de tipo enlace. */
-  href?: string
-  /** Entradas de las secciones agrupadas. */
+  /** Destino del botón de la barra inferior. */
+  href: string
+  /** Pestañas de la página de la sección, en orden. */
   children?: NavChild[]
   /** Rutas que activan la sección. */
   match: { mode: NavMatchMode; paths: string[] }
@@ -53,27 +51,27 @@ export interface NavAccountItem {
 /**
  * Única fuente de verdad de la navegación. El orden de este arreglo es el
  * orden de la barra inferior: Inicio, Clientes, Herramientas, Finanzas,
- * Soporte.
+ * Soporte. Cada botón navega a su propia página; las secciones con opciones
+ * las muestran como pestañas dentro de la página (`children`), y el botón
+ * apunta a la primera de ellas.
  */
 export const navSections: NavSection[] = [
   {
     title: "Inicio",
     icon: HouseIcon,
-    kind: "link",
     href: "/",
     match: { mode: "exact", paths: ["/"] },
   },
   {
     title: "Clientes",
     icon: UsersRoundIcon,
-    kind: "link",
     href: "/entities",
     match: { mode: "prefix", paths: ["/entities"] },
   },
   {
     title: "Herramientas",
     icon: WrenchIcon,
-    kind: "menu",
+    href: "/herramientas/imagenes",
     match: { mode: "prefix", paths: ["/herramientas"] },
     children: [
       {
@@ -91,7 +89,7 @@ export const navSections: NavSection[] = [
   {
     title: "Finanzas",
     icon: WalletCardsIcon,
-    kind: "menu",
+    href: "/finanzas/estado-de-cuenta",
     match: { mode: "prefix", paths: ["/finanzas"] },
     children: [
       {
@@ -109,16 +107,16 @@ export const navSections: NavSection[] = [
   {
     title: "Soporte",
     icon: LifeBuoyIcon,
-    kind: "menu",
-    match: { mode: "prefix", paths: ["/asistente", "/configuracion", "/lab"] },
+    href: "/soporte/asistente",
+    match: { mode: "prefix", paths: ["/soporte"] },
     children: [
-      { title: "Asistente", icon: BotIcon, href: "/asistente" },
+      { title: "Asistente", icon: BotIcon, href: "/soporte/asistente" },
       {
         title: "Configuración",
         icon: SettingsIcon,
-        href: "/configuracion",
+        href: "/soporte/configuracion",
       },
-      { title: "Lab", icon: FlaskConicalIcon, href: "/lab" },
+      { title: "Lab", icon: FlaskConicalIcon, href: "/soporte/lab" },
     ],
   },
 ]
@@ -151,6 +149,10 @@ export function isNavSectionActive(section: NavSection, pathname: string) {
   return section.match.paths.some((path) =>
     isNavPathActive(pathname, path, section.match.mode)
   )
+}
+
+export function findNavSection(pathname: string) {
+  return navSections.find((section) => isNavSectionActive(section, pathname))
 }
 
 export function isNavChildActive(child: NavChild, pathname: string) {

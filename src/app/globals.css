@@ -105,10 +105,11 @@
   --mascota-face: #fcfcfb;
   --mascota-ink: #171717;
 
-  /* Shell del dashboard: cabecera, barra inferior y alto útil del viewport. */
+  /* Shell del dashboard: cabecera, barra inferior, pestañas y viewport útil. */
   --shell-header-height: calc(4rem + env(safe-area-inset-top));
   --shell-bottom-nav-height: calc(4rem + env(safe-area-inset-bottom));
   --shell-bottom-nav-space: 0px;
+  --shell-section-tabs-height: 2.5rem;
   --shell-viewport-height: 100svh;
 }
 

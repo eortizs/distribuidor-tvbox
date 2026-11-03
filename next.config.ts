@@ -4,6 +4,39 @@ import { withEve } from "eve/next";
 const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
+  /*
+   * Soporte dejó de ser un menú y ahora es una página con pestañas bajo
+   * /soporte: las rutas antiguas redirigen para no romper accesos guardados.
+   */
+  async redirects() {
+    return [
+      {
+        source: "/asistente",
+        destination: "/soporte/asistente",
+        permanent: false,
+      },
+      {
+        source: "/configuracion",
+        destination: "/soporte/configuracion",
+        permanent: false,
+      },
+      {
+        source: "/configuracion/:path*",
+        destination: "/soporte/configuracion/:path*",
+        permanent: false,
+      },
+      {
+        source: "/lab",
+        destination: "/soporte/lab",
+        permanent: false,
+      },
+      {
+        source: "/lab/:path*",
+        destination: "/soporte/lab/:path*",
+        permanent: false,
+      },
+    ];
+  },
   experimental: {
     /*
      * El chat de animación manda los adjuntos dentro del JSON del turno

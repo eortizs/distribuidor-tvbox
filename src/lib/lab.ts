@@ -20,7 +20,7 @@ export const labModules: LabModule[] = [
     title: "API FlujoTV",
     description:
       "Consulta los clientes del panel, revisa el historial de licencias y ejecuta renovaciones contra la API de FlujoTV.",
-    href: "/lab/flujotv",
+    href: "/soporte/lab/flujotv",
     icon: KeyRoundIcon,
     status: "disponible",
   },
