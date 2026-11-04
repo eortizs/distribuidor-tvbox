@@ -55,6 +55,11 @@ export interface FlujoResellersResponse {
   totalResellers: number | null
   /** Clientes que aún no pertenecen a ningún reseller (distribuidor). */
   clientsWithoutDistributor: number | null
+  /**
+   * Mapa usuario → reseller construido desde `/users/validity` (llave del
+   * usuario en minúsculas); vacío si esa lectura no llegó.
+   */
+  userResellers: Record<string, string>
   /** Si la respuesta viene de la caché del panel de FlujoTV. */
   fromCache: boolean | null
   /** Antigüedad de la caché, tal como la reporta la API. */

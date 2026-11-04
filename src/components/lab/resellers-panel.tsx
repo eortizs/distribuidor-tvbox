@@ -65,6 +65,7 @@ export function ResellersPanel({ reloadToken }: ResellersPanelProps) {
         setMeta({
           totalResellers: data.totalResellers,
           clientsWithoutDistributor: data.clientsWithoutDistributor,
+          userResellers: data.userResellers,
           fromCache: data.fromCache,
           cacheAge: data.cacheAge,
           searchTerm: data.searchTerm,

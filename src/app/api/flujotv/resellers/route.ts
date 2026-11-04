@@ -15,6 +15,7 @@ export async function GET() {
         resellers: result.resellers,
         totalResellers: result.totalResellers,
         clientsWithoutDistributor: result.clientsWithoutDistributor,
+        userResellers: result.userResellers,
         fromCache: result.fromCache,
         cacheAge: result.cacheAge,
         searchTerm: result.searchTerm,

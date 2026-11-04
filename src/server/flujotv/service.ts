@@ -464,6 +464,42 @@ function countByDistributor(value: unknown): Map<string, number> | null {
   return counts
 }
 
+/** Llaves probables del nombre de usuario en una fila de `/users/validity`. */
+const VALIDITY_USER_KEYS = [
+  "user_name",
+  "userName",
+  "username",
+  "cliente",
+  "user",
+  "name",
+]
+
+/**
+ * Mapa usuario → reseller a partir de una de las listas de `/users/validity`
+ * (`valid_users` / `invalid_users`). Solo cuenta la llave del SUB-RESELLER
+ * (`distributor`/`distribuidor`): `reseller` es la cuenta padre (p. ej.
+ * tvortiztv) y es constante en todas las filas, así que las filas sin
+ * distribuidor quedan fuera del mapa (= "sin reseller"). La llave va
+ * normalizada en minúsculas para que el cruce con el listado de clientes no
+ * dependa del casing de la API. Devuelve false si la lista no llegó con la
+ * forma esperada.
+ */
+function mapUserResellers(
+  value: unknown,
+  users: Map<string, string>
+): boolean {
+  if (!Array.isArray(value)) return false
+  for (const row of value) {
+    if (!isRecord(row)) continue
+    const distributor = pickString(row, ["distributor", "distribuidor"])
+    if (!distributor) continue
+    const userName = pickString(row, VALIDITY_USER_KEYS)
+    if (!userName) continue
+    users.set(userName.trim().toLowerCase(), distributor.trim())
+  }
+  return true
+}
+
 /**
  * Lista los resellers del panel con sus clientes asignados. Es una lectura de
  * disponibilidad: la API responde desde su caché, así que junto al listado se
@@ -507,6 +543,7 @@ export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
 
   let activeByDistributor: Map<string, number> | null = null
   let inactiveByDistributor: Map<string, number> | null = null
+  const userResellers = new Map<string, string>()
   try {
     const validity = await flujoRequest<unknown>("/users/validity", {
       method: "GET",
@@ -515,6 +552,8 @@ export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
     if (isRecord(validity.data)) {
       activeByDistributor = countByDistributor(validity.data.valid_users)
       inactiveByDistributor = countByDistributor(validity.data.invalid_users)
+      mapUserResellers(validity.data.valid_users, userResellers)
+      mapUserResellers(validity.data.invalid_users, userResellers)
     }
   } catch (error) {
     console.error(
@@ -566,6 +605,7 @@ export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
       "clientsWithoutDistributor",
       "clientsWithoutReseller",
     ]),
+    userResellers: Object.fromEntries(userResellers),
     fromCache: pickBoolean(meta, ["from_cache", "fromCache"]),
     cacheAge: pickString(meta, ["cache_age", "cacheAge"]),
     searchTerm: pickString(meta, ["search_term", "searchTerm"]),

@@ -19,13 +19,28 @@
  *   botón; el detalle vive en el contenido expandido.
  * - Contenido expandido: correo y plan.
  *
+ * La pantalla compone además la barra de **filtros** ReUI (`filters` en
+ * variante básica, copia en español del Lab) sobre el listado ya descargado:
+ * Estado como selección, Reseller con la lista real de resellers del panel
+ * (más "Sin reseller"), y Días para vencer con operadores numéricos (igual,
+ * comparaciones y rango) y vacío para "sin dato". La barra se compone por
+ * piezas (`children` de `Filters` con `FilterChip` + `FiltersBuilder`) para
+ * intercalar, tras cada filtro aplicado, un **chip independiente con el
+ * contador de instancias** que arroja esa condición, calculado sobre el
+ * listado cargado; las opciones del menú llevan además el conteo como
+ * subtítulo (`description`). Los conteos van **en cascada**: la primera
+ * regla cuenta sobre el listado completo y cada siguiente sobre el
+ * resultado de las anteriores (los datos locales que dejó el filtro previo).
+ *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario/correo.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment } from "react"
 import { PackageOpenIcon, RefreshCwIcon } from "lucide-react"
 
+import { Badge } from "@/components/reui/badge"
 import {
   Empty,
   EmptyContent,
@@ -45,13 +60,28 @@ import {
 } from "@/components/ui/accordion"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { Filters } from "@/components/reui/filters/filters"
+import { FilterChip } from "@/components/reui/filters/filters-chip"
+import { FiltersBuilder } from "@/components/reui/filters/filters-builder"
+import { createFilterQuery, flattenFilterRules } from "@/components/reui/filters/filters-query"
+import type {
+  FilterField,
+  FilterOption,
+  FilterQuery,
+} from "@/components/reui/filters/filters-types"
+import type { FilterOperatorLabels } from "@/components/reui/filters/filters-operators"
 import {
   formatDaysRemaining,
   formatFlujoDate,
   type FlujoClient,
 } from "@/lib/flujotv"
 
-import { fetchFlujoClients } from "@/components/lab/flujo-api"
+import { fetchFlujoClients, fetchFlujoResellers } from "@/components/lab/flujo-api"
+import {
+  applyFilterQuery,
+  matchesFilterRule,
+} from "@/components/lab/filter-utils"
+import { LAB_FILTER_LABELS } from "@/components/lab/lab-i18n"
 
 type FetchState = "loading" | "success" | "error"
 
@@ -95,11 +125,57 @@ function statusDotClass(status: string | null): string {
   }
 }
 
+/**
+ * Llaves probables del SUB-RESELLER en los datos crudos del cliente. Nunca
+ * `reseller`: esa llave es la cuenta padre (p. ej. tvortiztv), constante en
+ * todas las filas de `/get_clients`, y taparía al reseller real.
+ */
+const CLIENT_DISTRIBUTOR_KEYS = ["distributor", "distribuidor"]
+
+function rawClientReseller(client: FlujoClient): string {
+  for (const key of CLIENT_DISTRIBUTOR_KEYS) {
+    const value = client.raw[key]
+    if (typeof value === "string" && value.trim()) return value.trim()
+  }
+  return ""
+}
+
+/** Subtítulo de la opción: cuántos clientes devuelve ese filtro. */
+function optionCount(count: number | undefined): string | undefined {
+  if (count === undefined) return undefined
+  return `${count} ${count === 1 ? "cliente" : "clientes"}`
+}
+
+/** Etiquetas en español para los operadores del catálogo de filtros. */
+const CLIENT_FILTER_OPERATOR_LABELS: FilterOperatorLabels = {
+  contains: "contiene",
+  not_contains: "no contiene",
+  starts_with: "empieza con",
+  ends_with: "termina con",
+  is: "es",
+  is_not: "no es",
+  is_any_of: "es alguno de",
+  is_none_of: "no es ninguno de",
+  eq: "es igual a",
+  neq: "no es igual a",
+  gt: "mayor que",
+  gte: "mayor o igual que",
+  lt: "menor que",
+  lte: "menor o igual que",
+  between: "entre",
+  not_between: "fuera de",
+  empty: "está vacío",
+  not_empty: "no está vacío",
+}
+
 export function ClientesAccordion() {
   const [clients, setClients] = useState<FlujoClient[]>([])
+  const [resellerNames, setResellerNames] = useState<string[]>([])
+  const [userResellers, setUserResellers] = useState<Record<string, string>>({})
   const [fetchState, setFetchState] = useState<FetchState>("loading")
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState("")
+  const [query, setQuery] = useState<FilterQuery>(() => createFilterQuery())
   const [reloadCount, setReloadCount] = useState(0)
 
   const requestCounter = useRef(0)
@@ -107,9 +183,28 @@ export function ClientesAccordion() {
   useEffect(() => {
     const requestId = ++requestCounter.current
     fetchFlujoClients({})
-      .then((data) => {
+      .then(async (data) => {
+        // El filtro de reseller usa la lista real del panel y el mapa
+        // usuario → reseller de `/users/validity`; si esa parte falla,
+        // el listado carga igual y el filtro queda sin opciones.
+        const { names, byUser } = await fetchFlujoResellers()
+          .then((resellersData) => ({
+            names: resellersData.resellers
+              .map((reseller) => reseller.name)
+              .filter(Boolean),
+            byUser: resellersData.userResellers ?? {},
+          }))
+          .catch(
+            () =>
+              ({
+                names: [] as string[],
+                byUser: {} as Record<string, string>,
+              }) as { names: string[]; byUser: Record<string, string> }
+          )
         if (requestId !== requestCounter.current) return
         setClients(data.clients)
+        setResellerNames(names)
+        setUserResellers(byUser)
         setErrorMessage(null)
         setFetchState("success")
       })
@@ -124,22 +219,130 @@ export function ClientesAccordion() {
       })
   }, [reloadCount])
 
+  /** Reseller del cliente: llave cruda si viene, si no el mapa de `/users/validity`. */
+  const resellerOf = useCallback(
+    (client: FlujoClient): string => {
+      const fromRaw = rawClientReseller(client)
+      if (fromRaw) return fromRaw
+      return userResellers[client.userName.trim().toLowerCase()] ?? ""
+    },
+    [userResellers]
+  )
+
   const reload = useCallback(() => {
     setFetchState("loading")
     setReloadCount((token) => token + 1)
   }, [])
 
+  /** Facetas por opción, calculadas sobre el listado cargado. */
+  const estadoCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const client of clients) {
+      counts.set(client.statusLabel, (counts.get(client.statusLabel) ?? 0) + 1)
+    }
+    return counts
+  }, [clients])
+
+  const resellerCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const client of clients) {
+      const reseller = resellerOf(client)
+      counts.set(reseller, (counts.get(reseller) ?? 0) + 1)
+    }
+    return counts
+  }, [clients, resellerOf])
+
+  /** Opciones de reseller: la lista real del panel, más "Sin reseller". */
+  const resellerOptions = useMemo<FilterOption[]>(
+    () => [
+      ...[...new Set(resellerNames)]
+        .sort((a, b) => a.localeCompare(b, "es"))
+        .map((name) => ({
+          value: name,
+          label: name,
+          description: optionCount(resellerCounts.get(name)),
+        })),
+      {
+        value: "",
+        label: "Sin reseller",
+        exclusive: true,
+        description: optionCount(resellerCounts.get("")),
+      },
+    ],
+    [resellerNames, resellerCounts]
+  )
+
+  const filterFields = useMemo<FilterField[]>(
+    () => [
+      {
+        id: "estado",
+        label: "Estado",
+        type: "select",
+        options: (
+          [
+            { value: "activo", label: "Activo" },
+            { value: "vencido", label: "Vencido" },
+            { value: "pendiente", label: "Pendiente" },
+            { value: "prueba", label: "Prueba" },
+          ] as const
+        ).map((option) => ({
+          ...option,
+          description: optionCount(estadoCounts.get(option.value)),
+        })),
+      },
+      {
+        id: "reseller",
+        label: "Reseller",
+        type: "select",
+        options: resellerOptions,
+      },
+      {
+        id: "dias",
+        label: "Días para vencer",
+        type: "number",
+      },
+    ],
+    [estadoCounts, resellerOptions]
+  )
+
   const filtered = useMemo(() => {
+    const byQuery = applyFilterQuery(clients, query, {
+      estado: (row) => row.statusLabel,
+      reseller: resellerOf,
+      dias: (row) => row.daysRemaining,
+    })
     const term = searchInput.trim().toLowerCase()
-    if (!term) return clients
-    return clients.filter(
+    if (!term) return byQuery
+    return byQuery.filter(
       (client) =>
         client.userName.toLowerCase().includes(term) ||
         (client.email ?? "").toLowerCase().includes(term)
     )
-  }, [clients, searchInput])
+  }, [clients, query, searchInput, resellerOf])
 
   const searching = searchInput.trim().length > 0
+  const hasFilters = query.rules.length > 0
+  const rules = useMemo(() => flattenFilterRules(query), [query])
+
+  /** Conteos en cascada: cada regla cuenta sobre el resultado de la anterior. */
+  const ruleCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    let rows = clients
+    for (const rule of rules) {
+      const accessor =
+        rule.path[0] === "estado"
+          ? (row: FlujoClient) => row.statusLabel
+          : rule.path[0] === "reseller"
+            ? resellerOf
+            : rule.path[0] === "dias"
+              ? (row: FlujoClient) => row.daysRemaining
+              : null
+      if (!accessor) continue
+      rows = rows.filter((row) => matchesFilterRule(rule, row, accessor))
+      counts.set(rule.id, rows.length)
+    }
+    return counts
+  }, [clients, rules, resellerOf])
 
   return (
     <div className="flex flex-col gap-4">
@@ -161,6 +364,42 @@ export function ClientesAccordion() {
           Recargar
         </Button>
       </div>
+
+      {fetchState === "success" && clients.length > 0 ? (
+        <Filters
+          fields={filterFields}
+          query={query}
+          onQueryChange={setQuery}
+          labels={LAB_FILTER_LABELS}
+          operatorLabels={CLIENT_FILTER_OPERATOR_LABELS}
+          size="sm"
+        >
+          <div
+            role="toolbar"
+            aria-label={LAB_FILTER_LABELS.filtersLabel}
+            className="flex flex-wrap items-center gap-2"
+          >
+            {rules.map((rule, index) => {
+              const count = ruleCounts.get(rule.id)
+              return (
+                <Fragment key={rule.id}>
+                  <FilterChip rule={rule} index={index} />
+                  {count !== undefined ? (
+                    <Badge
+                      variant="outline"
+                      size="xl"
+                      className="rounded-full px-3 tabular-nums"
+                    >
+                      {count}
+                    </Badge>
+                  ) : null}
+                </Fragment>
+              )
+            })}
+            <FiltersBuilder />
+          </div>
+        </Filters>
+      ) : null}
 
       {fetchState === "loading" ? (
         <div className="flex flex-col" aria-hidden="true">
@@ -212,7 +451,7 @@ export function ClientesAccordion() {
         </Empty>
       ) : filtered.length === 0 ? (
         <p className="text-muted-foreground text-sm" role="status">
-          Ningún cliente coincide con la búsqueda.
+          Ningún cliente coincide con la búsqueda o los filtros.
         </p>
       ) : (
         <Accordion multiple={false}>
@@ -277,7 +516,7 @@ export function ClientesAccordion() {
 
       {fetchState === "success" && clients.length > 0 ? (
         <p className="text-muted-foreground text-xs">
-          {searching
+          {searching || hasFilters
             ? `${filtered.length} de ${clients.length} clientes`
             : `${clients.length} clientes`}
         </p>
