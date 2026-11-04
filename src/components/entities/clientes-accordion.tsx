@@ -2,15 +2,22 @@
 
 /**
  * Pantalla Clientes (`/clientes`): listado de clientes del panel de FlujoTV
- * compuesto sobre el ejemplo `c-accordion-9` de ReUI (Frame + Accordion).
+ * compuesto sobre el ejemplo `c-accordion-9` de ReUI (Frame + Accordion),
+ * con filas tipo WhatsApp para lectura cómoda en móvil:
  *
- * - Fila: avatar con iniciales, nombre de usuario y chip de estado
- *   (`statusBadgeVariant` según la licencia).
- * - Contenido expandido: correo, plan, vencimiento y días restantes.
- * - Margen derecho: barra de progreso (`ui/progress`) con los días restantes
- *   en una ventana de urgencia de 30 días — llena con más de 30 días y
- *   agotándose al acercarse el vencimiento (rojo ≤5 días o dato desconocido,
- *   ámbar ≤15, primario el resto).
+ * - Fila: avatar grande con iniciales (`size-12`); como subtítulo del
+ *   nombre, la fecha de vencimiento y el conteo de días restantes
+ *   ("vence 27 nov 2026 · 24 días"), con vista previa de correo o plan solo
+ *   si el cliente no tiene dato de vencimiento; al margen derecho, punto de
+ *   estado (verde activo, rojo vencido, ámbar pendiente, azul prueba; tokens
+ *   semánticos) alineado en columna y, a su derecha, la barra de progreso
+ *   (`ui/progress`) con
+ *   los días restantes en una ventana de urgencia de 30 días — llena con
+ *   más de 30 días y agotándose al acercarse el vencimiento (rojo ≤5 días
+ *   o dato desconocido, ámbar ≤15, primario el resto).
+ * - Sin chevron de expansión ni anillo de foco en el trigger: la fila es el
+ *   botón; el detalle vive en el contenido expandido.
+ * - Contenido expandido: correo y plan.
  *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario/correo.
@@ -19,7 +26,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { PackageOpenIcon, RefreshCwIcon } from "lucide-react"
 
-import { Badge } from "@/components/reui/badge"
 import {
   Empty,
   EmptyContent,
@@ -42,7 +48,6 @@ import { Button } from "@/components/ui/button"
 import {
   formatDaysRemaining,
   formatFlujoDate,
-  statusBadgeVariant,
   type FlujoClient,
 } from "@/lib/flujotv"
 
@@ -72,6 +77,22 @@ function expiryProgressClass(days: number | null): string {
     return "[&_[data-slot=progress-indicator]]:bg-destructive"
   if (days <= 15) return "[&_[data-slot=progress-indicator]]:bg-warning"
   return ""
+}
+
+/** Color del punto de estado junto al nombre (tokens semánticos de estado). */
+function statusDotClass(status: string | null): string {
+  switch (status) {
+    case "activo":
+      return "bg-success"
+    case "vencido":
+      return "bg-destructive"
+    case "pendiente":
+      return "bg-warning"
+    case "prueba":
+      return "bg-info"
+    default:
+      return "bg-muted-foreground/40"
+  }
 }
 
 export function ClientesAccordion() {
@@ -143,11 +164,17 @@ export function ClientesAccordion() {
 
       {fetchState === "loading" ? (
         <div className="flex flex-col" aria-hidden="true">
-          {[0, 1, 2, 3].map((index) => (
-            <div key={index} className="flex items-center gap-2 px-1 py-2">
-              <Skeleton className="size-8 rounded-full" />
-              <Skeleton className="h-4 w-36" />
-              <Skeleton className="ml-auto h-5 w-16 rounded-full" />
+          {[0, 1, 2, 3, 4].map((index) => (
+            <div
+              key={index}
+              className={`flex items-center gap-3 px-1.5 py-2.5 ${index > 0 ? "border-t" : ""}`}
+            >
+              <Skeleton className="size-12 rounded-full" />
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <Skeleton className="h-4 w-36" />
+                <Skeleton className="h-3.5 w-48 max-w-full" />
+              </div>
+              <Skeleton className="ml-auto h-1 w-16 shrink-0 rounded-full" />
             </div>
           ))}
         </div>
@@ -188,48 +215,59 @@ export function ClientesAccordion() {
           Ningún cliente coincide con la búsqueda.
         </p>
       ) : (
-        <Accordion multiple={false} className="border-none">
+        <Accordion multiple={false}>
           {filtered.map((client) => (
             <AccordionItem
               key={client.id}
               value={client.id}
-              className="border-none bg-transparent p-0 **:data-[slot=accordion-content]:p-0!"
+              className="bg-transparent p-0"
             >
-              <AccordionTrigger className="items-center px-1 py-1 hover:no-underline [&_[data-slot=accordion-trigger-icon]]:hidden">
-                <div className="flex min-w-0 flex-1 items-center gap-2">
-                  <Avatar className="size-8">
-                    <AvatarFallback className="text-xs">
-                      {initials(client.userName)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="inline-flex items-center gap-2">
-                    <span className="text-foreground/90 font-semibold tracking-tight">
-                      {client.userName}
+              <AccordionTrigger className="items-center gap-3 rounded-lg px-1.5 py-2.5 hover:bg-muted hover:no-underline focus-visible:border-transparent focus-visible:ring-0 dark:hover:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden">
+                <Avatar className="size-12">
+                  <AvatarFallback>{initials(client.userName)}</AvatarFallback>
+                </Avatar>
+                <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+                  <span className="truncate text-base font-semibold tracking-tight">
+                    {client.userName}
+                  </span>
+                  {client.expiresAt || client.daysRemaining !== null ? (
+                    <span className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
+                      <span className="truncate">
+                        vence {formatFlujoDate(client.expiresAt)}
+                      </span>
+                      <span
+                        aria-hidden="true"
+                        className="bg-muted-foreground/40 size-1 shrink-0 rounded-full"
+                      />
+                      <span className="tabular-nums">
+                        {formatDaysRemaining(client.daysRemaining)}
+                      </span>
                     </span>
-                    <Badge
-                      variant={statusBadgeVariant(client.status)}
-                      size="sm"
-                    >
-                      {client.statusLabel}
-                    </Badge>
-                  </div>
-                  <Progress
-                    value={expiryProgress(client.daysRemaining)}
-                    aria-label={`Días restantes de ${client.userName}`}
-                    className={`ml-auto w-16 ${expiryProgressClass(client.daysRemaining)}`}
+                  ) : client.email || client.plan ? (
+                    <span className="text-muted-foreground truncate text-xs">
+                      {client.email ?? client.plan}
+                    </span>
+                  ) : null}
+                </div>
+                <div className="flex w-4 shrink-0 items-center justify-center">
+                  <span
+                    role="img"
+                    aria-label={client.statusLabel}
+                    className={`size-2.5 rounded-full ${statusDotClass(client.status)}`}
                   />
                 </div>
+                <Progress
+                  value={expiryProgress(client.daysRemaining)}
+                  aria-label={`Días restantes de ${client.userName}`}
+                  className={`w-16 shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
+                />
               </AccordionTrigger>
-              <AccordionContent className="text-muted-foreground py-0 pl-11">
-                <div className="flex flex-col gap-1 text-xs">
+              <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
+                <div className="flex flex-col gap-1 pb-1 text-xs">
                   <span className="truncate">
                     {client.email ?? "Sin correo"}
                   </span>
-                  <span className="truncate">
-                    {client.plan ?? "Sin plan"} · vence{" "}
-                    {formatFlujoDate(client.expiresAt)} ·{" "}
-                    {formatDaysRemaining(client.daysRemaining)}
-                  </span>
+                  <span>{client.plan ?? "Sin plan"}</span>
                 </div>
               </AccordionContent>
             </AccordionItem>
