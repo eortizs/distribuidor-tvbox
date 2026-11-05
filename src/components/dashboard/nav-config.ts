@@ -39,6 +39,11 @@ export interface NavSection {
   children?: NavChild[]
   /** Rutas que activan la sección. */
   match: { mode: NavMatchMode; paths: string[] }
+  /**
+   * La sección muestra su rótulo en la cabecera, a la derecha de la mascota,
+   * en lugar de un título propio dentro de la página.
+   */
+  titleInHeader?: boolean
 }
 
 export interface NavAccountItem {
@@ -67,6 +72,7 @@ export const navSections: NavSection[] = [
     icon: UsersRoundIcon,
     href: "/clientes",
     match: { mode: "prefix", paths: ["/clientes"] },
+    titleInHeader: true,
   },
   {
     title: "Herramientas",

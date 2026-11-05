@@ -7,11 +7,23 @@ import {
   EyeIcon,
   EyeOffIcon,
   KeyRoundIcon,
+  LoaderCircleIcon,
   PackageOpenIcon,
   RefreshCwIcon,
 } from "lucide-react"
+import { toast } from "sonner"
 
 import { Badge } from "@/components/reui/badge"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   DataGrid,
   DataGridContainer,
@@ -46,7 +58,7 @@ import {
   type FlujoClient,
 } from "@/lib/flujotv"
 
-import { fetchFlujoClients } from "./flujo-api"
+import { fetchFlujoClients, refreshFlujo } from "./flujo-api"
 import { applyFilterQuery } from "./filter-utils"
 import { LAB_FILTER_LABELS, LAB_GRID_I18N } from "./lab-i18n"
 
@@ -85,6 +97,8 @@ export function ClientesPanel({ reloadToken, onRenew }: ClientesPanelProps) {
   const [query, setQuery] = useState<FilterQuery>(() => createFilterQuery())
   const [revealed, setRevealed] = useState<Record<string, boolean>>({})
   const [reloadCount, setReloadCount] = useState(0)
+  const [syncOpen, setSyncOpen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   const requestCounter = useRef(0)
 
@@ -127,6 +141,31 @@ export function ClientesPanel({ reloadToken, onRenew }: ClientesPanelProps) {
     setFetchState("loading")
     setReloadCount((token) => token + 1)
   }, [])
+
+  /**
+   * Sincronización real con el panel de FlujoTV: login en el sitio y
+   * extracción de los clientes actualizados (`skip_cache=true`, ~90 s). Al
+   * terminar recarga la tabla; mientras tanto se muestran los datos actuales.
+   */
+  const runSync = useCallback(async () => {
+    setSyncing(true)
+    try {
+      const result = await refreshFlujo("list_clients")
+      toast.success("Clientes sincronizados con el panel", {
+        description: `Extracción real completada en ${(result.durationMs / 1000).toFixed(1)} s.`,
+      })
+      reload()
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "No se pudo sincronizar con el panel de FlujoTV."
+      )
+    } finally {
+      setSyncing(false)
+      setSyncOpen(false)
+    }
+  }, [reload])
 
   const filtered = useMemo(
     () =>
@@ -325,13 +364,29 @@ export function ClientesPanel({ reloadToken, onRenew }: ClientesPanelProps) {
         <Button
           variant="outline"
           size="sm"
-          onClick={reload}
-          disabled={fetchState === "loading"}
+          onClick={() => setSyncOpen(true)}
+          disabled={fetchState === "loading" || syncing}
         >
-          <RefreshCwIcon aria-hidden="true" />
-          Recargar
+          {syncing ? (
+            <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
+          ) : (
+            <RefreshCwIcon aria-hidden="true" />
+          )}
+          {syncing ? "Sincronizando…" : "Recargar"}
         </Button>
       </div>
+
+      {syncing ? (
+        <p
+          className="text-muted-foreground text-xs"
+          role="status"
+          aria-live="polite"
+        >
+          Sincronizando con el panel de FlujoTV: login y extracción de los
+          datos actualizados (tarda alrededor de 90 segundos). La tabla se
+          recargará al terminar.
+        </p>
+      ) : null}
 
       <Filters
         fields={CLIENT_FIELDS}
@@ -373,8 +428,8 @@ export function ClientesPanel({ reloadToken, onRenew }: ClientesPanelProps) {
                   </EmptyMedia>
                   <EmptyTitle>El panel no devolvió clientes</EmptyTitle>
                   <EmptyDescription>
-                    Ajusta la búsqueda o refresca los datos del panel para
-                    sincronizarlos.
+                    Ajusta la búsqueda o usa Recargar para sincronizar los
+                    datos con el panel.
                   </EmptyDescription>
                 </EmptyHeader>
               </Empty>
@@ -400,6 +455,34 @@ export function ClientesPanel({ reloadToken, onRenew }: ClientesPanelProps) {
           <span className="font-mono">{endpoint}</span>
         </p>
       ) : null}
+
+      <AlertDialog open={syncOpen} onOpenChange={setSyncOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              ¿Sincronizar los clientes con el panel?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Recargar hará login en el panel de FlujoTV y extraerá los datos
+              actualizados de los clientes. La sincronización real tarda
+              alrededor de 90 segundos; hasta que termine se siguen mostrando
+              los datos actuales.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={syncing}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                void runSync()
+              }}
+              disabled={syncing}
+            >
+              Sincronizar ahora
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

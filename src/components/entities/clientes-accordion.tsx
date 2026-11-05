@@ -6,12 +6,12 @@
  * con filas tipo WhatsApp para lectura cómoda en móvil:
  *
  * - Fila: avatar grande con iniciales (`size-12`); como subtítulo del
- *   nombre, la fecha de vencimiento y el conteo de días restantes
- *   ("vence 27 nov 2026 · 24 días"), con vista previa de correo o plan solo
- *   si el cliente no tiene dato de vencimiento; al margen derecho, punto de
+ *   nombre, la fecha de vencimiento ("vence 27 nov 2026") y, debajo, la
+ *   barra de progreso (`ui/progress`) con el conteo compacto de días
+ *   restantes a su derecha ("32d"); con vista previa de correo o plan solo
+ *   si el cliente no tiene dato de vencimiento. Al margen derecho, punto de
  *   estado (verde activo, rojo vencido, ámbar pendiente, azul prueba; tokens
- *   semánticos) alineado en columna y, a su derecha, la barra de progreso
- *   (`ui/progress`) con
+ *   semánticos). La barra recorre
  *   los días restantes en una ventana de urgencia de 30 días — llena con
  *   más de 30 días y agotándose al acercarse el vencimiento (rojo ≤5 días
  *   o dato desconocido, ámbar ≤15, primario el resto).
@@ -21,9 +21,10 @@
  *
  * La pantalla compone además la barra de **filtros** ReUI (`filters` en
  * variante básica, copia en español del Lab) sobre el listado ya descargado:
- * Estado como selección, Reseller con la lista real de resellers del panel
- * (más "Sin reseller"), y Días para vencer con operadores numéricos (igual,
- * comparaciones y rango) y vacío para "sin dato". La barra se compone por
+ * Estado como selección, Distribuidor con la lista real de resellers del panel
+ * (más "Sin distribuidor"), y Días para vencer con operadores numéricos (igual,
+ * comparaciones y rango) y vacío para "sin dato"; toda regla de días excluye
+ * a los clientes vencidos. La barra se compone por
  * piezas (`children` de `Filters` con `FilterChip` + `FiltersBuilder`) para
  * intercalar, tras cada filtro aplicado, un **chip independiente con el
  * contador de instancias** que arroja esa condición, calculado sobre el
@@ -34,13 +35,34 @@
  *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario/correo.
+ * El botón de recargar (icono a la derecha de la búsqueda) dispara la
+ * sincronización real (`POST /api/flujotv/refresh`, target `list_clients`
+ * con `skip_cache=true`): login en el panel y extracción de los datos
+ * actualizados, ~90 s, con confirmación previa; los botones de estado vacío
+ * reintentan o sincronizan.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Fragment } from "react"
-import { PackageOpenIcon, RefreshCwIcon } from "lucide-react"
+import {
+  ListFilterPlusIcon,
+  LoaderCircleIcon,
+  PackageOpenIcon,
+  RefreshCwIcon,
+} from "lucide-react"
+import { toast } from "sonner"
 
 import { Badge } from "@/components/reui/badge"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import {
   Empty,
   EmptyContent,
@@ -63,7 +85,7 @@ import { Button } from "@/components/ui/button"
 import { Filters } from "@/components/reui/filters/filters"
 import { FilterChip } from "@/components/reui/filters/filters-chip"
 import { FiltersBuilder } from "@/components/reui/filters/filters-builder"
-import { createFilterQuery, flattenFilterRules } from "@/components/reui/filters/filters-query"
+import { createFilterQuery, flattenFilterRules, isFilterRuleComplete } from "@/components/reui/filters/filters-query"
 import type {
   FilterField,
   FilterOption,
@@ -71,12 +93,11 @@ import type {
 } from "@/components/reui/filters/filters-types"
 import type { FilterOperatorLabels } from "@/components/reui/filters/filters-operators"
 import {
-  formatDaysRemaining,
   formatFlujoDate,
   type FlujoClient,
 } from "@/lib/flujotv"
 
-import { fetchFlujoClients, fetchFlujoResellers } from "@/components/lab/flujo-api"
+import { fetchFlujoClients, fetchFlujoResellers, refreshFlujo } from "@/components/lab/flujo-api"
 import {
   applyFilterQuery,
   matchesFilterRule,
@@ -107,6 +128,12 @@ function expiryProgressClass(days: number | null): string {
     return "[&_[data-slot=progress-indicator]]:bg-destructive"
   if (days <= 15) return "[&_[data-slot=progress-indicator]]:bg-warning"
   return ""
+}
+
+/** Conteo compacto de días junto a la barra: «32d»; «—» sin dato. */
+function formatDaysCompact(days: number | null): string {
+  if (days === null) return "—"
+  return `${days}d`
 }
 
 /** Color del punto de estado junto al nombre (tokens semánticos de estado). */
@@ -177,6 +204,8 @@ export function ClientesAccordion() {
   const [searchInput, setSearchInput] = useState("")
   const [query, setQuery] = useState<FilterQuery>(() => createFilterQuery())
   const [reloadCount, setReloadCount] = useState(0)
+  const [syncOpen, setSyncOpen] = useState(false)
+  const [syncing, setSyncing] = useState(false)
 
   const requestCounter = useRef(0)
 
@@ -234,6 +263,32 @@ export function ClientesAccordion() {
     setReloadCount((token) => token + 1)
   }, [])
 
+  /**
+   * Sincronización real con el panel de FlujoTV: el servidor hace login en el
+   * sitio (`GET /list_clients` con `skip_cache=true`) y extrae los clientes
+   * actualizados; tarda alrededor de 90 segundos. Al terminar recarga el
+   * listado; mientras tanto se siguen mostrando los datos ya cargados.
+   */
+  const runSync = useCallback(async () => {
+    setSyncing(true)
+    try {
+      const result = await refreshFlujo("list_clients")
+      toast.success("Clientes sincronizados con el panel", {
+        description: `Extracción real completada en ${(result.durationMs / 1000).toFixed(1)} s.`,
+      })
+      reload()
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "No se pudo sincronizar con el panel de FlujoTV."
+      )
+    } finally {
+      setSyncing(false)
+      setSyncOpen(false)
+    }
+  }, [reload])
+
   /** Facetas por opción, calculadas sobre el listado cargado. */
   const estadoCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -252,7 +307,7 @@ export function ClientesAccordion() {
     return counts
   }, [clients, resellerOf])
 
-  /** Opciones de reseller: la lista real del panel, más "Sin reseller". */
+  /** Opciones de distribuidor: la lista real del panel, más "Sin distribuidor". */
   const resellerOptions = useMemo<FilterOption[]>(
     () => [
       ...[...new Set(resellerNames)]
@@ -264,7 +319,7 @@ export function ClientesAccordion() {
         })),
       {
         value: "",
-        label: "Sin reseller",
+        label: "Sin distribuidor",
         exclusive: true,
         description: optionCount(resellerCounts.get("")),
       },
@@ -292,7 +347,7 @@ export function ClientesAccordion() {
       },
       {
         id: "reseller",
-        label: "Reseller",
+        label: "Distribuidor",
         type: "select",
         options: resellerOptions,
       },
@@ -306,7 +361,16 @@ export function ClientesAccordion() {
   )
 
   const filtered = useMemo(() => {
-    const byQuery = applyFilterQuery(clients, query, {
+    // El filtro «Días para vencer» solo considera clientes vigentes: cualquier
+    // regla sobre días excluye a los vencidos, aunque el operador numérico
+    // (p. ej. «menor que») los incluyera por sus días negativos.
+    const hasDiasRule = flattenFilterRules(query).some(
+      (rule) => rule.path[0] === "dias" && isFilterRuleComplete(rule)
+    )
+    const eligible = hasDiasRule
+      ? clients.filter((client) => client.statusLabel !== "vencido")
+      : clients
+    const byQuery = applyFilterQuery(eligible, query, {
       estado: (row) => row.statusLabel,
       reseller: resellerOf,
       dias: (row) => row.daysRemaining,
@@ -338,7 +402,11 @@ export function ClientesAccordion() {
               ? (row: FlujoClient) => row.daysRemaining
               : null
       if (!accessor) continue
-      rows = rows.filter((row) => matchesFilterRule(rule, row, accessor))
+      rows = rows.filter((row) =>
+        rule.path[0] === "dias" && row.statusLabel === "vencido"
+          ? false
+          : matchesFilterRule(rule, row, accessor)
+      )
       counts.set(rule.id, rows.length)
     }
     return counts
@@ -346,24 +414,40 @@ export function ClientesAccordion() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex items-center gap-2">
         <Input
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
-          placeholder="Buscar cliente…"
+          placeholder="Buscar"
           aria-label="Buscar cliente por usuario o correo"
-          className="w-full max-w-xs"
+          className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted px-4 focus-visible:border-transparent"
         />
         <Button
-          variant="outline"
-          size="sm"
-          onClick={reload}
-          disabled={fetchState === "loading"}
+          variant="ghost"
+          onClick={() => setSyncOpen(true)}
+          disabled={fetchState === "loading" || syncing}
+          aria-label="Sincronizar los clientes con el panel de FlujoTV"
+          className="size-12 shrink-0 rounded-full [&_svg]:size-6"
         >
-          <RefreshCwIcon aria-hidden="true" />
-          Recargar
+          {syncing ? (
+            <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
+          ) : (
+            <RefreshCwIcon aria-hidden="true" />
+          )}
         </Button>
       </div>
+
+      {syncing ? (
+        <p
+          className="text-muted-foreground text-xs"
+          role="status"
+          aria-live="polite"
+        >
+          Sincronizando con el panel de FlujoTV: login y extracción de los
+          datos actualizados (tarda alrededor de 90 segundos). La lista se
+          recargará al terminar.
+        </p>
+      ) : null}
 
       {fetchState === "success" && clients.length > 0 ? (
         <Filters
@@ -396,7 +480,14 @@ export function ClientesAccordion() {
                 </Fragment>
               )
             })}
-            <FiltersBuilder />
+            <FiltersBuilder
+              trigger={
+                <Button variant="ghost" size="sm">
+                  <ListFilterPlusIcon aria-hidden="true" />
+                  Añadir filtro
+                </Button>
+              }
+            />
           </div>
         </Filters>
       ) : null}
@@ -412,8 +503,12 @@ export function ClientesAccordion() {
               <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                 <Skeleton className="h-4 w-36" />
                 <Skeleton className="h-3.5 w-48 max-w-full" />
+                <div className="flex items-center gap-2">
+                  <Skeleton className="h-1 w-24 rounded-full" />
+                  <Skeleton className="h-3.5 w-8" />
+                </div>
               </div>
-              <Skeleton className="ml-auto h-1 w-16 shrink-0 rounded-full" />
+              <Skeleton className="ml-auto size-2.5 shrink-0 rounded-full" />
             </div>
           ))}
         </div>
@@ -427,7 +522,7 @@ export function ClientesAccordion() {
             <EmptyDescription>{errorMessage}</EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
-            <Button size="sm" variant="outline" onClick={reload}>
+            <Button size="sm" variant="ghost" onClick={reload}>
               Reintentar
             </Button>
           </EmptyContent>
@@ -440,12 +535,13 @@ export function ClientesAccordion() {
             </EmptyMedia>
             <EmptyTitle>El panel no devolvió clientes</EmptyTitle>
             <EmptyDescription>
-              Refresca los datos del panel desde Lab para sincronizarlos.
+              Sincroniza con el panel: hace login y extrae el listado
+              actualizado de clientes.
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>
-            <Button size="sm" variant="outline" onClick={reload}>
-              Recargar
+            <Button size="sm" variant="ghost" onClick={() => setSyncOpen(true)}>
+              Sincronizar
             </Button>
           </EmptyContent>
         </Empty>
@@ -465,23 +561,26 @@ export function ClientesAccordion() {
                 <Avatar className="size-12">
                   <AvatarFallback>{initials(client.userName)}</AvatarFallback>
                 </Avatar>
-                <div className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+                <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
                   <span className="truncate text-base font-semibold tracking-tight">
                     {client.userName}
                   </span>
                   {client.expiresAt || client.daysRemaining !== null ? (
-                    <span className="text-muted-foreground flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
-                      <span className="truncate">
+                    <div className="flex min-w-0 flex-col gap-1">
+                      <span className="text-muted-foreground truncate text-xs">
                         vence {formatFlujoDate(client.expiresAt)}
                       </span>
-                      <span
-                        aria-hidden="true"
-                        className="bg-muted-foreground/40 size-1 shrink-0 rounded-full"
-                      />
-                      <span className="tabular-nums">
-                        {formatDaysRemaining(client.daysRemaining)}
-                      </span>
-                    </span>
+                      <div className="flex items-center gap-2">
+                        <Progress
+                          value={expiryProgress(client.daysRemaining)}
+                          aria-label={`Días restantes de ${client.userName}`}
+                          className={`w-24 max-w-full shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
+                        />
+                        <span className="text-muted-foreground text-xs tabular-nums">
+                          {formatDaysCompact(client.daysRemaining)}
+                        </span>
+                      </div>
+                    </div>
                   ) : client.email || client.plan ? (
                     <span className="text-muted-foreground truncate text-xs">
                       {client.email ?? client.plan}
@@ -495,11 +594,6 @@ export function ClientesAccordion() {
                     className={`size-2.5 rounded-full ${statusDotClass(client.status)}`}
                   />
                 </div>
-                <Progress
-                  value={expiryProgress(client.daysRemaining)}
-                  aria-label={`Días restantes de ${client.userName}`}
-                  className={`w-16 shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
-                />
               </AccordionTrigger>
               <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
                 <div className="flex flex-col gap-1 pb-1 text-xs">
@@ -521,6 +615,34 @@ export function ClientesAccordion() {
             : `${clients.length} clientes`}
         </p>
       ) : null}
+
+      <AlertDialog open={syncOpen} onOpenChange={setSyncOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              ¿Sincronizar los clientes con el panel?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Recargar hará login en el panel de FlujoTV y extraerá los datos
+              actualizados de los clientes. La sincronización real tarda
+              alrededor de 90 segundos; hasta que termine se siguen mostrando
+              los datos actuales.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={syncing}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                void runSync()
+              }}
+              disabled={syncing}
+            >
+              Sincronizar ahora
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

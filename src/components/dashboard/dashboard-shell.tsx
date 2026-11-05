@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
+import { usePathname } from "next/navigation"
 
 import { AppHeaderDate } from "@/components/app-header-date"
 import { AppBottomNav } from "@/components/dashboard/app-bottom-nav"
 import { AppUserMenu } from "@/components/dashboard/app-user-menu"
+import { findNavSection } from "@/components/dashboard/nav-config"
 import { shellLayout } from "@/components/dashboard/nav-layout"
 import { MascotaLogo } from "@/components/mascota-logo"
 import type { AuthUser } from "@/server/auth/types"
@@ -30,6 +32,10 @@ export function DashboardShell({
   initialDate: string
   children: React.ReactNode
 }) {
+  const pathname = usePathname() ?? ""
+  /** Rótulo de la sección en la cabecera, solo donde la sección lo declara. */
+  const section = findNavSection(pathname)
+  const headerTitle = section?.titleInHeader ? section.title : null
   const [viewport, setViewport] = useState<ShellViewport>({
     keyboardOpen: false,
     height: null,
@@ -98,6 +104,11 @@ export function DashboardShell({
         >
           <MascotaLogo />
         </Link>
+        {headerTitle ? (
+          <h1 className="text-base font-semibold tracking-tight">
+            {headerTitle}
+          </h1>
+        ) : null}
         <div className="ml-auto flex items-center gap-1 md:gap-2">
           <AppHeaderDate initialDate={initialDate} />
           <AppUserMenu user={user} />
