@@ -1,4 +1,4 @@
-import { withTransaction, type PoolClientLike } from "@/server/db"
+import { withTransaction, pool, type PoolClientLike } from "@/server/db"
 import {
   finalizeDocument,
   validateDocument,
@@ -18,6 +18,7 @@ import {
 import {
   isValidEmail,
   normalizeEmail,
+  ACCOUNT_ENTITY_NAME,
   type AuthUser,
   type UserRole,
 } from "./types"
@@ -25,7 +26,7 @@ import { hashPassword } from "./password"
 import { deleteUser, insertUser, updateUser } from "./users"
 import { ensureUserStorage, removeUserStorage } from "@/server/storage/user-files"
 
-export const ACCOUNT_ENTITY_NAME = "Cuenta"
+export { ACCOUNT_ENTITY_NAME }
 
 /** Shared draft for the account's umeJSON entity (id/timestamps still sentinel). */
 export function buildAccountDraft(user: AuthUser): UmeJson {
@@ -162,10 +163,33 @@ async function findAccountEntityId(
     `SELECT id FROM entities
       WHERE deleted_at IS NULL
         AND entity_name = $2
-        AND doc->'dynamicProperties'->>'userId' = $1`,
+        AND doc->'dynamicProperties'->>'userId' = $1
+        AND doc->'dynamicProperties'->>'distribuidorId' = $1`,
     [userId, ACCOUNT_ENTITY_NAME]
   )
   return result.rowCount ? (result.rows[0].id as string) : null
+}
+
+/**
+ * Lee el nombre del reseller FlujoTV ligado a la cuenta del usuario
+ * (dynamicProperties.distribuidorName de su entidad Cuenta); null si no hay.
+ */
+export async function getAccountDistribuidorName(
+  userId: string
+): Promise<string | null> {
+  const result = await pool.query(
+    `SELECT doc->'dynamicProperties'->>'distribuidorName' AS distribuidor_name
+       FROM entities
+      WHERE deleted_at IS NULL
+        AND entity_name = $2
+        AND doc->'dynamicProperties'->>'userId' = $1
+        AND doc->'dynamicProperties'->>'distribuidorId' = $1
+      LIMIT 1`,
+    [userId, ACCOUNT_ENTITY_NAME]
+  )
+  if (!result.rowCount) return null
+  const value = result.rows[0].distribuidor_name as string | null
+  return value && value.length > 0 ? value : null
 }
 
 /**
@@ -177,6 +201,8 @@ export async function updateAccount(input: {
   username?: string
   role?: UserRole
   passwordHash?: string
+  /** Nombre del reseller FlujoTV ligado a la cuenta; "" para desligar. */
+  distribuidorName?: string
   actor: string
 }): Promise<AuthUser> {
   try {
@@ -194,9 +220,21 @@ export async function updateAccount(input: {
       const patch: Record<string, string> = {}
       if (input.username !== undefined) patch.email = input.username
       if (input.role !== undefined) patch.role = input.role
+      if (input.distribuidorName !== undefined) {
+        patch.distribuidorName = input.distribuidorName
+      }
 
       if (Object.keys(patch).length > 0) {
         const entityId = await findAccountEntityId(tx, input.userId)
+        if (!entityId && input.distribuidorName !== undefined) {
+          // El vínculo solo vive en la entidad Cuenta: sin ella no hay dónde
+          // persistirlo y reportar éxito sería mentir al operador.
+          throw new AppError(
+            404,
+            "account_entity_missing",
+            `No live account entity exists for user ${input.userId}`
+          )
+        }
         if (entityId) {
           const head = await tx.query(
             "SELECT version FROM entities WHERE id = $1 AND deleted_at IS NULL",

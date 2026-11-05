@@ -1,4 +1,5 @@
 import { pool, type PoolClientLike } from "@/server/db"
+import { ACCOUNT_ENTITY_NAME } from "./types"
 import type { AuthUser } from "./types"
 
 export interface UserRow {
@@ -38,16 +39,27 @@ export async function findUserById(id: string): Promise<UserRow | null> {
 }
 
 export async function listUsers(): Promise<
-  (Omit<UserRow, "passwordHash"> & { entityCount: number })[]
+  (Omit<UserRow, "passwordHash"> & {
+    entityCount: number
+    /** Reseller FlujoTV ligado a la cuenta (entidad Cuenta); null si no hay. */
+    distribuidorName: string | null
+  })[]
 > {
   const result = await pool.query(
     `SELECT u.id, u.username, u.role, u.created_at,
-            count(e.id) FILTER (WHERE e.deleted_at IS NULL) AS entity_count
+            count(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) AS entity_count,
+            max(acc.doc->'dynamicProperties'->>'distribuidorName') AS distribuidor_name
        FROM users u
        LEFT JOIN entities e
          ON e.doc @> jsonb_build_object('dynamicProperties', jsonb_build_object('distribuidorId', u.id))
+       LEFT JOIN entities acc
+         ON acc.deleted_at IS NULL
+        AND acc.entity_name = $1
+        AND acc.doc->'dynamicProperties'->>'userId' = u.id::text
+        AND acc.doc->'dynamicProperties'->>'distribuidorId' = u.id::text
       GROUP BY u.id
-      ORDER BY u.created_at`
+      ORDER BY u.created_at`,
+    [ACCOUNT_ENTITY_NAME]
   )
   return result.rows.map((row) => ({
     id: row.id as string,
@@ -55,6 +67,10 @@ export async function listUsers(): Promise<
     role: row.role as AuthUser["role"],
     createdAt: row.created_at as Date,
     entityCount: Number(row.entity_count),
+    distribuidorName:
+      typeof row.distribuidor_name === "string" && row.distribuidor_name.length > 0
+        ? row.distribuidor_name
+        : null,
   }))
 }
 

@@ -46,8 +46,9 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
 import {
   Select,
   SelectContent,
@@ -65,6 +66,8 @@ export interface UserListItem {
   username: string
   role: "admin" | "distribuidor"
   entityCount: number
+  /** Reseller FlujoTV ligado a esta cuenta; null si todavía no tiene. */
+  distribuidorName: string | null
   createdAt: string
   createdAtLabel: string
 }
@@ -124,6 +127,19 @@ export function UsersManager({
           </Badge>
         ),
         size: 140,
+      },
+      {
+        accessorKey: "distribuidorName",
+        id: "distribuidorName",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Distributor" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-xs">
+            {row.original.distribuidorName ?? "—"}
+          </span>
+        ),
+        size: 150,
       },
       {
         accessorKey: "entityCount",
@@ -323,6 +339,49 @@ function EditUserForm({
     updateUserAction,
     updateState
   )
+  const [resellers, setResellers] = useState<string[]>([])
+  const [resellersState, setResellersState] = useState<
+    "loading" | "ready" | "error"
+  >("loading")
+
+  useEffect(() => {
+    const controller = new AbortController()
+    fetch("/api/flujotv/resellers", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Request failed with status ${response.status}`)
+        }
+        return (await response.json()) as {
+          ok?: boolean
+          data?: { resellers?: { name?: unknown }[] }
+        }
+      })
+      .then((payload) => {
+        if (controller.signal.aborted) return
+        const names = (payload.data?.resellers ?? [])
+          .map((row) => (typeof row?.name === "string" ? row.name.trim() : ""))
+          .filter((name) => name !== "")
+        setResellers([...new Set(names)].sort((a, b) => a.localeCompare(b, "es")))
+        setResellersState("ready")
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return
+        setResellersState("error")
+      })
+    return () => controller.abort()
+  }, [])
+
+  const currentDistribuidor = user.distribuidorName ?? ""
+  const distributorOptions = useMemo(
+    () =>
+      [...new Set([currentDistribuidor, ...resellers])]
+        .filter((name) => name !== "")
+        .sort((a, b) => a.localeCompare(b, "es")),
+    [currentDistribuidor, resellers]
+  )
 
   useEffect(() => {
     if (state.success) {
@@ -337,8 +396,8 @@ function EditUserForm({
       <DialogHeader>
         <DialogTitle>Edit user</DialogTitle>
         <DialogDescription>
-          Change the login email, role or set a new password. Leave the
-          password blank to keep the current one.
+          Change the login email, role, linked distributor or set a new
+          password. Leave the password blank to keep the current one.
         </DialogDescription>
       </DialogHeader>
       <form action={formAction} className="contents">
@@ -367,6 +426,39 @@ function EditUserForm({
                 <SelectItem value="admin">admin</SelectItem>
               </SelectContent>
             </Select>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`edit-distribuidor-${user.id}`}>
+              Distributor
+            </FieldLabel>
+            <Select
+              name="distribuidorName"
+              defaultValue={currentDistribuidor || DISTRIBUTOR_LINK_NONE}
+            >
+              <SelectTrigger
+                id={`edit-distribuidor-${user.id}`}
+                className="w-full"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={DISTRIBUTOR_LINK_NONE}>Not linked</SelectItem>
+                {distributorOptions.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {resellersState === "loading" ? (
+              <FieldDescription>Loading FlujoTV resellers…</FieldDescription>
+            ) : null}
+            {resellersState === "error" ? (
+              <FieldDescription>
+                Could not load the FlujoTV reseller list; the current link is
+                kept.
+              </FieldDescription>
+            ) : null}
           </Field>
           <Field>
             <FieldLabel htmlFor={`edit-password-${user.id}`}>

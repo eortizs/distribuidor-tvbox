@@ -31,6 +31,7 @@ export default async function UsersPage() {
           username: user.username,
           role: user.role,
           entityCount: user.entityCount,
+          distribuidorName: user.distribuidorName,
           createdAt: user.createdAt.toISOString(),
           createdAtLabel: formatDate(user.createdAt),
         }))}

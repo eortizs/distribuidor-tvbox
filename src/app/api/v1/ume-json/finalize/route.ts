@@ -11,6 +11,7 @@ import {
 } from "@/server/umejson/schema"
 import { createEntity } from "@/server/umejson/repository"
 import { type UmeJson } from "@/server/umejson/types"
+import { ACCOUNT_ENTITY_NAME } from "@/server/auth/types"
 
 export async function POST(request: Request) {
   try {
@@ -58,6 +59,24 @@ export async function POST(request: Request) {
     }
 
     const doc = input as UmeJson
+
+    // La entidad Cuenta es la única fuente de verdad del vínculo usuario ↔
+    // reseller que muestra el panel admin: solo el flujo interno de cuentas
+    // (createAccount) puede crearla, nunca un cliente de la API.
+    if (user.role !== "admin" && doc.entityName === ACCOUNT_ENTITY_NAME) {
+      return Response.json(
+        {
+          ok: false,
+          source: "umejson_api",
+          error: {
+            code: "reserved_entity_name",
+            message: "Entity name 'Cuenta' is reserved for account management",
+          },
+        },
+        { status: 403 }
+      )
+    }
+
     const sentinelErrors = validateSentinels(doc)
     if (sentinelErrors.length > 0) {
       return Response.json(

@@ -1,4 +1,5 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
+import { ACCOUNT_ENTITY_NAME } from "@/server/auth/types"
 import { errorResponse, readJsonBody } from "@/server/http"
 import {
   changeState,
@@ -74,6 +75,18 @@ export async function PATCH(request: Request, ctx: RouteContext) {
 
     const actor = `user:${user.username}`
     const ownership = { ownedByDistribuidorId: user.id }
+
+    // La entidad Cuenta es la fuente de verdad del vínculo usuario ↔ reseller
+    // que muestra el panel admin: su identidad (userId/distribuidorId) y su
+    // distribuidorName solo los puede escribir el flujo interno de cuentas.
+    const current = await getEntity(id, ownership)
+    if (user.role !== "admin" && current.doc.entityName === ACCOUNT_ENTITY_NAME) {
+      throw new AppError(
+        403,
+        "reserved_entity_name",
+        "Entity 'Cuenta' is reserved for account management"
+      )
+    }
 
     let entity
     if (hasProperties && body.dynamicProperties) {

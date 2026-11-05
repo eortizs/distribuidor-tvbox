@@ -10,12 +10,9 @@ import {
 } from "@/server/auth/accounts"
 import { hashPassword } from "@/server/auth/password"
 import { countAdmins, findUserById } from "@/server/auth/users"
-import {
-  isValidEmail,
-  isValidRole,
-  normalizeEmail,
-  type UserRole,
-} from "@/server/auth/types"
+import { getAccountDistribuidorName } from "@/server/auth/accounts"
+import { isValidEmail, isValidRole, normalizeEmail, type UserRole } from "@/server/auth/types"
+import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
 import { AppError } from "@/server/umejson/types"
 
 export interface CreateUserState {
@@ -86,16 +83,23 @@ export async function updateUserAction(
   const username = normalizeEmail(String(formData.get("username") ?? ""))
   const role = String(formData.get("role") ?? "")
   const newPassword = String(formData.get("newPassword") ?? "")
+  const distribuidorRaw = String(formData.get("distribuidorName") ?? "").trim()
+  const distribuidorName =
+    distribuidorRaw === DISTRIBUTOR_LINK_NONE || distribuidorRaw === ""
+      ? ""
+      : distribuidorRaw.slice(0, 120)
 
   const target = await findUserById(userId)
   if (!target) {
     return { error: "User not found", success: null }
   }
+  const currentDistribuidor = (await getAccountDistribuidorName(userId)) ?? ""
 
   const patch: {
     username?: string
     role?: UserRole
     passwordHash?: string
+    distribuidorName?: string
   } = {}
 
   if (username !== target.username) {
@@ -125,6 +129,9 @@ export async function updateUserAction(
     }
     patch.passwordHash = await hashPassword(newPassword)
   }
+  if (distribuidorName !== currentDistribuidor) {
+    patch.distribuidorName = distribuidorName
+  }
 
   if (Object.keys(patch).length === 0) {
     return { error: "No changes to save", success: null }
@@ -140,6 +147,13 @@ export async function updateUserAction(
     if (error instanceof AppError && error.code === "email_taken") {
       return { error: `Email '${username}' already exists`, success: null }
     }
+    if (error instanceof AppError && error.code === "account_entity_missing") {
+      return {
+        error:
+          "This user has no account entity to link the distributor to; contact support",
+        success: null,
+      }
+    }
     throw error
   }
 
@@ -149,6 +163,11 @@ export async function updateUserAction(
     patch.username ? "email" : null,
     patch.role ? "role" : null,
     patch.passwordHash ? "password" : null,
+    patch.distribuidorName !== undefined
+      ? patch.distribuidorName === ""
+        ? "reseller unlinked"
+        : `reseller '${patch.distribuidorName}'`
+      : null,
   ].filter(Boolean)
   return {
     error: null,

@@ -81,6 +81,18 @@ El login vive en `/login` y siempre es una cuenta de correo; desde ahí se enlaz
 
 El autorregistro (`/register`) crea cuentas únicamente como `distribuidor`; solo un `admin` puede elevar el perfil después.
 
+### Ligazón usuario ↔ distribuidor (reseller FlujoTV)
+
+En `/users`, el diálogo **Edit user** incluye un campo **Distributor**: un dropdown con los resellers reales del panel FlujoTV (`GET /api/flujotv/resellers`, que la app consulta al abrir el diálogo, con estados de carga/error y el valor actual siempre presente aunque la lista falle). La opción **Not linked** desliga la cuenta. La tabla muestra el vínculo vigente en la columna **Distributor** (`—` si no hay).
+
+Reglas de la ligazón:
+
+- **Persistencia**: el nombre elegido vive en `dynamicProperties.distribuidorName` de la entidad umeJSON `Cuenta` del usuario (vacío = sin ligar). Lo escribe `updateAccount` (`src/server/auth/accounts.ts`) con el mismo protocolo de lock optimista y evento `property.updated` que email/role; `listUsers` (`src/server/auth/users.ts`) lo lee con un JOIN contra la entidad Cuenta y lo expone en `/users`.
+- **Entidad canónica**: las tres rutas de lectura/escritura del vínculo (`listUsers`, `getAccountDistribuidorName`, `findAccountEntityId`) exigen que la entidad Cuenta cumpla `userId = distribuidorId = usuario`, como siempre deja `buildAccountDraft`, de modo que documentos ajenos no puedan hacerse pasar por la cuenta de otro.
+- **Nombre reservado**: `Cuenta` solo lo crea el flujo interno de cuentas (`createAccount`). Un no-admin que lo intente vía `POST /api/v1/ume-json/finalize` o que parche una entidad `Cuenta` vía `PATCH /api/entities/[id]` recibe `403 reserved_entity_name` (documentado en la tabla de API).
+- **Errores explícitos**: si el usuario no tiene entidad Cuenta viva (p. ej. cuentas de semilla), ligar un distribuidor devuelve error en el formulario (`account_entity_missing`) en lugar de reportar éxito sin persistir; cambiar solo email/role/password mantiene el comportamiento de siempre.
+- **Contrato cliente/servidor**: el valor "sin distribuidor" viaja con el sentinel compartido `DISTRIBUTOR_LINK_NONE` (`src/lib/distributor-link.ts`), usado a la vez por el formulario (`users-list.tsx`) y el server action (`updateUserAction`), y nunca se persiste.
+
 ## Perfil de usuario
 
 Página `/profile` (enlace **Perfil** en el menú de la cuenta, en la cabecera), organizada en tres pestañas (patrón ReUI `c-tabs-2`, variante `line`). Es el patrón de pestañas **canónico de la app**: todas las vistas con pestañas lo replican (ver [Convenciones de UI](#convenciones-de-ui)):
@@ -261,10 +273,10 @@ Toda mutación es una transacción atómica: `UPDATE entities ... WHERE id = $1 
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| `POST` | `/api/v1/ume-json/finalize` | Valida schema + sentinels, inyecta id/lifecycle y persiste. `__diagnostic` / `schema_violation` / `sentinel_violation` → 422 |
+| `POST` | `/api/v1/ume-json/finalize` | Valida schema + sentinels, inyecta id/lifecycle y persiste. `__diagnostic` / `schema_violation` / `sentinel_violation` → 422; `entityName: "Cuenta"` no-admin → 403 `reserved_entity_name` (reservada al flujo interno de cuentas) |
 | `GET` | `/api/entities?entityName=&q=&limit=&offset=` | Lista paginada (distribuidor: solo las suyas) |
 | `GET` | `/api/entities/[id]` | Detalle de la entidad |
-| `PATCH` | `/api/entities/[id]` | `{version, dynamicProperties \| state, reason?}` — 409 en conflicto de versión |
+| `PATCH` | `/api/entities/[id]` | `{version, dynamicProperties \| state, reason?}` — 409 en conflicto de versión; `entityName: "Cuenta"` no-admin → 403 `reserved_entity_name` |
 | `GET` | `/api/entities/[id]/events` | Bitácora de eventos |
 | `GET/POST` | `/api/users`* | Gestión de cuentas (solo admin, vía server actions: alta, edición y baja) |
 | `POST` | `/api/asistente/chat` | Chat con el LLM en streaming (`{ messages: [{ role, content }] }` → texto plano en chunks). Herramientas de gastos del usuario de la sesión (tool-calling en servidor, máx. 4 llamadas por turno). Sesión requerida; 20 req/min por usuario |

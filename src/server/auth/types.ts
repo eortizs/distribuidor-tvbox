@@ -1,5 +1,8 @@
 export type UserRole = "admin" | "distribuidor"
 
+/** entityName of the umeJSON entity that mirrors each auth user. */
+export const ACCOUNT_ENTITY_NAME = "Cuenta"
+
 export const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 export function isValidEmail(value: string): boolean {
