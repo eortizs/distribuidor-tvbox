@@ -8,6 +8,7 @@ import {
   GatewayAuthenticationError,
   GatewayError,
 } from "@ai-sdk/gateway"
+import sharp from "sharp"
 
 import { pool } from "@/server/db"
 import { fixRates, mxDayKey, type FixRateInfo } from "@/server/banxico"
@@ -51,6 +52,12 @@ import {
   MAX_REFERENCE_TOTAL_BYTES,
   REFERENCE_IMAGE_TYPES,
 } from "@/lib/attachments"
+import {
+  annotationOutputMime,
+  buildAnnotationOverlaySvg,
+  copyFileName,
+  type AnnotationStroke,
+} from "@/server/images/annotations"
 
 const MAX_PROMPT_LENGTH = 2000
 const REQUEST_TIMEOUT_MS = 180_000
@@ -163,6 +170,9 @@ function createRateLimiter(max: number, windowMs: number) {
 
 export const checkImageRateLimit = createRateLimiter(6, 60_000)
 export const checkEnhanceRateLimit = createRateLimiter(10, 60_000)
+// Guardar una copia dibujada es barato (sin IA), pero sigue acotado: bucket
+// propio, independiente del de generación.
+export const checkAnnotationRateLimit = createRateLimiter(20, 60_000)
 
 function isAspectRatio(value: unknown): value is AspectRatio {
   return (
@@ -1006,6 +1016,177 @@ export async function deleteImageGenerations(
   return {
     deleted,
     missing: unique.filter((id) => !deletedSet.has(id)),
+  }
+}
+
+/* ---------------------------------------------------------------------- *
+ * «Dibujar»: guarda una copia anotada de una imagen de Galería. El
+ * original no se toca, la fila nueva registra cost_usd NULL (no hay llamada
+ * ni gasto de IA) y la copia sobrevive al borrado posterior del original.
+ * ---------------------------------------------------------------------- */
+
+/** Modelo declarado para la copia anotada: no es IA ni pasa por el gateway,
+ * es una composición local con Sharp; el valor solo describe el origen. */
+const ANNOTATION_MODEL = "anotación manual"
+
+/** Tope de píxeles del original que se puede decodificar para anotar:
+ * ~30 MP, muy por encima de cualquier foto habitual, con memoria acotada. */
+const ANNOTATION_INPUT_PIXELS = 30_000_000
+
+/**
+ * Decodifica el original (con tope explícito de píxeles), normaliza su
+ * orientación EXIF y compone los trazos validados a la resolución completa.
+ * Conserva PNG/JPEG/WebP; los formatos restantes compatibles se rasterizan a
+ * PNG con su extensión real correcta.
+ */
+async function composeAnnotationImage(
+  original: Buffer,
+  sourceMimeType: string,
+  strokes: readonly AnnotationStroke[]
+): Promise<{ bytes: Buffer; mimeType: string }> {
+  const rotated = await sharp(original, {
+    limitInputPixels: ANNOTATION_INPUT_PIXELS,
+    failOn: "none",
+  })
+    .rotate()
+    .toBuffer({ resolveWithObject: true })
+  const overlay = buildAnnotationOverlaySvg(
+    rotated.info.width,
+    rotated.info.height,
+    strokes
+  )
+  const mimeType = annotationOutputMime(sourceMimeType)
+  let pipeline = sharp(rotated.data, { limitInputPixels: ANNOTATION_INPUT_PIXELS }).composite([
+    { input: Buffer.from(overlay), top: 0, left: 0 },
+  ])
+  if (mimeType === "image/jpeg") pipeline = pipeline.jpeg({ quality: 90 })
+  else if (mimeType === "image/webp") pipeline = pipeline.webp({ quality: 90 })
+  else pipeline = pipeline.png()
+  const composed = await pipeline.toBuffer({ resolveWithObject: true })
+  return { bytes: composed.data, mimeType }
+}
+
+export async function annotateImageGeneration(
+  userId: string,
+  generationId: string,
+  strokes: readonly AnnotationStroke[]
+): Promise<ImageGenerationPayload> {
+  if (!UUID_RE.test(generationId)) {
+    throw new AppError(404, "not_found", "Generación no encontrada")
+  }
+  const found = await pool.query(
+    `${SELECT_GENERATION}
+      WHERE g.id = $1 AND g.user_id = $2 AND g.deleted_at IS NULL
+        AND g.file_id IS NOT NULL`,
+    [generationId, userId]
+  )
+  const row = found.rows[0] as GenerationRow | undefined
+  if (!row?.file_id) {
+    throw new AppError(404, "not_found", "Generación no encontrada")
+  }
+  const file = await getUserFile(userId, row.file_id)
+  if (!file) {
+    throw new AppError(404, "not_found", "Generación no encontrada")
+  }
+  let original: Buffer
+  try {
+    original = await readFile(userFilePath(file))
+  } catch {
+    throw new AppError(404, "not_found", "Generación no encontrada")
+  }
+
+  let composed: { bytes: Buffer; mimeType: string }
+  try {
+    composed = await composeAnnotationImage(original, file.mimeType, strokes)
+  } catch {
+    throw new AppError(
+      422,
+      "unsupported_image",
+      "Esta imagen no se puede anotar porque su formato no es compatible. Descárgala e inténtalo con otro formato."
+    )
+  }
+  if (composed.bytes.byteLength === 0) {
+    throw new AppError(
+      422,
+      "unsupported_image",
+      "Esta imagen no se puede anotar porque su formato no es compatible."
+    )
+  }
+  if (composed.bytes.byteLength > maxUploadBytes()) {
+    throw new AppError(
+      413,
+      "file_too_large",
+      "La imagen anotada excede el límite de almacenamiento. Usa una imagen más ligera."
+    )
+  }
+
+  const saved = await saveUserFile({
+    userId,
+    kind: "generated",
+    fileName: copyFileName(file.fileName, extensionFor(composed.mimeType)),
+    mimeType: composed.mimeType,
+    bytes: composed.bytes,
+  })
+
+  // Las variantes de la copia se derivan igual que las de una generación:
+  // la galería pide la miniatura y el visor la versión baja.
+  const derivedVariants = await saveImageVariants(saved, composed.bytes)
+  const variantIndex: VariantIndex = new Map([
+    [
+      saved.id,
+      {
+        low: derivedVariants.find((record) => record.variant === "low"),
+        thumb: derivedVariants.find((record) => record.variant === "thumb"),
+      },
+    ],
+  ])
+
+  // Carrera con el borrado del original durante el guardado: si la fuente
+  // dejó de existir (o apunta a otro archivo), la copia no se registra.
+  const stillThere = await pool.query(
+    `SELECT 1 FROM image_generations
+      WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL AND file_id = $3`,
+    [generationId, userId, row.file_id]
+  )
+  if (!stillThere.rowCount) {
+    await deleteUserFile(userId, saved.id).catch(() => {})
+    throw new AppError(
+      404,
+      "not_found",
+      "La imagen original ya no está disponible; la copia no se guardó."
+    )
+  }
+
+  const copyId = crypto.randomUUID()
+  try {
+    const result = await pool.query(
+      `INSERT INTO image_generations (id, user_id, file_id, prompt, model, aspect_ratio, quality, cost_usd)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NULL)
+       RETURNING id, file_id, prompt, model, aspect_ratio, quality, cost_usd, created_at,
+                 $8 AS file_name, $9 AS mime_type, $10 AS size_bytes`,
+      [
+        copyId,
+        userId,
+        saved.id,
+        row.prompt,
+        ANNOTATION_MODEL,
+        row.aspect_ratio,
+        row.quality,
+        saved.fileName,
+        saved.mimeType,
+        saved.sizeBytes,
+      ]
+    )
+    return mapGenerationRow(
+      result.rows[0] as GenerationRow,
+      null,
+      variantIndex
+    )
+  } catch (error) {
+    // La fila no se registró: la copia (archivo y variantes) se limpia para
+    // no dejar huérfanos en el disco.
+    await deleteUserFile(userId, saved.id).catch(() => {})
+    throw error
   }
 }
 

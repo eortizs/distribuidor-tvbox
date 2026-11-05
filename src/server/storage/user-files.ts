@@ -128,7 +128,10 @@ export function sanitizeFileName(raw: string): string {
   const base = raw.split(/[\\/]/).pop() ?? "file"
   const cleaned = base
     .replace(/[\u0000-\u001f\u007f]/g, "")
-    .replace(/[^\p{L}\p{N}._ -]/gu, "_")
+    // Los paréntesis se permiten explícitamente: los nombres de copia
+    // terminan en " (copia)". No son separadores de ruta, así que no abren
+    // ninguna vía de traversal.
+    .replace(/[^\p{L}\p{N}._ ()-]/gu, "_")
     .replace(/\s+/g, " ")
     .trim()
     .replace(/^[.\s]+/, "")

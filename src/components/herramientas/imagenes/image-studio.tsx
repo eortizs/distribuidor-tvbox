@@ -7,6 +7,7 @@ import {
   ImageDownIcon,
   ImageIcon,
   MicIcon,
+  PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
@@ -100,6 +101,10 @@ import {
   type AttachmentItem,
   type AttachmentStatus,
 } from "@/components/herramientas/attachment-chips"
+import {
+  DrawEditor,
+  type DrawEditorSavedImage,
+} from "@/components/herramientas/imagenes/draw-editor"
 import {
   formatBytes,
   useFileUpload,
@@ -676,6 +681,9 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
   const [sharing, setSharing] = React.useState(false)
   // Segundo nivel sobre el visor: la imagen sola, a pantalla completa.
   const [zoomed, setZoomed] = React.useState(false)
+  // Editor de dibujo sobre la imagen del visor: guarda una copia nueva y
+  // deja el original intacto.
+  const [drawing, setDrawing] = React.useState(false)
   const copyResetTimer = React.useRef<ReturnType<typeof setTimeout> | null>(
     null
   )
@@ -1153,6 +1161,21 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     } finally {
       setSharing(false)
     }
+  }
+
+  /**
+   * Guardó la copia anotada (201): la copia entra en la galería como
+   * elemento propio (costo NULL: los totales no se mueven), se abre en el
+   * visor y el editor se cierra. La lista se actualiza en local: un fallo de
+   * refresco posterior no debe provocar repetir el guardado.
+   */
+  function handleDrawingSaved(copy: DrawEditorSavedImage) {
+    setDrawing(false)
+    setImages((current) => [copy, ...current])
+    setTotal((current) => current + 1)
+    setViewer(copy)
+    setCopied(false)
+    toast.success("Copia con dibujo guardada en la galería.")
   }
 
   async function remove(image: ImageGeneration) {
@@ -1938,23 +1961,36 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
                   {dayFormatter.format(new Date(viewer.createdAt))}
                 </span>
               </div>
-              {/* Acciones sobre la imagen. Eliminar queda aparte de la acción
-                  principal (descargar) y pide confirmación. */}
-              <div className="flex items-center justify-between gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void copyDescription()}
-                  title="Copia la descripción completa de la imagen al portapapeles para poder reusarla"
-                >
-                  {copied ? (
-                    <CheckIcon data-icon="inline-start" />
-                  ) : (
-                    <CopyIcon data-icon="inline-start" />
-                  )}
-                  {copied ? "Copiado" : "Copiar descripción"}
-                </Button>
+              {/* Acciones sobre la imagen. Dibujar abre el editor que guarda
+                  una copia; Eliminar queda aparte de la acción principal
+                  (descargar) y pide confirmación. */}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void copyDescription()}
+                    title="Copia la descripción completa de la imagen al portapapeles para poder reusarla"
+                  >
+                    {copied ? (
+                      <CheckIcon data-icon="inline-start" />
+                    ) : (
+                      <CopyIcon data-icon="inline-start" />
+                    )}
+                    {copied ? "Copiado" : "Copiar descripción"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setDrawing(true)}
+                    title="Dibuja sobre la imagen y guarda una copia; el original no cambia"
+                  >
+                    <PencilIcon data-icon="inline-start" />
+                    Dibujar
+                  </Button>
+                </div>
                 <AlertDialog
                   open={confirmDelete}
                   onOpenChange={setConfirmDelete}
@@ -2066,6 +2102,19 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
             />
           </DialogContent>
         </Dialog>
+      ) : null}
+
+      {/* Editor de dibujo: guarda una copia anotada sin tocar el original.
+          Se monta solo mientras se dibuja: cada apertura empieza con el
+          editor limpio y se reinicia por imagen (key). */}
+      {viewer?.file && drawing ? (
+        <DrawEditor
+          key={viewer.id}
+          image={{ ...viewer, file: viewer.file }}
+          open={drawing}
+          onOpenChange={setDrawing}
+          onSaved={handleDrawingSaved}
+        />
       ) : null}
     </div>
   )
