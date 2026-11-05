@@ -1,6 +1,7 @@
 "use client"
 
 import type {
+  FlujoClient,
   FlujoClientsResponse,
   FlujoLicensesResponse,
   FlujoRawResult,
@@ -53,6 +54,17 @@ async function parse<T>(response: Response): Promise<T> {
 export async function fetchFlujoStatus(): Promise<FlujoStatus> {
   const response = await fetch("/api/flujotv/status", { cache: "no-store" })
   return parse<FlujoStatus>(response)
+}
+
+export async function fetchFlujoClient(
+  userName: string
+): Promise<FlujoClient | null> {
+  const response = await fetch(
+    `/api/flujotv/clients/${encodeURIComponent(userName)}`,
+    { cache: "no-store" }
+  )
+  const { client } = await parse<{ client: FlujoClient | null }>(response)
+  return client
 }
 
 export async function fetchFlujoClients(params: {

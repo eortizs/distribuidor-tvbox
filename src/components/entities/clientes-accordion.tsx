@@ -19,6 +19,33 @@
  *   botón; el detalle vive en el contenido expandido.
  * - Contenido expandido: correo y plan.
  *
+ * Cada fila lleva además el botón de **compra rápida** (shopping-cart-plus
+ * de lucide), colocado entre el contenido y el punto de estado:
+ *
+ * - Posición: capa absoluta sobre la fila (`inset-y-0`, centrada en
+ *   vertical con flex) a la izquierda del semáforo; la capa es
+ *   `pointer-events-none` y solo el botón recibe toques, así el resto de la
+ *   fila sigue alternando el acordeón. El botón es hermano del trigger y no
+ *   descendiente: un `<button>` anidado rompería el HTML y la hidratación.
+ * - Tamaño móvil: blanco táctil de 44×44 px (`size-11`) con icono de 28 px
+ *   (`size-7`) en negro puro (`text-black`).
+ * - Feedback de pulsación: escala a 90 % con fondo `primary/15` e icono
+ *   `primary` (curva de la casa, 200 ms); con `motion-reduce` se conserva
+ *   solo el cambio de color.
+ * - Flujo: al pulsar abre un AlertDialog de confirmación con el resumen de
+ *   la operación (usuario, renovación de 1 mes, vigencia actual). Confirmar
+ *   ejecuta `POST /api/flujotv/renewals` (months 1) con clave de
+ *   idempotencia `compra-<uuid>` que se conserva mientras se repita el
+ *   mismo cliente sin éxito: un reintento tras un error de red no cobra dos
+ *   veces; al éxito la clave se consume. El diálogo no se cierra mientras
+ *   procesa (Escape ignorado) y los fallos avisan con toast además del
+ *   Alert dentro del diálogo.
+ * - Tras el éxito la fila se refresca con una lectura en vivo del cliente
+ *   (`GET /api/flujotv/clients/{usuario}` → `/find_user`, sin caché) en vez
+ *   de recargar el listado: el listado viene del snapshot cacheado del panel
+ *   y no reflejaría la renovación, y presentar vencimiento viejo como fresco
+ *   invitaría a comprar dos veces.
+ *
  * La pantalla compone además la barra de **filtros** ReUI (`filters` en
  * variante básica, copia en español del Lab) sobre el listado ya descargado:
  * Estado como selección, Distribuidor con la lista real de resellers del panel
@@ -49,9 +76,12 @@ import {
   LoaderCircleIcon,
   PackageOpenIcon,
   RefreshCwIcon,
+  ShoppingCartPlusIcon,
+  TriangleAlertIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { Alert, AlertDescription, AlertTitle } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
 import {
   AlertDialog,
@@ -61,6 +91,7 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
+  AlertDialogMedia,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import {
@@ -97,7 +128,13 @@ import {
   type FlujoClient,
 } from "@/lib/flujotv"
 
-import { fetchFlujoClients, fetchFlujoResellers, refreshFlujo } from "@/components/lab/flujo-api"
+import {
+  fetchFlujoClient,
+  fetchFlujoClients,
+  fetchFlujoResellers,
+  refreshFlujo,
+  renewFlujoLicense,
+} from "@/components/lab/flujo-api"
 import {
   applyFilterQuery,
   matchesFilterRule,
@@ -206,6 +243,11 @@ export function ClientesAccordion() {
   const [reloadCount, setReloadCount] = useState(0)
   const [syncOpen, setSyncOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [purchaseOpen, setPurchaseOpen] = useState(false)
+  const [purchaseTarget, setPurchaseTarget] = useState<FlujoClient | null>(null)
+  const [purchaseKey, setPurchaseKey] = useState("")
+  const [purchasing, setPurchasing] = useState(false)
+  const [purchaseError, setPurchaseError] = useState<string | null>(null)
 
   const requestCounter = useRef(0)
 
@@ -288,6 +330,55 @@ export function ClientesAccordion() {
       setSyncOpen(false)
     }
   }, [reload])
+
+  const openPurchase = useCallback(
+    (client: FlujoClient) => {
+      if (purchaseTarget?.id !== client.id || !purchaseKey) {
+        setPurchaseKey(`compra-${crypto.randomUUID()}`)
+      }
+      setPurchaseTarget(client)
+      setPurchaseError(null)
+      setPurchaseOpen(true)
+    },
+    [purchaseTarget, purchaseKey]
+  )
+
+  const submitPurchase = useCallback(async () => {
+    if (!purchaseTarget) return
+    const userName = purchaseTarget.userName.trim()
+    setPurchasing(true)
+    setPurchaseError(null)
+    try {
+      await renewFlujoLicense({
+        userName,
+        months: 1,
+        idempotencyKey: purchaseKey,
+      })
+      toast.success("Renovación registrada", {
+        description: `${userName} · 1 mes`,
+      })
+      setPurchaseKey("")
+      setPurchaseOpen(false)
+      fetchFlujoClient(userName)
+        .then((fresh) => {
+          if (fresh) {
+            setClients((rows) =>
+              rows.map((row) => (row.id === fresh.id ? fresh : row))
+            )
+          }
+        })
+        .catch(() => {})
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "No se pudo completar la compra."
+      setPurchaseError(message)
+      toast.error(message)
+    } finally {
+      setPurchasing(false)
+    }
+  }, [purchaseTarget, purchaseKey])
 
   /** Facetas por opción, calculadas sobre el listado cargado. */
   const estadoCounts = useMemo(() => {
@@ -557,44 +648,58 @@ export function ClientesAccordion() {
               value={client.id}
               className="bg-transparent p-0"
             >
-              <AccordionTrigger className="items-center gap-3 rounded-lg px-1.5 py-2.5 hover:bg-muted hover:no-underline focus-visible:border-transparent focus-visible:ring-0 dark:hover:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden">
-                <Avatar className="size-12">
-                  <AvatarFallback>{initials(client.userName)}</AvatarFallback>
-                </Avatar>
-                <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
-                  <span className="truncate text-base font-semibold tracking-tight">
-                    {client.userName}
-                  </span>
-                  {client.expiresAt || client.daysRemaining !== null ? (
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <span className="text-muted-foreground truncate text-xs">
-                        vence {formatFlujoDate(client.expiresAt)}
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <Progress
-                          value={expiryProgress(client.daysRemaining)}
-                          aria-label={`Días restantes de ${client.userName}`}
-                          className={`w-24 max-w-full shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
-                        />
-                        <span className="text-muted-foreground text-xs tabular-nums">
-                          {formatDaysCompact(client.daysRemaining)}
-                        </span>
-                      </div>
-                    </div>
-                  ) : client.email || client.plan ? (
-                    <span className="text-muted-foreground truncate text-xs">
-                      {client.email ?? client.plan}
+              <div className="relative">
+                <AccordionTrigger className="items-center gap-3 rounded-lg px-1.5 py-2.5 hover:bg-muted hover:no-underline focus-visible:border-transparent focus-visible:ring-0 dark:hover:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden">
+                  <Avatar className="size-12">
+                    <AvatarFallback>{initials(client.userName)}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 pr-14">
+                    <span className="truncate text-base font-semibold tracking-tight">
+                      {client.userName}
                     </span>
-                  ) : null}
+                    {client.expiresAt || client.daysRemaining !== null ? (
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <span className="text-muted-foreground truncate text-xs">
+                          vence {formatFlujoDate(client.expiresAt)}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Progress
+                            value={expiryProgress(client.daysRemaining)}
+                            aria-label={`Días restantes de ${client.userName}`}
+                            className={`w-24 max-w-full shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
+                          />
+                          <span className="text-muted-foreground text-xs tabular-nums">
+                            {formatDaysCompact(client.daysRemaining)}
+                          </span>
+                        </div>
+                      </div>
+                    ) : client.email || client.plan ? (
+                      <span className="text-muted-foreground truncate text-xs">
+                        {client.email ?? client.plan}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex w-4 shrink-0 items-center justify-center">
+                    <span
+                      role="img"
+                      aria-label={client.statusLabel}
+                      className={`size-2.5 rounded-full ${statusDotClass(client.status)}`}
+                    />
+                  </div>
+                </AccordionTrigger>
+                <div className="pointer-events-none absolute inset-y-0 right-8 z-10 flex items-center">
+                  <Button
+                    variant="ghost"
+                    size="icon-lg"
+                    onClick={() => openPurchase(client)}
+                    disabled={purchasing}
+                    aria-label={`Comprar 1 mes para ${client.userName}`}
+                    className="pointer-events-auto size-11 shrink-0 rounded-full text-black transition-[transform,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-90 active:bg-primary/15 active:text-primary motion-reduce:active:scale-100 [&_svg]:size-7"
+                  >
+                    <ShoppingCartPlusIcon aria-hidden="true" />
+                  </Button>
                 </div>
-                <div className="flex w-4 shrink-0 items-center justify-center">
-                  <span
-                    role="img"
-                    aria-label={client.statusLabel}
-                    className={`size-2.5 rounded-full ${statusDotClass(client.status)}`}
-                  />
-                </div>
-              </AccordionTrigger>
+              </div>
               <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
                 <div className="flex flex-col gap-1 pb-1 text-xs">
                   <span className="truncate">
@@ -639,6 +744,65 @@ export function ClientesAccordion() {
               disabled={syncing}
             >
               Sincronizar ahora
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={purchaseOpen}
+        onOpenChange={(open) => {
+          if (!open && !purchasing) setPurchaseOpen(false)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <ShoppingCartPlusIcon aria-hidden="true" />
+            </AlertDialogMedia>
+            <AlertDialogTitle>¿Confirmar la compra?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Compra automática de renovación en el panel de FlujoTV. La
+              operación queda registrada y no se puede deshacer desde aquí.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {purchaseTarget ? (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
+              <dt className="text-muted-foreground">Usuario</dt>
+              <dd className="truncate font-medium">
+                {purchaseTarget.userName}
+              </dd>
+              <dt className="text-muted-foreground">Renovación</dt>
+              <dd className="font-medium">1 mes</dd>
+              <dt className="text-muted-foreground">Vigencia actual</dt>
+              <dd className="font-medium">
+                {purchaseTarget.expiresAt
+                  ? formatFlujoDate(purchaseTarget.expiresAt)
+                  : "—"}
+              </dd>
+            </dl>
+          ) : null}
+          {purchaseError ? (
+            <Alert variant="destructive">
+              <TriangleAlertIcon aria-hidden="true" />
+              <AlertTitle>La compra no se completó</AlertTitle>
+              <AlertDescription>
+                <p>{purchaseError}</p>
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={purchasing}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                void submitPurchase()
+              }}
+              disabled={purchasing}
+            >
+              {purchasing ? "Procesando…" : "Confirmar compra"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
