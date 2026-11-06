@@ -29,15 +29,15 @@ export async function loginAction(
   const password = String(formData.get("password") ?? "")
 
   if (!email || !password) {
-    return { error: "Email and password are required" }
+    return { error: "El correo y la contraseña son obligatorios" }
   }
   if (!isValidEmail(email)) {
-    return { error: "Login must be a valid email address" }
+    return { error: "Ingresa un correo electrónico válido" }
   }
 
   const user = await findUserByUsername(email)
   if (!user || !(await verifyPassword(password, user.passwordHash))) {
-    return { error: "Invalid credentials" }
+    return { error: "Credenciales incorrectas" }
   }
 
   await createSession({

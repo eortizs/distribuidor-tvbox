@@ -19,8 +19,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Togu",
-  description: "Admin dashboard for Togu",
+  title: "TVBOX",
+  description: "Panel de administración de TVBOX",
   applicationName: "Distribuidor TVBox",
   appleWebApp: {
     capable: true,

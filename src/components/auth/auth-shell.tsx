@@ -1,13 +1,12 @@
 import type { ReactNode } from "react"
 
-import { ToguLogo } from "@/components/togu-logo"
+import { TvboxWordmark } from "@/components/tvbox-wordmark"
 
 export function AuthShell({ children }: { children: ReactNode }) {
   return (
     <div className="bg-background flex min-h-svh flex-col items-center justify-center p-4">
-      <div className="mb-6 flex items-center gap-2">
-        <ToguLogo className="size-8" />
-        <span className="text-lg font-semibold tracking-tight">Togu</span>
+      <div className="mb-6 flex items-center">
+        <TvboxWordmark className="h-12" />
       </div>
       {children}
     </div>

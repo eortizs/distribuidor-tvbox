@@ -38,16 +38,16 @@ export function LoginForm() {
   return (
     <Card className="mx-auto w-full max-w-xs">
       <CardHeader>
-        <CardTitle>Sign in</CardTitle>
+        <CardTitle>Iniciar sesión</CardTitle>
         <CardDescription>
-          Enter your email and password to access your account
+          Ingresa tu correo y contraseña para acceder a tu cuenta
         </CardDescription>
       </CardHeader>
       <CardContent>
         <form action={formAction} className="grid gap-6">
           <FieldGroup>
             <Field>
-              <FieldLabel htmlFor="username">Email address</FieldLabel>
+              <FieldLabel htmlFor="username">Correo electrónico</FieldLabel>
               <Input
                 id="username"
                 name="username"
@@ -58,12 +58,12 @@ export function LoginForm() {
               />
             </Field>
             <Field>
-              <FieldLabel htmlFor="password">Password</FieldLabel>
+              <FieldLabel htmlFor="password">Contraseña</FieldLabel>
               <InputGroup>
                 <InputGroupInput
                   id="password"
                   name="password"
-                  placeholder="Password"
+                  placeholder="Contraseña"
                   type={isVisible ? "text" : "password"}
                   autoComplete="current-password"
                   required
@@ -72,7 +72,7 @@ export function LoginForm() {
                   <InputGroupButton
                     size="icon-sm"
                     type="button"
-                    aria-label={isVisible ? "Hide password" : "Show password"}
+                    aria-label={isVisible ? "Ocultar contraseña" : "Mostrar contraseña"}
                     onClick={() => setIsVisible(!isVisible)}
                   >
                     {isVisible ? (
@@ -91,16 +91,16 @@ export function LoginForm() {
             </p>
           ) : null}
           <Button type="submit" className="w-full" disabled={isPending}>
-            {isPending ? "Signing in…" : "Sign in"}
+            {isPending ? "Iniciando sesión…" : "Iniciar sesión"}
           </Button>
         </form>
         <p className="text-muted-foreground mt-4 text-center text-sm">
-          Don&apos;t have an account?{" "}
+          ¿No tienes una cuenta?{" "}
           <Link
             href="/register"
             className="text-primary font-medium underline-offset-4 hover:underline"
           >
-            Create account
+            Crear cuenta
           </Link>
         </p>
       </CardContent>

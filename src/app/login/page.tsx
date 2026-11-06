@@ -7,7 +7,7 @@ import { getSessionUser } from "@/server/auth/session"
 export const instant = false
 
 export const metadata = {
-  title: "Sign in",
+  title: "Iniciar sesión",
 }
 
 export default async function LoginPage() {
