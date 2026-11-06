@@ -62,6 +62,10 @@
  *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario/correo.
+ * Con perfil distribuidor el servidor ya entrega solo los clientes de su
+ * reseller ligado (prop `distribuidorName`): en ese caso la barra omite el
+ * filtro de Distribuidor — todas las filas comparten el mismo — y no consulta
+ * `/api/flujotv/resellers`, cuyo listado completo no le compete.
  * El botón de recargar (icono a la derecha de la búsqueda) dispara la
  * sincronización real (`POST /api/flujotv/refresh`, target `list_clients`
  * con `skip_cache=true`): login en el panel y extracción de los datos
@@ -232,7 +236,12 @@ const CLIENT_FILTER_OPERATOR_LABELS: FilterOperatorLabels = {
   not_empty: "no está vacío",
 }
 
-export function ClientesAccordion() {
+export function ClientesAccordion({
+  distribuidorName = null,
+}: {
+  /** Reseller ligado a la cuenta (perfil distribuidor); null = sin alcance. */
+  distribuidorName?: string | null
+}) {
   const [clients, setClients] = useState<FlujoClient[]>([])
   const [resellerNames, setResellerNames] = useState<string[]>([])
   const [userResellers, setUserResellers] = useState<Record<string, string>>({})
@@ -257,21 +266,23 @@ export function ClientesAccordion() {
       .then(async (data) => {
         // El filtro de reseller usa la lista real del panel y el mapa
         // usuario → reseller de `/users/validity`; si esa parte falla,
-        // el listado carga igual y el filtro queda sin opciones.
-        const { names, byUser } = await fetchFlujoResellers()
-          .then((resellersData) => ({
-            names: resellersData.resellers
-              .map((reseller) => reseller.name)
-              .filter(Boolean),
-            byUser: resellersData.userResellers ?? {},
-          }))
-          .catch(
-            () =>
-              ({
-                names: [] as string[],
-                byUser: {} as Record<string, string>,
-              }) as { names: string[]; byUser: Record<string, string> }
-          )
+        // el listado carga igual y el filtro queda sin opciones. Con
+        // alcance de distribuidor se omite: el listado ya llega filtrado
+        // del servidor y el filtro de Distribuidor no se muestra.
+        const scoped = { names: [], byUser: {} } as {
+          names: string[]
+          byUser: Record<string, string>
+        }
+        const { names, byUser } = distribuidorName
+          ? scoped
+          : await fetchFlujoResellers()
+              .then((resellersData) => ({
+                names: resellersData.resellers
+                  .map((reseller) => reseller.name)
+                  .filter(Boolean),
+                byUser: resellersData.userResellers ?? {},
+              }))
+              .catch(() => scoped)
         if (requestId !== requestCounter.current) return
         setClients(data.clients)
         setResellerNames(names)
@@ -288,7 +299,7 @@ export function ClientesAccordion() {
         )
         setFetchState("error")
       })
-  }, [reloadCount])
+  }, [reloadCount, distribuidorName])
 
   /** Reseller del cliente: llave cruda si viene, si no el mapa de `/users/validity`. */
   const resellerOf = useCallback(
@@ -418,8 +429,8 @@ export function ClientesAccordion() {
     [resellerNames, resellerCounts]
   )
 
-  const filterFields = useMemo<FilterField[]>(
-    () => [
+  const filterFields = useMemo<FilterField[]>(() => {
+    const fields: FilterField[] = [
       {
         id: "estado",
         label: "Estado",
@@ -436,20 +447,25 @@ export function ClientesAccordion() {
           description: optionCount(estadoCounts.get(option.value)),
         })),
       },
-      {
+    ]
+    // Con alcance de distribuidor todas las filas comparten el mismo
+    // reseller: el filtro no aporta nada y la lista de opciones del panel
+    // no le compete al perfil.
+    if (!distribuidorName) {
+      fields.push({
         id: "reseller",
         label: "Distribuidor",
         type: "select",
         options: resellerOptions,
-      },
-      {
-        id: "dias",
-        label: "Días para vencer",
-        type: "number",
-      },
-    ],
-    [estadoCounts, resellerOptions]
-  )
+      })
+    }
+    fields.push({
+      id: "dias",
+      label: "Días para vencer",
+      type: "number",
+    })
+    return fields
+  }, [estadoCounts, resellerOptions, distribuidorName])
 
   const filtered = useMemo(() => {
     // El filtro «Días para vencer» solo considera clientes vigentes: cualquier
@@ -624,10 +640,15 @@ export function ClientesAccordion() {
             <EmptyMedia variant="icon">
               <PackageOpenIcon aria-hidden="true" />
             </EmptyMedia>
-            <EmptyTitle>El panel no devolvió clientes</EmptyTitle>
+            <EmptyTitle>
+              {distribuidorName
+                ? "Sin clientes asignados"
+                : "El panel no devolvió clientes"}
+            </EmptyTitle>
             <EmptyDescription>
-              Sincroniza con el panel: hace login y extrae el listado
-              actualizado de clientes.
+              {distribuidorName
+                ? `No hay clientes asignados al distribuidor '${distribuidorName}'. Sincroniza con el panel por si el listado está desactualizado.`
+                : "Sincroniza con el panel: hace login y extrae el listado actualizado de clientes."}
             </EmptyDescription>
           </EmptyHeader>
           <EmptyContent>

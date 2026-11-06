@@ -613,6 +613,38 @@ export async function listFlujoResellers(): Promise<FlujoResellersResponse> {
   }
 }
 
+/**
+ * Mapa usuario → reseller (sub-reseller) desde `/users/validity`, con las
+ * llaves del usuario en minúsculas. Lo usa el alcance por distribuidor para
+ * atribuir clientes cuya fila no trae la llave cruda; tolerante a fallos:
+ * devuelve el mapa parcial (vacío si la lectura no llegó) en lugar de romper.
+ */
+export async function getFlujoUserResellers(): Promise<
+  Record<string, string>
+> {
+  const users = new Map<string, string>()
+  try {
+    const validity = await flujoRequest<unknown>("/users/validity", {
+      method: "GET",
+      timeoutMs: FLUJO_READ_TIMEOUT_MS,
+    })
+    if (isRecord(validity.data)) {
+      mapUserResellers(validity.data.valid_users, users)
+      mapUserResellers(validity.data.invalid_users, users)
+    }
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `flujotv: no se pudo construir el mapa usuario→reseller: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      })
+    )
+  }
+  return Object.fromEntries(users)
+}
+
 export async function getFlujoClient(
   userName: string,
   options: { includeCredentials?: boolean; full?: boolean } = {}

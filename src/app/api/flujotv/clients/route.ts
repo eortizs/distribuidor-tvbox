@@ -1,6 +1,10 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { flujoErrorResponse } from "@/server/flujotv/http"
 import { listFlujoClients } from "@/server/flujotv/service"
+import {
+  resolveClientScope,
+  scopeFlujoClients,
+} from "@/server/flujotv/scope"
 
 function readNumber(value: string | null, fallback: number, max: number): number {
   const parsed = Number(value)
@@ -28,11 +32,16 @@ export async function GET(request: Request) {
       full,
     })
 
+    // El perfil distribuidor solo recibe los clientes asignados a su
+    // reseller ligado; el total reportado se ajusta al listado filtrado.
+    const scope = await resolveClientScope(user)
+    const clients = await scopeFlujoClients(result.clients, scope)
+
     return Response.json({
       ok: true,
       data: {
-        clients: result.clients,
-        total: result.total,
+        clients,
+        total: scope.kind === "all" ? result.total : clients.length,
         endpoint: result.endpoint,
       },
     })

@@ -1,6 +1,10 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { flujoErrorResponse } from "@/server/flujotv/http"
-import { renewFlujoLicense } from "@/server/flujotv/service"
+import { getFlujoClient, renewFlujoLicense } from "@/server/flujotv/service"
+import {
+  isFlujoClientInScope,
+  resolveClientScope,
+} from "@/server/flujotv/scope"
 import { readJsonBody } from "@/server/http"
 import { isRenewalMonths } from "@/lib/flujotv"
 
@@ -62,6 +66,42 @@ export async function POST(request: Request) {
         },
         { status: 422 }
       )
+    }
+
+    // El perfil distribuidor solo puede renovar clientes de su reseller
+    // ligado: un cliente fuera de alcance (o sin atribución posible) se
+    // rechaza antes de tocar la API de licencias.
+    const scope = await resolveClientScope(user)
+    if (scope.kind === "none") {
+      return Response.json(
+        {
+          ok: false,
+          error: {
+            code: "forbidden",
+            message:
+              "Tu cuenta no tiene un distribuidor ligado: no puedes renovar licencias.",
+          },
+        },
+        { status: 403 }
+      )
+    }
+    if (scope.kind === "distributor") {
+      const target = await getFlujoClient(userName)
+      const allowed = target
+        ? await isFlujoClientInScope(target, scope)
+        : false
+      if (!allowed) {
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "forbidden",
+              message: `El cliente '${userName}' no pertenece a tu distribuidor.`,
+            },
+          },
+          { status: 403 }
+        )
+      }
     }
 
     const result = await renewFlujoLicense({
