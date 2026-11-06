@@ -56,9 +56,9 @@ export interface NavAccountItem {
 /**
  * Única fuente de verdad de la navegación. El orden de este arreglo es el
  * orden de la barra inferior: Inicio, Clientes, Herramientas, Finanzas,
- * Soporte. Cada botón navega a su propia página; las secciones con opciones
- * las muestran como pestañas dentro de la página (`children`), y el botón
- * apunta a la primera de ellas.
+ * Soporte. Cada botón navega a la página de su sección (el hub cuando existe);
+ * las secciones con opciones las muestran como pestañas dentro de la página
+ * (`children`).
  */
 export const navSections: NavSection[] = [
   {
@@ -77,7 +77,7 @@ export const navSections: NavSection[] = [
   {
     title: "Herramientas",
     icon: WrenchIcon,
-    href: "/herramientas/imagenes",
+    href: "/herramientas",
     match: { mode: "prefix", paths: ["/herramientas"] },
     children: [
       {
