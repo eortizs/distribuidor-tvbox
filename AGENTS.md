@@ -12,6 +12,36 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbox.people-ia.com/
 
+### Arquitectura de publicación
+
+- El sitio **se sirve desde esta misma máquina**: pm2 ejecuta la app `distribuidor-tvbox` (`npm start` → `next start`) sobre este directorio, escuchando en el puerto **3010**.
+- Caddy (contenedor `agente-caddy-1`, config en `/root/agente/Caddyfile`) resuelve el subdominio con `reverse_proxy 172.18.0.1:3010`; Cloudflare va por delante.
+- **Hacer push a GitHub NO despliega nada.** El remoto (`github.com/eortizs/distribuidor-tvbox`) es solo respaldo del código.
+
+### Procedimiento de despliegue (obligatorio tras cada cambio)
+
+```bash
+npm run build && pm2 reload distribuidor-tvbox
+```
+
+1. `npm run build` (equivale a `eve build && next build`): genera el build en `.next`/`.output`.
+2. `pm2 reload distribuidor-tvbox`: reinicia el servidor para que cargue el manifiesto del build nuevo.
+
+### Advertencia crítica
+
+**Nunca dejar el build sin reiniciar pm2.** Si se ejecuta `npm run build` sin `pm2 reload distribuidor-tvbox`, el servidor sigue con el manifiesto del build antiguo en memoria: sirve el HTML nuevo del disco pero responde **404** a los chunks estáticos nuevos (los nombres de archivo cambian en cada build). Eso rompe la hidratación (`ChunkLoadError`), congela el splash en "Cargando…" y deja la app sin interactividad en producción.
+
+### Verificación post-despliegue
+
+```bash
+curl -s https://distribuidor-tvbox.people-ia.com/login \
+  | grep -o '/_next/static/chunks/[^"]*\.\(js\|css\)' | sort -u | while read -r p; do
+    printf "%s " "$(curl -s -o /dev/null -w '%{http_code}' "https://distribuidor-tvbox.people-ia.com$p")"; echo "$p"
+  done
+```
+
+Todos los recursos listados deben devolver `200`. Con el servidor parado o recién reiniciado puede tardar unos segundos en responder.
+
 ## Reglas de UI: servidor MCP de ReUI (obligatorio)
 
 Cualquier elemento o componente de la GUI debe crearse usando el servidor MCP de **ReUI**. Está prohibido escribir componentes de UI a mano cuando ReUI provee uno equivalente.
