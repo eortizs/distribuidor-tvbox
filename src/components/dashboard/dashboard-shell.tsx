@@ -108,18 +108,18 @@ export function DashboardShell({
           <MascotaLogo />
         </Link>
         {back ? (
-          <Button
-            variant="ghost"
-            size="icon"
-            className="-ml-1 text-muted-foreground transition-colors hover:text-foreground"
-            render={<Link href={back.href} />}
-            nativeButton={false}
-            aria-label={`Regresar a ${back.title}`}
-          >
-            <ChevronLeftIcon aria-hidden="true" />
-          </Button>
-        ) : null}
-        {headerTitle ? (
+          <h1 className="text-base font-semibold tracking-tight">
+            <Button
+              variant="ghost"
+              className="-ml-2 gap-1 text-base font-semibold tracking-tight"
+              render={<Link href={back.href} />}
+              nativeButton={false}
+            >
+              <ChevronLeftIcon aria-hidden="true" className="text-foreground" />
+              {headerTitle ?? back.title}
+            </Button>
+          </h1>
+        ) : headerTitle ? (
           <h1 className="text-base font-semibold tracking-tight">
             {headerTitle}
           </h1>

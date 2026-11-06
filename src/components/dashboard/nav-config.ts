@@ -54,7 +54,7 @@ export interface NavSection {
   titleInHeader?: boolean
   /**
    * Ruta de regreso en la cabecera: cuando la ruta activa es más profunda
-   * que este hub, se muestra un botón chevron a la izquierda del rótulo que
+   * que este hub, el rótulo se vuelve un solo botón (chevron + texto) que
    * navega aquí.
    */
   backHref?: string
@@ -181,9 +181,10 @@ export function findNavHeaderTitle(pathname: string) {
 }
 
 /**
- * Botón de regreso de la cabecera para la ruta actual: la sección lo publica
- * con `backHref` y solo aplica cuando la ruta activa es más profunda que su
- * hub (el hub mismo no necesita regreso).
+ * Regreso de la cabecera para la ruta actual: la sección lo publica con
+ * `backHref` y solo aplica cuando la ruta activa es más profunda que su hub
+ * (el hub mismo no necesita regreso). El shell une chevron y rótulo en un
+ * solo botón que navega a esta ruta.
  */
 export function findNavBack(pathname: string) {
   const section = findNavSection(pathname)
