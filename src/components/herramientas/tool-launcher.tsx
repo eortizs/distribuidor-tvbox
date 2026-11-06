@@ -1,6 +1,7 @@
 import Link from "next/link"
 import {
   ArrowRightIcon,
+  CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
   type LucideIcon,
@@ -30,6 +31,13 @@ const herramientas: Herramienta[] = [
       "Del idea al render con el agente EVE: guiones, storyboards y entregables con costo y tiempo.",
     href: "/herramientas/animacion",
     icon: ClapperboardIcon,
+  },
+  {
+    title: "Calculadora",
+    description:
+      "Cálculos rápidos con porcentaje comercial, desde botones o teclado.",
+    href: "/herramientas/calculadora",
+    icon: CalculatorIcon,
   },
 ]
 

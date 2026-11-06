@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react"
 import {
   BotIcon,
+  CalculatorIcon,
   CircleUserRoundIcon,
   ClapperboardIcon,
   FlaskConicalIcon,
@@ -28,6 +29,16 @@ export interface NavChild {
   title: string
   icon: LucideIcon
   href: string
+  /**
+   * La pestaña muestra su rótulo en la cabecera, a la derecha de la
+   * mascota, mientras su ruta está activa.
+   */
+  titleInHeader?: boolean
+  /**
+   * La pestaña se abre a pantalla completa, sin riel de pestañas: la
+   * herramienta ocupa todo el espacio entre cabecera y barra inferior.
+   */
+  hideTabs?: boolean
 }
 
 export interface NavSection {
@@ -89,6 +100,13 @@ export const navSections: NavSection[] = [
         title: "Animación",
         icon: ClapperboardIcon,
         href: "/herramientas/animacion",
+      },
+      {
+        title: "Calculadora",
+        icon: CalculatorIcon,
+        href: "/herramientas/calculadora",
+        titleInHeader: true,
+        hideTabs: true,
       },
     ],
   },
@@ -159,6 +177,21 @@ export function isNavSectionActive(section: NavSection, pathname: string) {
 
 export function findNavSection(pathname: string) {
   return navSections.find((section) => isNavSectionActive(section, pathname))
+}
+
+/**
+ * Rótulo del header para la ruta actual: la sección lo publica con
+ * `titleInHeader` y una pestaña concreta también puede hacerlo, con
+ * prioridad sobre el rótulo de su sección.
+ */
+export function findNavHeaderTitle(pathname: string) {
+  const section = findNavSection(pathname)
+  if (!section) return null
+  const child = section.children?.find((child) =>
+    isNavChildActive(child, pathname)
+  )
+  if (child?.titleInHeader) return child.title
+  return section.titleInHeader ? section.title : null
 }
 
 export function isNavChildActive(child: NavChild, pathname: string) {

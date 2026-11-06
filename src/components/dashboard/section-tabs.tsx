@@ -19,8 +19,10 @@ export function SectionTabs() {
   const pathname = usePathname() ?? ""
   const section = findNavSection(pathname)
   const children = section?.children
+  /** Una pestaña a pantalla completa (hideTabs) no muestra el riel. */
+  const activeChild = children?.find((child) => isNavChildActive(child, pathname))
 
-  if (!section || !children?.length) return null
+  if (!section || !children?.length || activeChild?.hideTabs) return null
 
   return (
     <nav aria-label={section.title} className="shrink-0 border-b">

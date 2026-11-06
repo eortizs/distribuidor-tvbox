@@ -29,7 +29,7 @@ export const mobileNavClass = {
 
 /** Composición de la barra inferior de cinco destinos. */
 export const bottomNavClass = {
-  bar: "bg-background border-border fixed inset-x-0 bottom-0 z-40 border-t",
+  bar: "bg-background fixed inset-x-0 bottom-0 z-40",
   grid: "mx-auto grid h-full max-w-2xl grid-cols-5",
   item:
     "flex min-h-12 w-full flex-col items-center justify-center gap-1 rounded-lg px-0 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
