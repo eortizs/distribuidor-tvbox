@@ -12,12 +12,15 @@ import {
   MAX_ANNOTATION_STROKES,
   MAX_ANNOTATION_POINTS,
   MAX_STROKE_WIDTH_RATIO,
+  MAX_NUMBER_SIZE_RATIO,
   MAX_ANNOTATION_FILE_NAME,
   annotationOutputMime,
   arrowGeometry,
   buildAnnotationOverlaySvg,
+  contrastingTextColor,
   copyFileName,
   extensionFor,
+  numberStickerFontSize,
   sanitizeAnnotationInput,
 } from "../src/server/images/annotations.ts"
 
@@ -273,6 +276,99 @@ check("arrowGeometry: dirección, tamaños y flecha degenerada segura", () => {
   assert.equal(degenerate.dirY, -1)
 })
 
+/* ---------------------------- stickers numerados -------------------------- */
+
+const validNumero = {
+  kind: "numero",
+  color: "#22c55e",
+  width: 0.07, // diámetro del sticker como fracción del ancho
+  points: [[0.5, 0.5]],
+  label: 1,
+}
+
+check("acepta un sticker numerado con su punto y etiqueta", () => {
+  const result = sanitizeAnnotationInput({ strokes: [validNumero] })
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.equal(result.strokes[0].kind, "numero")
+    assert.equal(result.strokes[0].points.length, 1)
+    assert.equal(result.strokes[0].label, 1)
+  }
+})
+
+check("rechaza stickers sin punto único, etiqueta inválida o diámetro excesivo", () => {
+  // Sin etiqueta o con etiqueta inválida.
+  for (const label of [undefined, 0, -1, 1.5, "2", Number.NaN, 10_000]) {
+    const stroke = { ...validNumero }
+    if (label !== undefined) stroke.label = label
+    else delete stroke.label
+    assert.equal(sanitizeAnnotationInput({ strokes: [stroke] }).ok, false, String(label))
+  }
+  // Un sticker es un solo punto (el centro).
+  for (const points of [[], [[0.1, 0.1], [0.2, 0.2]]]) {
+    assert.equal(
+      sanitizeAnnotationInput({ strokes: [{ ...validNumero, points }] }).ok,
+      false,
+      JSON.stringify(points)
+    )
+  }
+  // Diámetro por encima del tope propio del sticker.
+  assert.equal(
+    sanitizeAnnotationInput({
+      strokes: [{ ...validNumero, width: MAX_NUMBER_SIZE_RATIO + 0.001 }],
+    }).ok,
+    false
+  )
+  assert.equal(
+    sanitizeAnnotationInput({
+      strokes: [{ ...validNumero, width: MAX_NUMBER_SIZE_RATIO }],
+    }).ok,
+    true
+  )
+})
+
+check("contrastingTextColor: negro sobre claro, blanco sobre oscuro", () => {
+  assert.equal(contrastingTextColor("#ffffff"), "#000000")
+  assert.equal(contrastingTextColor("#facc15"), "#000000")
+  assert.equal(contrastingTextColor("#22c55e"), "#000000")
+  assert.equal(contrastingTextColor("#000000"), "#ffffff")
+  assert.equal(contrastingTextColor("#ef4444"), "#ffffff")
+  assert.equal(contrastingTextColor("#3b82f6"), "#ffffff")
+})
+
+check("numberStickerFontSize escala con el diámetro y se reduce por dígitos", () => {
+  const d = 100
+  assert.equal(numberStickerFontSize(d, 7), 45)
+  assert.equal(numberStickerFontSize(d, 42), 45)
+  assert.ok(Math.abs(numberStickerFontSize(d, 123) - 30) < 1e-9)
+  assert.ok(Math.abs(numberStickerFontSize(d, 1234) - 22.5) < 1e-9)
+})
+
+check("el sticker se imprime al 50 % con número contrastante centrado", () => {
+  const svg = buildAnnotationOverlaySvg(200, 100, parseStrokes([validNumero]))
+  assert.match(svg, /<circle[^>]*fill="#22c55e" fill-opacity="0\.5"\/>/)
+  assert.match(svg, /<text x="100\.000" y=/)
+  assert.match(svg, /text-anchor="middle"/)
+  assert.match(svg, /font-weight="bold"/)
+  assert.match(svg, /fill="#000000" fill-opacity="0\.5">1<\/text>/) // verde → número negro
+  const svgDark = buildAnnotationOverlaySvg(
+    200,
+    100,
+    parseStrokes([{ ...validNumero, color: "#3b82f6", label: 12 }])
+  )
+  assert.match(svgDark, /fill="#ffffff" fill-opacity="0\.5">12<\/text>/) // azul → número blanco
+})
+
+check("el sticker conserva la opacidad sobre cualquier color elegido", () => {
+  const svg = buildAnnotationOverlaySvg(
+    100,
+    100,
+    parseStrokes([{ ...validNumero, color: "#000000" }])
+  )
+  assert.match(svg, /fill="#000000" fill-opacity="0\.5"\/>/)
+  assert.match(svg, /fill="#ffffff" fill-opacity="0\.5">1<\/text>/)
+})
+
 /* ---------------------------- copyFileName ------------------------------- */
 
 check("nombre de copia con sufijo y extensión", () => {
@@ -359,6 +455,35 @@ check("Sharp compone el overlay a la resolución del original", async () => {
   assert.deepEqual(at(60, 24), [255, 0, 0])
   // Fuera del trazo sigue blanco.
   assert.deepEqual(at(4, 4), [255, 255, 255])
+})
+
+check("Sharp compone el sticker al 50 % sobre el original", async () => {
+  const base = await sharp({
+    create: { width: 200, height: 160, channels: 3, background: { r: 255, g: 255, b: 255 } },
+  })
+    .png()
+    .toBuffer()
+  const overlay = Buffer.from(
+    buildAnnotationOverlaySvg(200, 160, parseStrokes([{ ...validNumero, color: "#ff0000" }]))
+  )
+  const { data } = await sharp(base)
+    .composite([{ input: overlay, top: 0, left: 0 }])
+    .png()
+    .toBuffer({ resolveWithObject: true })
+  const raw = await sharp(data).raw().toBuffer({ resolveWithObject: true })
+  const at = (x, y) => {
+    const start = (y * raw.info.width + x) * raw.info.channels
+    return [raw.data[start], raw.data[start + 1], raw.data[start + 2]]
+  }
+  // Rojo #ff0000 al 50 % sobre blanco: (255, 128, 128) aprox. El sticker
+  // es de diámetro 0.07 × 200 = 14 px (r = 7); el punto de muestreo queda
+  // dentro del círculo y fuera del glifo del número.
+  const [r, g, b] = at(95, 80)
+  assert.equal(r, 255)
+  assert.ok(Math.abs(g - 127.5) <= 1.5, `g=${g}`)
+  assert.ok(Math.abs(b - 127.5) <= 1.5, `b=${b}`)
+  // Fuera del sticker sigue blanco.
+  assert.deepEqual(at(10, 10), [255, 255, 255])
 })
 
 console.log(`\n${passed} pruebas OK`)

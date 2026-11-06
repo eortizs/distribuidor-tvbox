@@ -4,6 +4,8 @@ import * as React from "react"
 import {
   ArrowUpRightIcon,
   CheckIcon,
+  ListOrderedIcon,
+  Maximize2Icon,
   PencilIcon,
   Trash2Icon,
   Undo2Icon,
@@ -14,7 +16,12 @@ import { cn } from "cn"
 
 import {
   arrowGeometry,
+  contrastingTextColor,
   MAX_ANNOTATION_POINTS,
+  NUMBER_FONT_STACK,
+  NUMBER_STICKER_OPACITY,
+  NUMBER_TEXT_BASELINE_RATIO,
+  numberStickerFontSize,
   type AnnotationStrokeKind,
 } from "@/server/images/annotations"
 import {
@@ -51,32 +58,52 @@ import {
 } from "@/components/reui/color-picker"
 
 /**
- * Editor de dibujo a pantalla completa para una imagen de Galería, con dos
- * herramientas: lápiz a mano alzada y flechas (se toca el punto al que la
- * flecha debe apuntar y se arrastra hasta la cola). Ambas conservan los
- * trazos como puntos normalizados (0..1) respecto a la imagen, así que
- * rotar o cambiar el tamaño no los desplaza, y el servidor compone el mismo
+ * Editor de dibujo a pantalla completa para una imagen de Galería, con tres
+ * herramientas: lápiz a mano alzada, flechas (se toca el punto al que la
+ * flecha debe apuntar y se arrastra hasta la cola) y stickers numerados (un
+ * toque coloca el siguiente número en secuencia, dentro de un sticker
+ * semitransparente del color elegido y con la letra contrastante). La
+ * imagen admite zoom con pellizco (dos dedos) y con rueda/trackpad: un dedo
+ * dibuja y dos hacen zoom/paneo, sin que los trazos se desplacen porque
+ * todos se guardan normalizados (0..1) respecto a la imagen, así que rotar
+ * o cambiar el tamaño no los desplaza, y el servidor compone el mismo
  * dibujo sobre el original a su resolución al aceptar (el original nunca se
- * modifica). La geometría de la flecha es la misma que rasteriza el
- * servidor.
+ * modifica). La geometría de la flecha y el sticker son las mismas que
+ * rasteriza el servidor.
  */
 
 interface DrawStroke {
-  /** `path` (lápiz) o `arrow` (flecha). */
+  /** `path` (lápiz), `arrow` (flecha) o `numero` (sticker numerado). */
   kind: AnnotationStrokeKind
   color: string
-  /** Grosor como fracción del ancho de la imagen. */
+  /** Grosor como fracción del ancho de la imagen; en `numero` es el
+   * diámetro del sticker. */
   width: number
   /** `path`: puntos del gesto. `arrow`: [punta, cola] — la punta es donde
-   * se tocó primero (el punto al que apunta la flecha). */
+   * se tocó primero (el punto al que apunta la flecha). `numero`: un solo
+   * punto, el centro del sticker. */
   points: [number, number][]
+  /** Solo `numero`: el número impreso (secuencia desde 1). */
+  label?: number
 }
 
-type DrawMode = "lapiz" | "flecha"
+type DrawMode = "lapiz" | "flecha" | "numeros"
 
 /** Arrastre mínimo para que una flecha cuente: un tap sin arrastre no crea
  * nada (evita flechas invisibles por toques accidentales). */
 const MIN_ARROW_DRAG_PX = 8
+
+/** Diámetro del sticker numerado: 7% del ancho de la imagen, legible en
+ * pantalla y en la copia guardada a resolución completa. Fijo a propósito:
+ * sin controles. */
+const NUMBER_STICKER_SIZE_RATIO = 0.07
+
+/** Zoom por pellizco: del ajuste inicial (1×) a 4× como máximo (más cerca
+ * solo muestra píxeles borrosos de la variante baja). */
+const MIN_ZOOM = 1
+const MAX_ZOOM = 4
+/** Sensibilidad del zoom con rueda/trackpad (delta Y normalizado a px). */
+const WHEEL_ZOOM_SENSITIVITY = 0.002
 
 interface DrawImageVariant {
   url: string
@@ -182,9 +209,9 @@ type BoxSize = { width: number; height: number }
 
 export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorProps) {
   const [color, setColor] = React.useState(STROKE_COLORS[0].value)
-  // Herramienta activa: lápiz libre o flecha numerada. El ref acompaña al
-  // estado para que los manejadores del canvas (eventos) lean siempre la
-  // herramienta vigente sin depender del ciclo de render.
+  // Herramienta activa: lápiz libre, flecha o sticker numerado. El ref
+  // acompaña al estado para que los manejadores del canvas (eventos) lean
+  // siempre la herramienta vigente sin depender del ciclo de render.
   const [mode, setModeState] = React.useState<DrawMode>("lapiz")
   const modeRef = React.useRef<DrawMode>("lapiz")
   const setMode = React.useCallback((next: DrawMode) => {
@@ -208,6 +235,94 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
   const areaRef = React.useRef<HTMLDivElement>(null)
   const imgRef = React.useRef<HTMLImageElement>(null)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
+
+  // Zoom por pellizco: el transform se aplica al contenedor de la imagen de
+  // forma imperativa (sin render por frame) y solo se sincroniza al estado
+  // para el indicador, al terminar el gesto. Los puntos de los trazos son
+  // normalizados, así que el zoom no los desplaza: el canvas transformado
+  // sigue reportando coordenadas 0..1 correctas.
+  const [zoomLabel, setZoomLabel] = React.useState(1)
+  const transformRef = React.useRef({ zoom: 1, x: 0, y: 0 })
+  const wrapperRef = React.useRef<HTMLDivElement>(null)
+  /** Dedos activos sobre la imagen, para distinguir dibujo (1) de pellizco (2). */
+  const pointersRef = React.useRef(new Map<number, { x: number; y: number }>())
+  /** Pellido en curso: distancia y punto medio iniciales + transform previo. */
+  const pinchRef = React.useRef<{
+    startDist: number
+    startMidX: number
+    startMidY: number
+    startZoom: number
+    startX: number
+    startY: number
+  } | null>(null)
+  /** Toque pendiente del modo Números: se confirma al soltar, para que un
+   * pellizco que empieza a mitad no deje un sticker accidental. */
+  const pendingNumeroRef = React.useRef<[number, number] | null>(null)
+
+  /** Escribe el transform vigente en el contenedor (translate + scale). */
+  const applyTransform = React.useCallback(() => {
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+    const { zoom, x, y } = transformRef.current
+    wrapper.style.transform =
+      zoom === 1 && x === 0 && y === 0
+        ? ""
+        : `translate(${x}px, ${y}px) scale(${zoom})`
+  }, [])
+
+  /** Acota el transform: zoom dentro de límites y paneo sin separar la
+   * imagen del área visible (borde jamás entra al lienzo). */
+  const clampTransform = React.useCallback(() => {
+    const area = areaRef.current
+    const box = boxRef.current
+    if (!area || !box) return
+    const state = transformRef.current
+    const rect = area.getBoundingClientRect()
+    if (rect.width < 1 || rect.height < 1) return
+    const zoom = Math.min(Math.max(state.zoom, MIN_ZOOM), MAX_ZOOM)
+    const maxX = Math.max(0, (box.width * zoom - rect.width) / 2)
+    const maxY = Math.max(0, (box.height * zoom - rect.height) / 2)
+    state.zoom = zoom
+    state.x = Math.min(Math.max(state.x, -maxX), maxX)
+    state.y = Math.min(Math.max(state.y, -maxY), maxY)
+  }, [])
+
+  /** Vuelve al ajuste inicial (1×, centrado). */
+  const resetZoom = React.useCallback(() => {
+    transformRef.current = { zoom: 1, x: 0, y: 0 }
+    applyTransform()
+    setZoomLabel(1)
+  }, [applyTransform])
+
+  /** Zoom anclado a un punto de la pantalla (cursor o pellizco): el punto
+   * bajo el ancla no se mueve. */
+  const zoomAt = React.useCallback(
+    (clientX: number, clientY: number, factor: number) => {
+      const area = areaRef.current
+      if (!area) return
+      const rect = area.getBoundingClientRect()
+      if (rect.width < 1 || rect.height < 1) return
+      const state = transformRef.current
+      const nextZoom = Math.min(Math.max(state.zoom * factor, MIN_ZOOM), MAX_ZOOM)
+      const ratio = nextZoom / state.zoom
+      // Con origen de transform en el centro del área: s = t + z·p.
+      const sx = clientX - (rect.left + rect.width / 2)
+      const sy = clientY - (rect.top + rect.height / 2)
+      state.x = sx - ratio * (sx - state.x)
+      state.y = sy - ratio * (sy - state.y)
+      state.zoom = nextZoom
+      clampTransform()
+      applyTransform()
+      // La etiqueta de zoom se sincroniza solo si cambia el porcentaje
+      // mostrado: la rueda dispara decenas de eventos por segundo y cada
+      // estado ocioso sería un re-render del diálogo completo.
+      const zoom = transformRef.current.zoom
+      setZoomLabel((prev) =>
+        Math.round(prev * 100) === Math.round(zoom * 100) ? prev : zoom
+      )
+    },
+    [applyTransform, clampTransform]
+  )
 
   const lowSource = image.file.variants?.low?.url ?? image.file.url
 
@@ -234,6 +349,28 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
       ctx.fillStyle = stroke.color
       ctx.strokeStyle = stroke.color
       ctx.lineWidth = Math.max(stroke.width * current.width, 1)
+      if (stroke.kind === "numero") {
+        // El mismo sticker que rasteriza el servidor: círculo del color
+        // elegido con el número contrastante centrado, todo al 50 %.
+        const [nx, ny] = stroke.points[0]
+        const label = stroke.label ?? 1
+        const diameter = ctx.lineWidth
+        const cx = nx * current.width
+        const cy = ny * current.height
+        const fontSize = numberStickerFontSize(diameter, label)
+        ctx.save()
+        ctx.globalAlpha = NUMBER_STICKER_OPACITY
+        ctx.beginPath()
+        ctx.arc(cx, cy, diameter / 2, 0, Math.PI * 2)
+        ctx.fill()
+        ctx.fillStyle = contrastingTextColor(stroke.color)
+        ctx.font = `bold ${fontSize}px ${NUMBER_FONT_STACK}`
+        ctx.textAlign = "center"
+        ctx.textBaseline = "alphabetic"
+        ctx.fillText(String(label), cx, cy + fontSize * NUMBER_TEXT_BASELINE_RATIO)
+        ctx.restore()
+        continue
+      }
       if (stroke.kind === "arrow") {
         // La misma geometría del servidor: lo dibujado es lo guardado.
         // points = [punta, cola].
@@ -307,8 +444,11 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     canvas.width = Math.max(Math.round(snapped.width * dpr), 1)
     canvas.height = Math.max(Math.round(snapped.height * dpr), 1)
+    // Un cambio de tamaño puede dejar el paneo fuera de rango: se re-acota.
+    clampTransform()
+    applyTransform()
     redraw()
-  }, [redraw])
+  }, [applyTransform, clampTransform, redraw])
 
   React.useEffect(() => {
     const area = areaRef.current
@@ -322,7 +462,25 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
     return () => observer.disconnect()
   }, [measure])
 
+  // Zoom con rueda y trackpad (el pellizco del trackpad llega como wheel
+  // con ctrlKey): oyente no pasivo para poder cancelar el gesto del
+  // navegador dentro del área de dibujo.
+  React.useEffect(() => {
+    const area = areaRef.current
+    if (!area) return
+    const onWheel = (event: WheelEvent) => {
+      if (!boxRef.current) return
+      event.preventDefault()
+      const delta = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY
+      zoomAt(event.clientX, event.clientY, Math.exp(-delta * WHEEL_ZOOM_SENSITIVITY))
+    }
+    area.addEventListener("wheel", onWheel, { passive: false })
+    return () => area.removeEventListener("wheel", onWheel)
+  }, [zoomAt])
+
   function handleImageLoad() {
+    // Imagen nueva (o reintento): el zoom vuelve al ajuste inicial.
+    resetZoom()
     setPhase("ready")
     measure()
   }
@@ -359,17 +517,69 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
     return Math.max(STROKE_WIDTH_RATIO * (boxRef.current?.width ?? 0), 1)
   }
 
+  /** Confirma el sticker numerado en el punto tocado (toque del modo Números). */
+  function commitNumero(point: [number, number]) {
+    let label = 1
+    for (const stroke of strokesRef.current) {
+      if (stroke.kind === "numero" && (stroke.label ?? 0) >= label) {
+        label = (stroke.label ?? 0) + 1
+      }
+    }
+    const stroke: DrawStroke = {
+      kind: "numero",
+      color,
+      width: NUMBER_STICKER_SIZE_RATIO,
+      points: [point],
+      label,
+    }
+    strokesRef.current = [...strokesRef.current, stroke]
+    totalPointsRef.current += 1
+    setStrokes(strokesRef.current)
+    redraw()
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
     if (phase !== "ready" || saving) return
-    // Un solo puntero activo: dedo, ratón o stylus, nunca varios a la vez.
-    if (activePointerRef.current !== null) return
-    activePointerRef.current = event.pointerId
+    // Solo el botón primario dibuja: clic derecho/central no crean trazos,
+    // stickers ni pellizcos.
+    if (event.pointerType === "mouse" && event.button !== 0) return
+    if (pointersRef.current.has(event.pointerId)) return
+    // Registro todos los dedos: uno dibuja, dos entran en pellizco.
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     try {
       event.currentTarget.setPointerCapture(event.pointerId)
     } catch {
       // Navegadores sin captura: el trazo sigue dentro del canvas.
     }
+    if (pointersRef.current.size === 2) {
+      // Segundo dedo: cancela lo que estaba a medio hacer (trazo en
+      // pantalla o sticker pendiente) y arranca el pellizco.
+      const canceled = currentStrokeRef.current
+      currentStrokeRef.current = null
+      pendingNumeroRef.current = null
+      activePointerRef.current = null
+      if (canceled?.kind === "path") totalPointsRef.current -= canceled.points.length
+      const [a, b] = Array.from(pointersRef.current.values())
+      pinchRef.current = {
+        startDist: Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1),
+        startMidX: (a.x + b.x) / 2,
+        startMidY: (a.y + b.y) / 2,
+        startZoom: transformRef.current.zoom,
+        startX: transformRef.current.x,
+        startY: transformRef.current.y,
+      }
+      redraw() // limpia la vista previa cancelada
+      return
+    }
+    if (pointersRef.current.size > 2) return // dedos extra: no participan
+    activePointerRef.current = event.pointerId
     const point = pointFromEvent(event)
+    if (modeRef.current === "numeros") {
+      // Sticker numerado: se confirma al soltar (tap), así un pellizco que
+      // empiece a mitad no deja un sticker accidental.
+      pendingNumeroRef.current = point
+      return
+    }
     const canvas = canvasRef.current
     const ctx = canvas?.getContext("2d")
     const current = boxRef.current
@@ -405,6 +615,35 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (!pointersRef.current.has(event.pointerId)) return
+    pointersRef.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
+
+    // Pellizco activo: zoom por la razón de distancias y paneo por el
+    // punto medio, con el ancla inicial fija en la imagen (sin render de
+    // React; el transform se escribe directo).
+    const pinch = pinchRef.current
+    if (pinch && pointersRef.current.size >= 2) {
+      const rect = areaRef.current?.getBoundingClientRect()
+      if (!rect || rect.width < 1 || rect.height < 1) return
+      const [a, b] = Array.from(pointersRef.current.values())
+      const dist = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1)
+      const zoom = Math.min(
+        Math.max(pinch.startZoom * (dist / pinch.startDist), MIN_ZOOM),
+        MAX_ZOOM
+      )
+      const ratio = zoom / pinch.startZoom
+      const midX = (a.x + b.x) / 2
+      const midY = (a.y + b.y) / 2
+      const sx = midX - (rect.left + rect.width / 2)
+      const sy = midY - (rect.top + rect.height / 2)
+      transformRef.current.zoom = zoom
+      transformRef.current.x = sx - ratio * (pinch.startMidX - (rect.left + rect.width / 2) - pinch.startX)
+      transformRef.current.y = sy - ratio * (pinch.startMidY - (rect.top + rect.height / 2) - pinch.startY)
+      clampTransform()
+      applyTransform()
+      return
+    }
+
     if (activePointerRef.current !== event.pointerId) return
     const stroke = currentStrokeRef.current
     const current = boxRef.current
@@ -422,12 +661,15 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
     }
     const last = stroke.points[stroke.points.length - 1]
     // Puntos demasiado cercanos no se guardan: el trazo pesa lo mismo y se
-    // ve igual, y el límite de puntos alcanza para mucho más dibujo.
+    // ve igual, y el límite de puntos alcanza para mucho más dibujo. El
+    // mínimo es en píxeles de pantalla: con zoom, menos recorrido de
+    // imagen cuenta como distancia suficiente.
+    const minDistance = 1.5 / transformRef.current.zoom
     const distance = Math.hypot(
       (point[0] - last[0]) * current.width,
       (point[1] - last[1]) * current.height
     )
-    if (distance < 1.5) return
+    if (distance < minDistance) return
     if (totalPointsRef.current >= MAX_ANNOTATION_POINTS) {
       if (!limitToastShownRef.current) {
         limitToastShownRef.current = true
@@ -447,15 +689,42 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
   }
 
   function endStroke(event: React.PointerEvent<HTMLCanvasElement>) {
-    if (activePointerRef.current !== event.pointerId) return
-    activePointerRef.current = null
-    const stroke = currentStrokeRef.current
-    currentStrokeRef.current = null
+    if (!pointersRef.current.has(event.pointerId)) return
+    pointersRef.current.delete(event.pointerId)
     try {
       event.currentTarget.releasePointerCapture(event.pointerId)
     } catch {
       // Sin captura previa no hay nada que liberar.
     }
+
+    // Fin del pellizco (quedaron menos de dos dedos): se sincroniza el
+    // indicador y los dedos restantes no dibujan por accidente — el trazo
+    // siguiente exige un toque nuevo.
+    if (pinchRef.current) {
+      if (pointersRef.current.size < 2) {
+        pinchRef.current = null
+        pointersRef.current.clear()
+        clampTransform()
+        applyTransform()
+        setZoomLabel(transformRef.current.zoom)
+      }
+      return
+    }
+
+    // Tap del modo Números: se confirma solo si el gesto terminó siendo un
+    // toque limpio (sin segundo dedo) y con soltar (pointercancel no pega
+    // stickers a medias).
+    if (pendingNumeroRef.current) {
+      const pending = pendingNumeroRef.current
+      pendingNumeroRef.current = null
+      if (event.type === "pointerup") commitNumero(pending)
+      return
+    }
+
+    if (activePointerRef.current !== event.pointerId) return
+    activePointerRef.current = null
+    const stroke = currentStrokeRef.current
+    currentStrokeRef.current = null
     if (!stroke) return
     if (stroke.kind === "arrow") {
       const current = boxRef.current
@@ -465,10 +734,11 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
         Math.hypot(
           (tail[0] - tip[0]) * current.width,
           (tail[1] - tip[1]) * current.height
-        ) >= MIN_ARROW_DRAG_PX
+        ) >= MIN_ARROW_DRAG_PX / transformRef.current.zoom
       // Un tap sin arrastre no crea una flecha invisible; el gesto
       // cancelado (pointercancel) tampoco: no hay media flecha. En ambos
-      // casos el repintado limpia la vista previa.
+      // casos el repintado limpia la vista previa. El mínimo es en
+      // píxeles de pantalla: con zoom basta menos recorrido de imagen.
       if (!dragged || event.type !== "pointerup") {
         redraw()
         return
@@ -570,8 +840,10 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
         showCloseButton={false}
       >
         <DialogDescription className="sr-only">
-          Dibuja con el dedo, el ratón o el lápiz para señalar detalles. Al
-          aceptar se guarda una copia en la galería; el original no cambia.
+          Dibuja con el dedo, el ratón o el lápiz; coloca flechas o stickers
+          con números en secuencia. Pellizca con dos dedos o usa la rueda
+          para acercar la imagen. Al aceptar se guarda una copia en la
+          galería; el original no cambia.
         </DialogDescription>
 
         <header
@@ -585,7 +857,9 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
             <p className="text-muted-foreground truncate text-xs">
               {mode === "flecha"
                 ? "Toca donde la flecha debe apuntar y arrastra hasta la cola."
-                : "Señala o dibuja sobre la imagen; se guarda una copia."}
+                : mode === "numeros"
+                  ? "Toca para colocar el siguiente número en secuencia."
+                  : "Señala o dibuja sobre la imagen; se guarda una copia."}
             </p>
           </div>
           <DialogClose
@@ -611,7 +885,11 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
           ref={areaRef}
           className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-muted"
         >
-          <div className="relative" style={box ?? undefined}>
+          <div
+            ref={wrapperRef}
+            className="relative"
+            style={box ? { ...box, willChange: "transform" } : undefined}
+          >
             {/* eslint-disable-next-line @next/next/no-img-element -- /api/files requiere la cookie de sesión; el optimizador de next/image no la envía */}
             <img
               ref={imgRef}
@@ -639,6 +917,21 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
               onPointerCancel={endStroke}
             />
           </div>
+
+          {zoomLabel > 1.005 && phase === "ready" ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="absolute top-3 right-3 h-9 px-3"
+              onClick={resetZoom}
+              title="Volver al tamaño original"
+              aria-label="Restablecer el zoom de la imagen"
+            >
+              <Maximize2Icon data-icon="inline-start" aria-hidden="true" />
+              {Math.round(zoomLabel * 100)} %
+            </Button>
+          ) : null}
 
           {phase === "loading" ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center gap-3">
@@ -689,7 +982,9 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
             aria-label="Tipo de dibujo"
             onValueChange={(value) => {
               const next = value[value.length - 1]
-              if (next === "lapiz" || next === "flecha") setMode(next)
+              if (next === "lapiz" || next === "flecha" || next === "numeros") {
+                setMode(next)
+              }
             }}
           >
             <ToggleGroupItem
@@ -706,6 +1001,13 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
               <ArrowUpRightIcon data-icon="inline-start" aria-hidden="true" />
               Flecha
             </ToggleGroupItem>
+            <ToggleGroupItem
+              value="numeros"
+              className="h-11 gap-1.5 px-3 aria-pressed:bg-primary aria-pressed:text-primary-foreground aria-pressed:hover:bg-primary/90 aria-pressed:hover:text-primary-foreground"
+            >
+              <ListOrderedIcon data-icon="inline-start" aria-hidden="true" />
+              Números
+            </ToggleGroupItem>
           </ToggleGroup>
           <ColorPicker
             value={color}
@@ -713,7 +1015,14 @@ export function DrawEditor({ image, open, onOpenChange, onSaved }: DrawEditorPro
               if (next) setColor(next)
             }}
             format="hex"
-            i18n={PICKER_I18N}
+            i18n={{
+              ...PICKER_I18N,
+              labels: {
+                ...PICKER_I18N.labels,
+                panelLabel:
+                  mode === "numeros" ? "Color del sticker" : "Color del trazo",
+              },
+            }}
           >
             <ColorPickerTrigger
               size="lg"

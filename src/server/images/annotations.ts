@@ -15,16 +15,21 @@ export interface AnnotationPoint {
   y: number
 }
 
-export type AnnotationStrokeKind = "path" | "arrow"
+export type AnnotationStrokeKind = "path" | "arrow" | "numero"
 
 export interface AnnotationStroke {
-  /** `path` (lápiz a mano alzada, por omisión) o `arrow`. */
+  /** `path` (lápiz a mano alzada, por omisión), `arrow` o `numero`. */
   kind: AnnotationStrokeKind
   color: string
+  /** Grosor como fracción del ancho de la imagen; en `numero` es el
+   * diámetro del sticker. */
   width: number
   /** `path`: uno o más puntos. `arrow`: exactamente dos, [punta, cola] —
-   * la punta es el punto al que apunta la flecha (el primer toque). */
+   * la punta es el punto al que apunta la flecha (el primer toque).
+   * `numero`: exactamente uno, el centro del sticker. */
   points: AnnotationPoint[]
+  /** Solo `numero`: el número impreso (secuencia desde 1). */
+  label?: number
 }
 
 /** Límite de trazos por guardado (la UI muestra un error accionable al tope). */
@@ -33,6 +38,22 @@ export const MAX_ANNOTATION_STROKES = 500
 export const MAX_ANNOTATION_POINTS = 50_000
 /** Grosor máximo aceptado: 5% del ancho de la imagen (nada legible lo pide). */
 export const MAX_STROKE_WIDTH_RATIO = 0.05
+/** Diámetro máximo del sticker numerado: 12% del ancho de la imagen. */
+export const MAX_NUMBER_SIZE_RATIO = 0.12
+/** Número más alto imprimible en un sticker. */
+export const MAX_NUMBER_LABEL = 9999
+/** Opacidad del sticker numerado: 50 %, aplicada por elemento (círculo y
+ * número), con el mismo orden secuencial que replica el canvas del editor
+ * para que el preview sea idéntico a la copia guardada. */
+export const NUMBER_STICKER_OPACITY = 0.5
+/** Familia tipográfica compartida por el canvas del editor y el SVG del
+ * servidor: sans bold, con sustitutos presentes en Linux (server). */
+export const NUMBER_FONT_STACK =
+  "Arial, Helvetica, 'Liberation Sans', 'DejaVu Sans', sans-serif"
+/** Centro visual del dígito: la mitad de la altura capital (~0.7 em),
+ * compartido por canvas y SVG para que el número quede centrado igual en
+ * ambos. */
+export const NUMBER_TEXT_BASELINE_RATIO = 0.35
 /** Cuerpo de la petición como mucho 2 MiB (la lectura se corta de verdad). */
 export const MAX_ANNOTATION_BODY_BYTES = 2 * 1024 * 1024
 /** Longitud máxima del nombre de archivo: la misma de `sanitizeFileName`
@@ -65,10 +86,11 @@ export type SanitizeAnnotationsResult =
 
 /**
  * Valida el cuerpo de la petición de anotación. Acepta exactamente
- * `{ strokes: [{ kind?: "path" | "arrow", color: "#rrggbb", width: number, points: [x, y][] }] }`:
+ * `{ strokes: [{ kind?: "path" | "arrow" | "numero", color: "#rrggbb", width: number, points: [x, y][], label?: number }] }`:
  * rechaza JSON con colores no HEX opacos, coordenadas no finitas o fuera de
  * rango, grosores inválidos, trazos vacíos, flechas sin sus dos puntos
- * exactos y cualquier exceso de límites.
+ * exactos, stickers sin su único punto o su etiqueta, y cualquier exceso de
+ * límites.
  */
 export function sanitizeAnnotationInput(input: unknown): SanitizeAnnotationsResult {
   if (typeof input !== "object" || input === null) return { ok: false }
@@ -81,25 +103,39 @@ export function sanitizeAnnotationInput(input: unknown): SanitizeAnnotationsResu
   let totalPoints = 0
   for (const raw of strokes) {
     if (typeof raw !== "object" || raw === null) return { ok: false }
-    const { kind, color, width, points } = raw as Record<string, unknown>
+    const { kind, color, width, points, label } = raw as Record<string, unknown>
     let strokeKind: AnnotationStrokeKind = "path"
     if (kind !== undefined && kind !== null) {
-      if (kind !== "path" && kind !== "arrow") return { ok: false }
+      if (kind !== "path" && kind !== "arrow" && kind !== "numero") return { ok: false }
       strokeKind = kind
     }
     if (typeof color !== "string" || !HEX_COLOR_RE.test(color)) {
       return { ok: false }
     }
+    // En `numero` el grosor es el diámetro del sticker: tope propio.
+    const maxWidth =
+      strokeKind === "numero" ? MAX_NUMBER_SIZE_RATIO : MAX_STROKE_WIDTH_RATIO
     if (
       typeof width !== "number" ||
       !Number.isFinite(width) ||
       width <= 0 ||
-      width > MAX_STROKE_WIDTH_RATIO
+      width > maxWidth
     ) {
       return { ok: false }
     }
     if (!Array.isArray(points) || points.length === 0) return { ok: false }
     if (strokeKind === "arrow" && points.length !== 2) return { ok: false }
+    if (strokeKind === "numero") {
+      if (points.length !== 1) return { ok: false }
+      if (
+        typeof label !== "number" ||
+        !Number.isInteger(label) ||
+        label < 1 ||
+        label > MAX_NUMBER_LABEL
+      ) {
+        return { ok: false }
+      }
+    }
     const parsed: AnnotationPoint[] = []
     for (const point of points) {
       if (!Array.isArray(point) || point.length !== 2) return { ok: false }
@@ -120,7 +156,17 @@ export function sanitizeAnnotationInput(input: unknown): SanitizeAnnotationsResu
     }
     totalPoints += parsed.length
     if (totalPoints > MAX_ANNOTATION_POINTS) return { ok: false }
-    cleaned.push({ kind: strokeKind, color: color.toLowerCase(), width, points: parsed })
+    // La salida se construye explícitamente: `label` solo viaja en `numero`.
+    const labelForStroke =
+      strokeKind === "numero" && typeof label === "number" ? label : undefined
+    const cleanedStroke: AnnotationStroke = {
+      kind: strokeKind,
+      color: color.toLowerCase(),
+      width,
+      points: parsed,
+    }
+    if (labelForStroke !== undefined) cleanedStroke.label = labelForStroke
+    cleaned.push(cleanedStroke)
   }
   return { ok: true, strokes: cleaned }
 }
@@ -194,6 +240,34 @@ export function arrowGeometry(
   }
 }
 
+/* ---------------------------------------------------------------------- *
+ * Stickers numerados: decisión de contraste y tamaño de letra compartidos
+ * entre el canvas del editor y el SVG del servidor, para que lo que se ve
+ * al colocar el sticker sea lo que queda guardado.
+ * ---------------------------------------------------------------------- */
+
+/**
+ * Color de texto que contrasta con el fondo `hex` (#rrggbb): negro sobre
+ * fondos claros, blanco sobre oscuros, por brillo percibido (ITU-R 601).
+ * El fondo del sticker siempre es el color elegido por la persona.
+ */
+export function contrastingTextColor(hex: string): "#000000" | "#ffffff" {
+  const r = Number.parseInt(hex.slice(1, 3), 16)
+  const g = Number.parseInt(hex.slice(3, 5), 16)
+  const b = Number.parseInt(hex.slice(5, 7), 16)
+  const brightness = (0.299 * r + 0.587 * g + 0.114 * b) / 255
+  return brightness > 0.5 ? "#000000" : "#ffffff"
+}
+
+/**
+ * Tamaño de letra del número dentro del sticker: escala con el diámetro y
+ * se reduce por dígitos para que hasta 4 quepan holgados.
+ */
+export function numberStickerFontSize(diameterPx: number, label: number): number {
+  const digits = String(label).length
+  return diameterPx * 0.45 * Math.min(1, 2 / digits)
+}
+
 /**
  * Overlay SVG con los trazos, a la resolución del original. Solo recibe
  * dimensiones enteras y trazos ya validados, así que la salida no puede
@@ -209,6 +283,24 @@ export function buildAnnotationOverlaySvg(
     // Grosor proporcional al ancho real, con un mínimo de 1 px para que las
     // imágenes pequeñas sigan mostrando el trazo.
     const strokeWidth = Math.max(stroke.width * width, 1)
+    if (stroke.kind === "numero") {
+      // Sticker: círculo del color elegido con el número contrastante
+      // centrado, cada elemento al 50 % de opacidad. El orden secuencial
+      // (círculo sobre la imagen, número sobre el círculo) replica el que
+      // usa el canvas del editor, así que el preview es la copia guardada.
+      const [center] = stroke.points
+      const label = stroke.label ?? 1
+      const diameter = strokeWidth
+      const cx = center.x * width
+      const cy = center.y * height
+      const fontSize = numberStickerFontSize(diameter, label)
+      const textColor = contrastingTextColor(stroke.color)
+      parts.push(
+        `<circle cx="${svgNumber(cx)}" cy="${svgNumber(cy)}" r="${svgNumber(diameter / 2)}" fill="${stroke.color}" fill-opacity="${NUMBER_STICKER_OPACITY}"/>` +
+          `<text x="${svgNumber(cx)}" y="${svgNumber(cy + fontSize * NUMBER_TEXT_BASELINE_RATIO)}" font-family="${NUMBER_FONT_STACK}" font-size="${svgNumber(fontSize)}" font-weight="bold" text-anchor="middle" fill="${textColor}" fill-opacity="${NUMBER_STICKER_OPACITY}">${label}</text>`
+      )
+      continue
+    }
     if (stroke.kind === "arrow") {
       // points = [punta, cola]: la punta es el punto al que apunta la flecha.
       const [tip, tail] = stroke.points
