@@ -68,9 +68,9 @@ export function AppSplash() {
         phase === "leaving" && "pointer-events-none opacity-0"
       )}
     >
-      <div className="splash-enter flex flex-col items-center gap-3">
-        <MascotaLogo className="h-24 w-auto" />
-        <TvboxWordmark className="h-10 w-auto" />
+      <div className="splash-enter flex flex-col items-center gap-4">
+        <TvboxWordmark className="h-28 w-auto" />
+        <MascotaLogo className="h-16 w-auto" />
       </div>
       <div className="flex flex-col items-center gap-2">
         <Spinner className="size-5 opacity-60" aria-hidden="true" />
