@@ -1,12 +1,9 @@
 import type { LucideIcon } from "lucide-react"
 import {
   BotIcon,
-  CalculatorIcon,
   CircleUserRoundIcon,
-  ClapperboardIcon,
   FlaskConicalIcon,
   HouseIcon,
-  ImageIcon,
   LifeBuoyIcon,
   ReceiptTextIcon,
   SettingsIcon,
@@ -55,6 +52,12 @@ export interface NavSection {
    * en lugar de un título propio dentro de la página.
    */
   titleInHeader?: boolean
+  /**
+   * Ruta de regreso en la cabecera: cuando la ruta activa es más profunda
+   * que este hub, se muestra un botón chevron a la izquierda del rótulo que
+   * navega aquí.
+   */
+  backHref?: string
 }
 
 export interface NavAccountItem {
@@ -90,25 +93,8 @@ export const navSections: NavSection[] = [
     icon: WrenchIcon,
     href: "/herramientas",
     match: { mode: "prefix", paths: ["/herramientas"] },
-    children: [
-      {
-        title: "Imágenes",
-        icon: ImageIcon,
-        href: "/herramientas/imagenes",
-      },
-      {
-        title: "Animación",
-        icon: ClapperboardIcon,
-        href: "/herramientas/animacion",
-      },
-      {
-        title: "Calculadora",
-        icon: CalculatorIcon,
-        href: "/herramientas/calculadora",
-        titleInHeader: true,
-        hideTabs: true,
-      },
-    ],
+    titleInHeader: true,
+    backHref: "/herramientas",
   },
   {
     title: "Finanzas",
@@ -192,6 +178,17 @@ export function findNavHeaderTitle(pathname: string) {
   )
   if (child?.titleInHeader) return child.title
   return section.titleInHeader ? section.title : null
+}
+
+/**
+ * Botón de regreso de la cabecera para la ruta actual: la sección lo publica
+ * con `backHref` y solo aplica cuando la ruta activa es más profunda que su
+ * hub (el hub mismo no necesita regreso).
+ */
+export function findNavBack(pathname: string) {
+  const section = findNavSection(pathname)
+  if (!section?.backHref || pathname === section.backHref) return null
+  return { href: section.backHref, title: section.title }
 }
 
 export function isNavChildActive(child: NavChild, pathname: string) {

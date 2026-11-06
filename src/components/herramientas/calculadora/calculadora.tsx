@@ -213,7 +213,7 @@ export function Calculadora() {
           aria-label="Pantalla de la calculadora"
           aria-describedby={HELP_ID}
           tabIndex={0}
-          className="flex min-w-0 flex-col justify-end gap-2 rounded-lg bg-muted/50 px-4 pt-[4.5rem] pb-4 text-right outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          className="flex min-w-0 flex-col justify-end gap-2 rounded-lg bg-muted/50 px-4 py-4 text-right outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
           {expression !== null ? (
             <div

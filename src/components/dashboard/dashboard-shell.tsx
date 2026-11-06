@@ -3,13 +3,15 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
+import { ChevronLeftIcon } from "lucide-react"
 
 import { AppHeaderDate } from "@/components/app-header-date"
 import { AppBottomNav } from "@/components/dashboard/app-bottom-nav"
 import { AppUserMenu } from "@/components/dashboard/app-user-menu"
-import { findNavHeaderTitle } from "@/components/dashboard/nav-config"
+import { findNavBack, findNavHeaderTitle } from "@/components/dashboard/nav-config"
 import { shellLayout } from "@/components/dashboard/nav-layout"
 import { MascotaLogo } from "@/components/mascota-logo"
+import { Button } from "@/components/ui/button"
 import type { AuthUser } from "@/server/auth/types"
 
 type ShellViewport = {
@@ -35,6 +37,8 @@ export function DashboardShell({
   const pathname = usePathname() ?? ""
   /** Rótulo de la sección o pestaña activa en la cabecera, solo donde se declara. */
   const headerTitle = findNavHeaderTitle(pathname)
+  /** Regreso de cabecera para rutas más profundas que el hub de la sección. */
+  const back = findNavBack(pathname)
   const [viewport, setViewport] = useState<ShellViewport>({
     keyboardOpen: false,
     height: null,
@@ -103,6 +107,18 @@ export function DashboardShell({
         >
           <MascotaLogo />
         </Link>
+        {back ? (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="-ml-1 text-muted-foreground transition-colors hover:text-foreground"
+            render={<Link href={back.href} />}
+            nativeButton={false}
+            aria-label={`Regresar a ${back.title}`}
+          >
+            <ChevronLeftIcon aria-hidden="true" />
+          </Button>
+        ) : null}
         {headerTitle ? (
           <h1 className="text-base font-semibold tracking-tight">
             {headerTitle}
