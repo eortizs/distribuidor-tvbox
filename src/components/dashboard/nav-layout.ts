@@ -27,16 +27,23 @@ export const mobileNavClass = {
   dropdownSubContent: "w-40 md:w-32",
 } as const
 
-/** Composición de la barra inferior de cinco destinos. */
+/**
+ * Composición de la barra inferior. El número de columnas lo fija en línea
+ * `AppBottomNav` según las secciones visibles del usuario (permisos).
+ */
 export const bottomNavClass = {
   bar: "bg-background fixed inset-x-0 bottom-0 z-40",
-  grid: "mx-auto grid h-full max-w-2xl grid-cols-5",
+  grid: "mx-auto grid h-full max-w-2xl",
   item:
     "flex min-h-12 w-full flex-col items-center justify-center gap-1 rounded-lg px-0 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-  itemActive: "bg-muted text-foreground",
+  /** Activo: el ícono conserva el contraste normal; el rótulo va invertido. */
+  itemActive: "text-foreground",
   itemIdle: "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
   icon: "size-5",
   label: "text-xs leading-tight tracking-tight whitespace-nowrap",
+  /** Rótulo del botón activo: cápsula invertida del tema (claro/oscuro). */
+  labelActive:
+    "rounded-full bg-foreground px-2 text-background text-xs leading-tight tracking-tight whitespace-nowrap",
 } as const
 
 /**

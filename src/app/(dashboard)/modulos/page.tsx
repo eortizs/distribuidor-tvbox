@@ -1,7 +1,7 @@
 import { HerramientasAccordion } from "@/components/herramientas/herramientas-accordion"
 
 export const metadata = {
-  title: "Herramientas",
+  title: "Módulos",
 }
 
 export default function HerramientasPage() {

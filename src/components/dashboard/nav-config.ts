@@ -1,16 +1,16 @@
 import type { LucideIcon } from "lucide-react"
 import {
   BotIcon,
+  ChartNoAxesCombinedIcon,
   CircleUserRoundIcon,
   FlaskConicalIcon,
+  HandHelpingIcon,
   HouseIcon,
-  LifeBuoyIcon,
+  LayersIcon,
   ReceiptTextIcon,
   SettingsIcon,
   TrendingDownIcon,
   UsersRoundIcon,
-  WalletCardsIcon,
-  WrenchIcon,
 } from "lucide-react"
 
 /**
@@ -39,6 +39,11 @@ export interface NavChild {
 }
 
 export interface NavSection {
+  /**
+   * Clave estable de la sección (rotaciones y rutas pueden cambiar; esta
+   * clave no): es la que viaja en los permisos por usuario.
+   */
+  key: string
   title: string
   icon: LucideIcon
   /** Destino del botón de la barra inferior. */
@@ -69,19 +74,30 @@ export interface NavAccountItem {
 
 /**
  * Única fuente de verdad de la navegación. El orden de este arreglo es el
- * orden de la barra inferior: Inicio, Clientes, Herramientas, Finanzas,
+ * orden de la barra inferior: Inicio, Módulos, Clientes, Finanzas,
  * Soporte. Cada botón navega a la página de su sección (el hub cuando existe);
  * las secciones con opciones las muestran como pestañas dentro de la página
  * (`children`).
  */
 export const navSections: NavSection[] = [
   {
+    key: "inicio",
     title: "Inicio",
     icon: HouseIcon,
     href: "/",
     match: { mode: "exact", paths: ["/"] },
   },
   {
+    key: "modulos",
+    title: "Módulos",
+    icon: LayersIcon,
+    href: "/modulos",
+    match: { mode: "prefix", paths: ["/modulos"] },
+    titleInHeader: true,
+    backHref: "/modulos",
+  },
+  {
+    key: "clientes",
     title: "Clientes",
     icon: UsersRoundIcon,
     href: "/clientes",
@@ -89,16 +105,9 @@ export const navSections: NavSection[] = [
     titleInHeader: true,
   },
   {
-    title: "Herramientas",
-    icon: WrenchIcon,
-    href: "/herramientas",
-    match: { mode: "prefix", paths: ["/herramientas"] },
-    titleInHeader: true,
-    backHref: "/herramientas",
-  },
-  {
+    key: "finanzas",
     title: "Finanzas",
-    icon: WalletCardsIcon,
+    icon: ChartNoAxesCombinedIcon,
     href: "/finanzas/estado-de-cuenta",
     match: { mode: "prefix", paths: ["/finanzas"] },
     children: [
@@ -115,8 +124,9 @@ export const navSections: NavSection[] = [
     ],
   },
   {
-    title: "Soporte",
-    icon: LifeBuoyIcon,
+    key: "soporte",
+    title: "Ayuda",
+    icon: HandHelpingIcon,
     href: "/soporte/asistente",
     match: { mode: "prefix", paths: ["/soporte"] },
     children: [
@@ -130,6 +140,9 @@ export const navSections: NavSection[] = [
     ],
   },
 ]
+
+/** Claves válidas de sección (validación de permisos en servidor y cliente). */
+export const navSectionKeys = navSections.map((section) => section.key)
 
 /** Entradas del menú de cuenta (avatar de la cabecera). */
 export const accountNav: NavAccountItem[] = [

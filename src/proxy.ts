@@ -59,6 +59,13 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
+  // El hub Herramientas pasó a /modulos; los enlaces antiguos siguen.
+  if (pathname === "/herramientas" || pathname.startsWith("/herramientas/")) {
+    const url = request.nextUrl.clone()
+    url.pathname = pathname.replace(/^\/herramientas/, "/modulos")
+    return NextResponse.redirect(url)
+  }
+
   if (isRateLimited(request)) {
     return new NextResponse("Too Many Requests", { status: 429 })
   }

@@ -43,7 +43,7 @@ export function AppUserMenu({ user }: { user: AuthUser }) {
             />
           }
         >
-          <Avatar size="sm">
+          <Avatar>
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
           <span className="hidden max-w-32 truncate text-sm md:inline">

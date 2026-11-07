@@ -1,5 +1,6 @@
 import { CreateUserButton, UsersManager } from "@/components/auth/users-list"
 import { requireRole } from "@/server/auth/guards"
+import { listDeniedSectionsByUser } from "@/server/auth/permissions"
 import { listUsers } from "@/server/auth/users"
 
 export const metadata = {
@@ -12,7 +13,10 @@ function formatDate(date: Date): string {
 
 export default async function UsersPage() {
   const session = await requireRole("admin")
-  const users = await listUsers()
+  const [users, deniedByUser] = await Promise.all([
+    listUsers(),
+    listDeniedSectionsByUser(),
+  ])
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
@@ -32,6 +36,7 @@ export default async function UsersPage() {
           role: user.role,
           entityCount: user.entityCount,
           distribuidorName: user.distribuidorName,
+          deniedSections: deniedByUser.get(user.id) ?? [],
           createdAt: user.createdAt.toISOString(),
           createdAtLabel: formatDate(user.createdAt),
         }))}

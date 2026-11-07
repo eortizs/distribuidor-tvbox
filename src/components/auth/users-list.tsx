@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { PencilIcon, PlusIcon, Trash2Icon } from "lucide-react"
+import { PencilIcon, PlusIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -13,6 +13,10 @@ import {
   type DeleteUserState,
   type UpdateUserState,
 } from "@/app/actions/users"
+import {
+  updateUserPermissionsAction,
+  type UpdatePermissionsState,
+} from "@/app/actions/permissions"
 import { Badge } from "@/components/reui/badge"
 import {
   DataGrid,
@@ -48,7 +52,9 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
+import { navSections } from "@/components/dashboard/nav-config"
 import {
   Select,
   SelectContent,
@@ -68,6 +74,8 @@ export interface UserListItem {
   entityCount: number
   /** Reseller FlujoTV ligado a esta cuenta; null si todavía no tiene. */
   distribuidorName: string | null
+  /** Claves de sección de la barra inferior que esta cuenta no ve. */
+  deniedSections: string[]
   createdAt: string
   createdAtLabel: string
 }
@@ -170,13 +178,14 @@ export function UsersManager({
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
           <div className="flex gap-1">
+            <PermissionsDialog user={row.original} />
             <EditUserDialog user={row.original} />
             {row.original.id !== currentUserId ? (
               <DeleteUserDialog user={row.original} />
             ) : null}
           </div>
         ),
-        size: 100,
+        size: 130,
       },
     ],
     [currentUserId]
@@ -481,6 +490,140 @@ function EditUserForm({
           <DialogClose render={<Button variant="outline" />}>Cancel</DialogClose>
           <Button type="submit" disabled={isPending}>
             {isPending ? "Saving…" : "Save changes"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  )
+}
+
+function PermissionsDialog({ user }: { user: UserListItem }) {
+  const [open, setOpen] = useState(false)
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
+        <ShieldCheckIcon />
+        <span className="sr-only">Permisos de {user.username}</span>
+      </DialogTrigger>
+      {open ? <PermissionsForm user={user} onDone={() => setOpen(false)} /> : null}
+    </Dialog>
+  )
+}
+
+const permissionsState: UpdatePermissionsState = { error: null, success: null }
+
+/** Ayuda breve por sección de la barra inferior (clave de nav-config). */
+const sectionHints: Record<string, string> = {
+  inicio: "Pantalla principal del panel",
+  clientes: "Clientes del panel de FlujoTV",
+  finanzas: "Estado de cuenta y gastos",
+  modulos: "Imágenes, animación y calculadora",
+  soporte: "Asistente, configuración y Lab",
+}
+
+function PermissionsForm({
+  user,
+  onDone,
+}: {
+  user: UserListItem
+  onDone: () => void
+}) {
+  const router = useRouter()
+  const [state, formAction, isPending] = useActionState(
+    updateUserPermissionsAction,
+    permissionsState
+  )
+  const [visible, setVisible] = useState<string[]>(() =>
+    navSections
+      .filter((section) => !user.deniedSections.includes(section.key))
+      .map((section) => section.key)
+  )
+
+  useEffect(() => {
+    if (state.success) {
+      toast.success(state.success)
+      router.refresh()
+      onDone()
+    }
+  }, [state.success, router, onDone])
+
+  const toggleSection = (key: string, checked: boolean) => {
+    setVisible((prev) =>
+      checked ? [...prev, key] : prev.filter((value) => value !== key)
+    )
+  }
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Permisos</DialogTitle>
+        <DialogDescription>
+          Elige qué secciones de la barra inferior ve {user.username} al
+          entrar. Esto controla la navegación, no las URLs.
+        </DialogDescription>
+      </DialogHeader>
+      <form action={formAction} className="contents">
+        <input type="hidden" name="userId" value={user.id} />
+        {visible.map((key) => (
+          <input key={key} type="hidden" name="sections" value={key} />
+        ))}
+        <div
+          className="flex flex-col gap-1"
+          role="group"
+          aria-label="Secciones de la aplicación"
+        >
+          {navSections.map((section) => {
+            const id = `perm-${user.id}-${section.key}`
+            return (
+              <div key={section.key} className="flex items-center gap-3 py-1.5">
+                <span
+                  className="bg-muted flex size-9 shrink-0 items-center justify-center rounded-lg"
+                  aria-hidden="true"
+                >
+                  <section.icon className="text-muted-foreground size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <FieldLabel
+                    htmlFor={id}
+                    className="text-foreground text-sm font-medium"
+                  >
+                    {section.title}
+                  </FieldLabel>
+                  <p className="text-muted-foreground text-xs">
+                    {sectionHints[section.key]}
+                  </p>
+                </div>
+                <Switch
+                  id={id}
+                  checked={visible.includes(section.key)}
+                  onCheckedChange={(next) => toggleSection(section.key, next)}
+                />
+              </div>
+            )
+          })}
+        </div>
+        {visible.length === 0 ? (
+          <p className="text-destructive text-sm" role="alert">
+            Deja al menos una sección visible
+          </p>
+        ) : null}
+        {user.role === "admin" ? (
+          <p className="text-muted-foreground text-xs">
+            Las cuentas admin siempre ven todas las secciones.
+          </p>
+        ) : null}
+        {state.error ? (
+          <p className="text-destructive text-sm" role="alert">
+            {state.error}
+          </p>
+        ) : null}
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" />}>
+            Cancelar
+          </DialogClose>
+          <Button type="submit" disabled={isPending || visible.length === 0}>
+            {isPending ? "Guardando…" : "Guardar"}
           </Button>
         </DialogFooter>
       </form>

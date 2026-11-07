@@ -28,10 +28,13 @@ type ShellViewport = {
 export function DashboardShell({
   user,
   initialDate,
+  visibleSections,
   children,
 }: {
   user: AuthUser
   initialDate: string
+  /** Claves de sección visibles para este usuario (permisos por cuenta). */
+  visibleSections: string[]
   children: React.ReactNode
 }) {
   const pathname = usePathname() ?? ""
@@ -81,7 +84,7 @@ export function DashboardShell({
 
   return (
     <div
-      className="relative flex min-h-svh flex-col"
+      className="relative flex h-[var(--shell-viewport-height)] flex-col overflow-hidden"
       style={
         {
           "--shell-viewport-height": viewport.height
@@ -129,10 +132,12 @@ export function DashboardShell({
           <AppUserMenu user={user} />
         </div>
       </header>
-      <main className="flex-1 pb-[var(--shell-bottom-nav-space)]">
+      <main className="min-h-0 flex-1 overflow-y-auto pb-[var(--shell-bottom-nav-space)]">
         {children}
       </main>
-      {viewport.keyboardOpen ? null : <AppBottomNav />}
+      {viewport.keyboardOpen ? null : (
+        <AppBottomNav visibleSections={visibleSections} />
+      )}
     </div>
   )
 }

@@ -12,12 +12,19 @@ import {
 import { bottomNavClass } from "@/components/dashboard/nav-layout"
 
 /**
- * Barra inferior de cinco destinos, fija y persistente. Cada botón navega a
- * su propia página; las secciones con opciones muestran sus pestañas dentro
- * de la página.
+ * Barra inferior fija y persistente. Muestra solo las secciones visibles para
+ * el usuario (permisos por cuenta); cada botón navega a su propia página y
+ * las secciones con opciones muestran sus pestañas dentro de la página.
  */
-export function AppBottomNav() {
+export function AppBottomNav({
+  visibleSections,
+}: {
+  visibleSections: string[]
+}) {
   const pathname = usePathname() ?? ""
+  const sections = navSections.filter((section) =>
+    visibleSections.includes(section.key)
+  )
 
   return (
     <nav
@@ -30,8 +37,11 @@ export function AppBottomNav() {
         paddingRight: "env(safe-area-inset-right)",
       }}
     >
-      <div className={bottomNavClass.grid}>
-        {navSections.map((section) => (
+      <div
+        className={bottomNavClass.grid}
+        style={{ gridTemplateColumns: `repeat(${sections.length}, minmax(0, 1fr))` }}
+      >
+        {sections.map((section) => (
           <BottomNavLink key={section.title} section={section} pathname={pathname} />
         ))}
       </div>
@@ -58,7 +68,13 @@ function BottomNavLink({
       )}
     >
       <section.icon className={bottomNavClass.icon} aria-hidden="true" />
-      <span className={bottomNavClass.label}>{section.title}</span>
+      <span
+        className={cn(
+          active ? bottomNavClass.labelActive : bottomNavClass.label
+        )}
+      >
+        {section.title}
+      </span>
     </Link>
   )
 }
