@@ -2,6 +2,7 @@ import {
   withTransaction,
   type PoolClientLike,
 } from "@/server/db"
+import { publishRealtime } from "@/server/realtime/bus"
 import {
   AppError,
   ENTITY_STATES,
@@ -84,6 +85,27 @@ function mapEventRow(row: Record<string, unknown>): EntityEventRow {
     occurredAt: row.occurred_at as Date,
     recordedAt: row.recorded_at as Date,
   }
+}
+
+/**
+ * Alcance del documento para el bus de tiempo real: dueño
+ * (dynamicProperties.distribuidorId) y reseller ligado (distribuidorName).
+ * Sin dueño resolvable el evento queda solo para admins en el endpoint SSE.
+ */
+function entityScope(doc: UmeJson): {
+  distribuidorId: string | null
+  distribuidor: string | null
+} {
+  const props = doc.dynamicProperties ?? {}
+  const distribuidorId =
+    typeof props.distribuidorId === "string" && props.distribuidorId.length > 0
+      ? props.distribuidorId
+      : null
+  const distribuidor =
+    typeof props.distribuidorName === "string" && props.distribuidorName.length > 0
+      ? props.distribuidorName
+      : null
+  return { distribuidorId, distribuidor }
 }
 
 async function nextSeq(
@@ -271,6 +293,12 @@ export async function createEntity(
       occurredAt,
     })
 
+    await publishRealtime(tx, {
+      kind: "entity",
+      entityId: doc.id,
+      ...entityScope(doc),
+    })
+
     const inserted = await tx.query("SELECT * FROM entities WHERE id = $1", [
       doc.id,
     ])
@@ -445,6 +473,12 @@ export async function updatePropertiesInTx(
     occurredAt,
   })
 
+  await publishRealtime(client, {
+    kind: "entity",
+    entityId: id,
+    ...entityScope(newDoc),
+  })
+
   return getEntityInsideTransaction(client, id)
 }
 
@@ -501,6 +535,12 @@ export async function softDeleteEntitiesByOwner(
         actor,
         reason: options.reason ?? null,
         occurredAt,
+      })
+
+      await publishRealtime(tx, {
+        kind: "entity",
+        entityId: id,
+        ...entityScope(doc),
       })
     }
 
@@ -566,6 +606,12 @@ export async function changeState(
       actor,
       reason: options.reason ?? null,
       occurredAt,
+    })
+
+    await publishRealtime(client, {
+      kind: "entity",
+      entityId: id,
+      ...entityScope(newDoc),
     })
 
     const projected = await projectStatusLog(client, id)

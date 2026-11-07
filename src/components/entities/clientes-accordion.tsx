@@ -132,6 +132,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 
+import { useRealtimeEvent } from "@/hooks/use-realtime"
 import { Alert, AlertDescription, AlertTitle } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
 import {
@@ -628,6 +629,18 @@ export function ClientesAccordion({
     setFetchState("loading")
     setReloadCount((token) => token + 1)
   }, [])
+
+  /**
+   * Tiempo real: cambios de entidades o de órdenes de Mercado Pago hechos en
+   * otro dispositivo (incluida la renovación aplicada por el webhook de MP)
+   * refrescan el listado en silencio, sin el spinner de recarga manual.
+   */
+  useRealtimeEvent(
+    ["entity", "mp_order"],
+    useCallback(() => {
+      setReloadCount((token) => token + 1)
+    }, [])
+  )
 
   /**
    * Sincronización real con el panel de FlujoTV: el servidor hace login en el

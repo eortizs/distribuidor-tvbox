@@ -83,6 +83,7 @@ import {
   type ExpenseCurrency,
   type ExpenseSummary,
 } from "@/lib/finanzas"
+import { useRealtimeEvent } from "@/hooks/use-realtime"
 
 interface ListResponse {
   ok: boolean
@@ -221,6 +222,15 @@ export function GastosView() {
     setPagination((prev) => ({ ...prev, pageIndex: 0 }))
     setReloadToken((token) => token + 1)
   }, [])
+
+  /**
+   * Tiempo real: un gasto creado en otro dispositivo (o por el asistente)
+   * refresca aquí sin resetear paginación ni mostrar el spinner de carga —
+   * solo re-ejecuta los fetch con los filtros y página actuales.
+   */
+  useRealtimeEvent(["expenses"], useCallback(() => {
+    setReloadToken((token) => token + 1)
+  }, []))
 
   const retry = useCallback(() => {
     setFetchState("loading")

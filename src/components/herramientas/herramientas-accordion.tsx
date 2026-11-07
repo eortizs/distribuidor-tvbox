@@ -31,29 +31,36 @@
  *   creados, no hace nada. El pulso largo cancela el click del enlace
  *   (guardia en la fase de captura) y cancela el gesto si hay arrastre.
  *
- * **Persistencia**: favoritos, filtros y asignaciones viven en
- * localStorage (`modulos.filtros.v1`), mismo criterio que los filtros de
- * `/clientes` (`clientes.filtros.v1`); la lectura corre en un microtask y
- * se valida la forma (favoritos/hrefs desconocidos y asignaciones a filtros
- * borrados se sueltan). Los cambios solo se escriben tras la restauración
- * para no pisar lo guardado con los valores vacíos del montaje.
+ * **Persistencia**: favoritos, filtros y asignaciones viven en el servidor
+ * (`user_module_prefs`, por usuario): web y mobile comparten el mismo
+ * estado. Los cambios se guardan con debounce (~400 ms) vía server action y
+ * se difunden por el bus de tiempo real (evento `prefs`): editar favoritos
+ * en un dispositivo se refleja en los demás al instante. La primera visita
+ * tras el cambio migra lo que hubiera en localStorage
+ * (`modulos.filtros.v1`) al servidor y limpia la clave.
  */
 
 import Link from "next/link"
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
-  CalculatorIcon,
-  ClapperboardIcon,
-  ImageIcon,
   PlusIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
   StarIcon,
   TrashIcon,
-  type LucideIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  MODULOS,
+  modulePrefsEqual,
+  normalizeModulePrefs,
+  type Asignaciones,
+  type Modulo,
+  type ModuloFiltro,
+  type ModulePrefs,
+} from "@/lib/modulos"
+import { saveModulePrefsAction } from "@/app/actions/modulos"
 import { Badge } from "@/components/reui/badge"
 import {
   Accordion,
@@ -80,66 +87,22 @@ import {
 } from "@/components/ui/toggle-group"
 import { cn } from "cn"
 
-interface Herramienta {
-  title: string
-  description: string
-  href: string
-  icon: LucideIcon
-}
-
-/** Filtro creado por el usuario (además de «Todos» y «Favoritos»). */
-interface ModuloFiltro {
-  id: string
-  name: string
-}
-
-/** Módulo → ids de filtros a los que pertenece. */
-type Asignaciones = Record<string, string[]>
-
-interface FiltrosGuardados {
-  favorites: string[]
-  categories: ModuloFiltro[]
-  assignments: Asignaciones
-}
-
-/** Catálogo de herramientas publicadas en el hub `/modulos`. */
-const herramientas: Herramienta[] = [
-  {
-    title: "Imágenes",
-    description:
-      "Genera y edita imágenes con IA desde texto, referencias o bocetos a mano.",
-    href: "/modulos/imagenes",
-    icon: ImageIcon,
-  },
-  {
-    title: "Animación",
-    description:
-      "Del idea al render con el agente EVE: guiones, storyboards y entregables con costo y tiempo.",
-    href: "/modulos/animacion",
-    icon: ClapperboardIcon,
-  },
-  {
-    title: "Calculadora",
-    description:
-      "Cálculos rápidos con porcentaje comercial, desde botones o teclado.",
-    href: "/modulos/calculadora",
-    icon: CalculatorIcon,
-  },
-]
-
-const HREFS = new Set(herramientas.map((tool) => tool.href))
-
-/**
- * Clave de localStorage donde viven favoritos, filtros creados y sus
- * asignaciones; al recargar la página se restauran tal y como quedaron.
- */
-const FILTROS_STORAGE_KEY = "modulos.filtros.v1"
+type Herramienta = Modulo
 
 /** Duración del clic sostenido que abre la asignación a filtros (ms). */
 const LONG_PRESS_MS = 500
 
 /** Arrastre máximo (px) que se tolera sin cancelar el clic sostenido. */
 const LONG_PRESS_SLACK_PX = 10
+
+/** Debounce del guardado de preferencias en el servidor (ms). */
+const SAVE_DEBOUNCE_MS = 400
+
+/**
+ * Clave de localStorage donde vivían favoritos, filtros y asignaciones
+ * antes de pasar al servidor; la migración la lee una sola vez y la borra.
+ */
+const FILTROS_STORAGE_KEY = "modulos.filtros.v1"
 
 /** Vista activa: fondo del color de primer plano del tema, texto opuesto. */
 const VISTA_ACTIVE_CLASS =
@@ -149,62 +112,21 @@ const VISTA_ACTIVE_CLASS =
 const VISTA_COUNT_CLASS =
   "rounded-full tabular-nums group-aria-pressed/toggle:border-background/40 group-aria-pressed/toggle:bg-transparent dark:group-aria-pressed/toggle:border-background/40 dark:group-aria-pressed/toggle:bg-transparent"
 
-/**
- * Valida la forma de lo guardado y suelta lo desconocido: favoritos de
- * módulos inexistentes, filtros sin nombre y asignaciones a filtros que ya
- * no existen.
- */
-function reviveFiltros(stored: unknown): FiltrosGuardados | null {
-  if (!stored || typeof stored !== "object") return null
-  const raw = stored as {
-    favorites?: unknown
-    categories?: unknown
-    assignments?: unknown
-  }
-  const favorites = Array.isArray(raw.favorites)
-    ? [
-        ...new Set(
-          raw.favorites.filter(
-            (value): value is string => typeof value === "string" && HREFS.has(value)
-          )
-        ),
-      ]
-    : []
-  const categories = Array.isArray(raw.categories)
-    ? raw.categories
-        .map((item) => {
-          if (!item || typeof item !== "object") return null
-          const { id, name } = item as { id?: unknown; name?: unknown }
-          if (typeof id !== "string" || id === "") return null
-          if (typeof name !== "string" || name.trim() === "") return null
-          return { id, name: name.trim().slice(0, 40) }
-        })
-        .filter((item): item is ModuloFiltro => item !== null)
-    : []
-  const ids = new Set(categories.map((category) => category.id))
-  const assignments: Asignaciones = {}
-  if (raw.assignments && typeof raw.assignments === "object") {
-    for (const [href, list] of Object.entries(
-      raw.assignments as Record<string, unknown>
-    )) {
-      if (!HREFS.has(href) || !Array.isArray(list)) continue
-      const clean = [
-        ...new Set(
-          list.filter(
-            (value): value is string => typeof value === "string" && ids.has(value)
-          )
-        ),
-      ]
-      if (clean.length > 0) assignments[href] = clean
-    }
-  }
-  return { favorites, categories, assignments }
-}
-
-export function HerramientasAccordion() {
-  const [favorites, setFavorites] = useState<string[]>([])
-  const [categories, setCategories] = useState<ModuloFiltro[]>([])
-  const [assignments, setAssignments] = useState<Asignaciones>({})
+export function HerramientasAccordion({
+  initialPrefs,
+}: {
+  /** Preferencias ya guardadas en el servidor; null si el usuario aún no tiene. */
+  initialPrefs: ModulePrefs | null
+}) {
+  const [favorites, setFavorites] = useState<string[]>(
+    initialPrefs?.favorites ?? []
+  )
+  const [categories, setCategories] = useState<ModuloFiltro[]>(
+    initialPrefs?.categories ?? []
+  )
+  const [assignments, setAssignments] = useState<Asignaciones>(
+    initialPrefs?.assignments ?? {}
+  )
   const [view, setView] = useState<string>("todos")
   const [createOpen, setCreateOpen] = useState(false)
   const [assignTarget, setAssignTarget] = useState<{
@@ -212,42 +134,94 @@ export function HerramientasAccordion() {
     picked: Set<string>
   } | null>(null)
 
-  /** La escritura a localStorage espera a que la restauración termine. */
-  const hydratedRef = useRef(false)
+  /**
+   * Snapshot confirmado por el servidor: la referencia para distinguir «el
+   * refresco trae lo que yo mismo guardé» (no-op) de «otro dispositivo
+   * cambió algo» (adoptar). El dirty flag marca cambios locales pendientes
+   * de guardar; mientras existan, un evento remoto no pisa la edición local.
+   */
+  const serverSnapshotRef = useRef<ModulePrefs | null>(initialPrefs)
+  const dirtyRef = useRef(false)
+  const migrationRef = useRef(false)
 
+  // Adopción remota: un evento `prefs` de otro dispositivo refresca la RSC
+  // y llega por aquí. Solo aplica sin ediciones locales pendientes. El
+  // setState corre en un microtask: nada se pinta intermedio y el efecto
+  // queda como suscripción al cambio de props.
+  useEffect(() => {
+    if (!initialPrefs) return
+    void Promise.resolve().then(() => {
+      if (dirtyRef.current) return
+      if (modulePrefsEqual(initialPrefs, serverSnapshotRef.current)) return
+      serverSnapshotRef.current = initialPrefs
+      setFavorites(initialPrefs.favorites)
+      setCategories(initialPrefs.categories)
+      setAssignments(initialPrefs.assignments)
+    })
+  }, [initialPrefs])
+
+  // Migración única: sin estado en el servidor, sube lo que hubiera en
+  // localStorage; con estado confirmado, la clave vieja queda obsoleta.
   useEffect(() => {
     void Promise.resolve().then(() => {
+      if (initialPrefs) {
+        try {
+          window.localStorage.removeItem(FILTROS_STORAGE_KEY)
+        } catch {
+          // Almacenamiento bloqueado: el dato viejo simplemente no se usa.
+        }
+        return
+      }
       let stored: unknown = null
       try {
         stored = JSON.parse(
           window.localStorage.getItem(FILTROS_STORAGE_KEY) ?? "null"
         ) as unknown
       } catch {
-        // Almacenamiento ilegible: se parte con los valores por defecto.
+        // Almacenamiento ilegible: se parte con las preferencias vacías.
       }
-      const revived = reviveFiltros(stored)
-      if (revived) {
-        setFavorites(revived.favorites)
-        setCategories(revived.categories)
-        setAssignments(revived.assignments)
-      }
-      hydratedRef.current = true
+      const revived = normalizeModulePrefs(stored)
+      if (modulePrefsEqual(revived, normalizeModulePrefs(null))) return
+      setFavorites(revived.favorites)
+      setCategories(revived.categories)
+      setAssignments(revived.assignments)
+      migrationRef.current = true
+      dirtyRef.current = true
     })
-  }, [])
+  }, [initialPrefs])
 
+  // Guardado con debounce: cada cambio local programa la subida; el último
+  // gana. Dirty se limpia al disparar el timer (el snapshot es el más
+  // nuevo); una edición posterior lo vuelve a marcar y reprograma. Al
+  // confirmarse, el snapshot del servidor se actualiza para que el eco del
+  // evento propio (router.refresh) no dispare una adopción.
   useEffect(() => {
-    if (!hydratedRef.current) return
-    try {
-      window.localStorage.setItem(
-        FILTROS_STORAGE_KEY,
-        JSON.stringify({ favorites, categories, assignments })
-      )
-    } catch {
-      // Cuota agotada o almacenamiento bloqueado: la sesión sigue en memoria.
-    }
+    if (!dirtyRef.current) return
+    const snapshot: ModulePrefs = { favorites, categories, assignments }
+    const timer = window.setTimeout(() => {
+      dirtyRef.current = false
+      void saveModulePrefsAction(snapshot).then((result) => {
+        if (!result.ok) {
+          // Falló la subida: pendiente de resolver; el próximo cambio reintenta.
+          dirtyRef.current = true
+          return
+        }
+        serverSnapshotRef.current = result.prefs
+        if (migrationRef.current) {
+          migrationRef.current = false
+          try {
+            window.localStorage.removeItem(FILTROS_STORAGE_KEY)
+          } catch {
+            // Sin localStorage no hay migración que limpiar.
+          }
+        }
+      })
+    }, SAVE_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
   }, [favorites, categories, assignments])
 
   const toggleFavorite = (href: string) => {
+    dirtyRef.current = true
     setFavorites((prev) =>
       prev.includes(href)
         ? prev.filter((value) => value !== href)
@@ -263,11 +237,13 @@ export function HerramientasAccordion() {
     )
     if (duplicate) return "Ya existe un filtro con ese nombre."
     const category = { id: crypto.randomUUID(), name: clean }
+    dirtyRef.current = true
     setCategories((prev) => [...prev, category])
     return null
   }
 
   const saveAssignments = (tool: Herramienta, picked: Set<string>) => {
+    dirtyRef.current = true
     setAssignments((prev) => {
       const next = { ...prev }
       if (picked.size === 0) {
@@ -288,7 +264,7 @@ export function HerramientasAccordion() {
 
   const visible = useMemo(
     () =>
-      herramientas.filter((tool) => {
+      MODULOS.filter((tool) => {
         if (view === "todos") return true
         if (view === "favoritos") return favorites.includes(tool.href)
         return (assignments[tool.href] ?? []).includes(view)
@@ -327,7 +303,7 @@ export function HerramientasAccordion() {
   }
 
   const categoryCount = (id: string) =>
-    herramientas.filter((tool) =>
+    MODULOS.filter((tool) =>
       (assignments[tool.href] ?? []).includes(id)
     ).length
 
@@ -357,7 +333,7 @@ export function HerramientasAccordion() {
           <ToggleGroupItem value="todos" className={`rounded-full ${VISTA_ACTIVE_CLASS}`}>
             Todos
             <Badge variant="outline" size="xs" className={VISTA_COUNT_CLASS}>
-              {herramientas.length}
+              {MODULOS.length}
             </Badge>
           </ToggleGroupItem>
           <ToggleGroupItem value="favoritos" className={`rounded-full ${VISTA_ACTIVE_CLASS}`}>

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import { fixRates, mxDayKey } from "@/server/banxico"
 import { pool } from "@/server/db"
+import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { EXPENSE_CATEGORIES } from "@/lib/finanzas"
 import { AppError } from "@/server/umejson/types"
 
@@ -321,7 +322,18 @@ export async function createExpense(
       createdBy,
     ]
   )
-  return mapExpenseRow(result.rows[0])
+  const expense = mapExpenseRow(result.rows[0])
+  notifyExpensesChanged(expense.id, expense.userId)
+  return expense
+}
+
+/** Señal SSE para las sesiones del mismo usuario abiertas en otro equipo. */
+function notifyExpensesChanged(expenseId: string, userId: string): void {
+  publishRealtimeDetached({
+    kind: "expenses",
+    entityId: expenseId,
+    distribuidorId: userId,
+  })
 }
 
 export interface SystemExpenseInput {
@@ -367,7 +379,10 @@ export async function createSystemExpense(
       input.sourceImageId,
     ]
   )
-  return result.rowCount === 0 ? null : mapExpenseRow(result.rows[0])
+  if (result.rowCount === 0) return null
+  const expense = mapExpenseRow(result.rows[0])
+  notifyExpensesChanged(expense.id, expense.userId)
+  return expense
 }
 
 export interface SystemAnimationExpenseInput {
@@ -415,7 +430,10 @@ export async function createSystemAnimationExpense(
       input.sourceTurnId,
     ]
   )
-  return result.rowCount === 0 ? null : mapExpenseRow(result.rows[0])
+  if (result.rowCount === 0) return null
+  const expense = mapExpenseRow(result.rows[0])
+  notifyExpensesChanged(expense.id, expense.userId)
+  return expense
 }
 
 export async function getExpense(
@@ -555,7 +573,9 @@ export async function updateExpense(
       next.notes,
     ]
   )
-  return mapExpenseRow(result.rows[0])
+  const expense = mapExpenseRow(result.rows[0])
+  notifyExpensesChanged(expense.id, expense.userId)
+  return expense
 }
 
 export async function softDeleteExpense(
@@ -571,6 +591,7 @@ export async function softDeleteExpense(
   if (result.rowCount === 0) {
     throw new AppError(404, "not_found", "El gasto no existe.")
   }
+  notifyExpensesChanged(id, userId)
 }
 
 function mapBucket(row: Record<string, unknown>): ExpenseSummaryBucket {

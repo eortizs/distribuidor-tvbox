@@ -11,6 +11,7 @@ import { AppUserMenu } from "@/components/dashboard/app-user-menu"
 import { findNavBack, findNavHeaderTitle } from "@/components/dashboard/nav-config"
 import { shellLayout } from "@/components/dashboard/nav-layout"
 import { MascotaLogo } from "@/components/mascota-logo"
+import { RealtimeIndicator } from "@/components/realtime/realtime-indicator"
 import { Button } from "@/components/ui/button"
 import type { AuthUser } from "@/server/auth/types"
 
@@ -128,6 +129,7 @@ export function DashboardShell({
           </h1>
         ) : null}
         <div className="ml-auto flex items-center gap-1 md:gap-2">
+          <RealtimeIndicator />
           <AppHeaderDate initialDate={initialDate} />
           <AppUserMenu user={user} />
         </div>

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 
 import { pool } from "@/server/db"
+import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { renewFlujoLicense } from "@/server/flujotv/service"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 
@@ -94,6 +95,15 @@ function logError(context: string, error: unknown): void {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Señal de invalidación para las sesiones conectadas (SSE): un cambio de
+ * estado de orden puede reflejar una licencia renovada en la pantalla de
+ * clientes de otro dispositivo. Mejor esfuerzo, nunca bloquea la respuesta.
+ */
+function notifyOrderChange(orderId: string): void {
+  publishRealtimeDetached({ kind: "mp_order", entityId: orderId })
 }
 
 /* -------------------------------------------------------------------------- */
@@ -332,6 +342,7 @@ async function attemptOrderRenewal(
         WHERE id = $1`,
       [order.id]
     )
+    notifyOrderChange(order.id)
     log("mercadopago.payment", {
       order_id: order.id,
       payment_id: paymentId,
@@ -350,6 +361,7 @@ async function attemptOrderRenewal(
           WHERE id = $1`,
         [order.id, message.slice(0, 500)]
       )
+      .then(() => notifyOrderChange(order.id))
       .catch((updateError: unknown) =>
         logError("update_renewal_failed", updateError)
       )
@@ -435,6 +447,7 @@ export async function processPaymentNotification(params: {
             WHERE id = $1 AND status = 'pending'`,
           [order.id, next, params.paymentId, paymentStatus]
         )
+        .then(() => notifyOrderChange(order.id))
         .catch((error: unknown) => logError("update_rejected_order", error))
       log("mercadopago.payment", {
         order_id: order.id,

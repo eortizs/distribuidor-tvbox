@@ -1,4 +1,5 @@
 import { pool, withTransaction } from "@/server/db"
+import { publishRealtime } from "@/server/realtime/bus"
 import { navSectionKeys } from "@/components/dashboard/nav-config"
 import type { AuthUser } from "./types"
 
@@ -78,5 +79,7 @@ export async function setSectionPermissions(
         [userId, key, unique.includes(key)]
       )
     }
+    // El propio usuario recibe el evento (SSE) y refresca su navegación.
+    await publishRealtime(client, { kind: "users", entityId: userId })
   })
 }

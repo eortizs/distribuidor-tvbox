@@ -1,4 +1,5 @@
 import { pool, type PoolClientLike } from "@/server/db"
+import { publishRealtime } from "@/server/realtime/bus"
 import { ACCOUNT_ENTITY_NAME } from "./types"
 import type { AuthUser } from "./types"
 
@@ -88,7 +89,22 @@ export async function insertUser(
      RETURNING id, username, password_hash, role, created_at`,
     [crypto.randomUUID(), input.username, input.passwordHash, input.role]
   )
-  return mapUserRow(result.rows[0])
+  const user = mapUserRow(result.rows[0])
+  await notifyUsersChanged(executor, user.id)
+  return user
+}
+
+/**
+ * Señal de invalidación (SSE) en la misma sesión SQL: dentro de una
+ * transacción el NOTIFY sale con el COMMIT; en autocommit sale al instante.
+ * Las sesiones del propio usuario lo reciben y refrescan (p. ej. sus
+ * permisos de navegación), los admins ven el listado al día.
+ */
+async function notifyUsersChanged(
+  executor: PoolClientLike,
+  userId: string
+): Promise<void> {
+  await publishRealtime(executor, { kind: "users", entityId: userId })
 }
 
 export async function updatePassword(
@@ -140,6 +156,7 @@ export async function updateUser(
   if (result.rowCount === 0) {
     throw new Error(`User ${id} does not exist`)
   }
+  await notifyUsersChanged(executor, id)
   return mapUserRow(result.rows[0])
 }
 
@@ -168,4 +185,5 @@ export async function deleteUser(
   executor: PoolClientLike = pool
 ): Promise<void> {
   await executor.query("DELETE FROM users WHERE id = $1", [id])
+  await notifyUsersChanged(executor, id)
 }
