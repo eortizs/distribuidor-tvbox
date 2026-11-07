@@ -81,14 +81,27 @@
  * (parten el listado por el estado del semáforo: inactivo = todo lo que no
  * está activo). Las reglas fijas viven fuera de la consulta editable para
  * que el operador no pueda desconfigurarlas. La vista activa se pinta con
- * el foreground del tema (negro en claro, blanco en oscuro). Todo va en una
- * sola fila desplazable en horizontal con el scrollbar oculto; al final,
- * «Añadir filtro» es un botón circular «+» con el mismo fondo del tema. El
- * picker abre con el título «Crear filtro», sin buscador de atributos, y
+ * el foreground del tema (negro en claro, blanco en oscuro). Las vistas y el
+ * botón «Añadir filtro» — un círculo «+» con el mismo fondo del tema — van en
+ * el renglón superior, desplazable en horizontal con el scrollbar oculto.
+ * El picker abre con el título «Crear filtro», sin buscador de atributos, y
  * lista los campos como «por estado», «por distribuidor» y «por días para
  * vencer» (las etiquetas leen el chip como una frase). Los chips se
  * redondean a cápsula y la búsqueda lleva icono de lupa (InputGroup con
  * addon inicial).
+ *
+ * Los **filtros creados** bajan a su propio renglón, debajo de las vistas:
+ * cada chip viaja con su contador en un paquete indivisible y el contenedor
+ * envuelve (`flex-wrap`), de modo que al no caber el filtro salta al renglón
+ * siguiente y la pila crece hacia abajo — siempre legible, sin escaparse en
+ * el scroll horizontal. El renglón solo existe mientras haya filtros.
+ *
+ * Los filtros creados son **persistentes**: cada cambio de consulta se
+ * guarda en localStorage (`clientes.filtros.v1`) y al recargar la página se
+ * restaura el árbol guardado — se validan la forma y los campos (una regla
+ * de un campo que ya no existe en la barra se suelta) y los ids se
+ * reasignan para no chocar con la fábrica de ids del nuevo montaje. Borrar
+ * los filtros («Todos» o la papelera del chip) también se guarda.
  *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario,
@@ -104,7 +117,7 @@
  * reintentan o sincronizan.
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   CircleCheckIcon,
@@ -171,6 +184,7 @@ import {
 } from "@/components/reui/filters/filters-query"
 import type {
   FilterField,
+  FilterNode,
   FilterOption,
   FilterQuery,
 } from "@/components/reui/filters/filters-types"
@@ -363,6 +377,91 @@ const CLIENT_FILTER_OPERATOR_LABELS: FilterOperatorLabels = {
 }
 
 /**
+ * Clave de localStorage donde viven los filtros creados de `/clientes`: al
+ * recargar la página se restauran tal y como quedaron (los valores son texto
+ * y números JSON, así que el árbol viaja sin transformación).
+ */
+const FILTERS_STORAGE_KEY = "clientes.filtros.v1"
+
+/**
+ * Reconstruye un nodo guardado: valida la forma del árbol, descarta las
+ * reglas cuyo campo ya no existe en la barra (p. ej. «por distribuidor» bajo
+ * alcance de distribuidor) y reasigna ids frescos — la fábrica de ids de
+ * `Filters` arranca en el mismo número en cada montaje, así que conservar los
+ * ids guardados chocaría con el de la primera regla nueva. `null` = nodo
+ * ilegible, se suelta.
+ */
+function reviveFilterNode(
+  node: unknown,
+  allowed: Set<string>,
+  nextId: () => string
+): FilterNode | null {
+  if (!node || typeof node !== "object") return null
+  const raw = node as {
+    type?: unknown
+    path?: unknown
+    operator?: unknown
+    value?: unknown
+    negated?: unknown
+    combinator?: unknown
+    rules?: unknown
+  }
+  if (raw.type === "rule") {
+    const path = Array.isArray(raw.path) ? raw.path.map(String) : []
+    if (path.length === 0 || !allowed.has(path[0])) return null
+    if (typeof raw.operator !== "string") return null
+    return {
+      id: nextId(),
+      type: "rule",
+      path,
+      operator: raw.operator,
+      value: raw.value,
+      ...(raw.negated === true ? { negated: true } : {}),
+    }
+  }
+  if (raw.type === "group") {
+    const rules = Array.isArray(raw.rules)
+      ? raw.rules
+          .map((child) => reviveFilterNode(child, allowed, nextId))
+          .filter((child): child is FilterNode => child !== null)
+      : []
+    return {
+      id: nextId(),
+      type: "group",
+      combinator: raw.combinator === "or" ? "or" : "and",
+      rules,
+    }
+  }
+  return null
+}
+
+/**
+ * Consulta almacenada → consulta viva. Devuelve null si no hay nada legible
+ * o si no queda ninguna regla de un campo conocido: en ese caso se parte sin
+ * filtros y el almacenamiento se actualiza con el siguiente cambio real.
+ */
+function reviveFilterQuery(
+  stored: unknown,
+  allowed: Set<string>
+): FilterQuery | null {
+  if (!stored || typeof stored !== "object") return null
+  const root = stored as {
+    type?: unknown
+    combinator?: unknown
+    rules?: unknown
+  }
+  if (root.type !== "group" || !Array.isArray(root.rules)) return null
+  let seq = 0
+  const nextId = () => `restored-${(seq += 1)}`
+  const rules = root.rules
+    .map((child) => reviveFilterNode(child, allowed, nextId))
+    .filter((child): child is FilterNode => child !== null)
+  return rules.length > 0
+    ? createFilterQuery(rules, root.combinator === "or" ? "or" : "and")
+    : null
+}
+
+/**
  * Aviso de retorno del checkout de Mercado Pago. El estado de display se
  * DERIVA: mientras hay orden de retorno sin resultado terminal, es
  * `working` (sondeo) o `rejected` si MP ya devolvió por el back_url de
@@ -419,6 +518,59 @@ export function ClientesAccordion({
 
   const requestCounter = useRef(0)
   const router = useRouter()
+
+  /**
+   * Consulta con la que montó el componente: el efecto de persistencia la usa
+   * para no escribir nada mientras el estado siga sin cambios — así la
+   * restauración de abajo nunca pisa lo guardado con una consulta vacía.
+   */
+  const initialQueryRef = useRef(query)
+
+  /**
+   * Restauración de los filtros creados en la visita anterior: localStorage
+   * sobrevive a la recarga, así que los chips reaparecen tal cual quedaron.
+   * Los campos admitidos dependen del alcance (el distribuidor no ve el filtro
+   * de Distribuidor); todo lo demás se suelta al restaurar. La lectura corre
+   * en un microtask — el primer pintado no espera al almacenamiento y la
+   * actualización no entra en cascada de forma sincrónica con el montaje — y
+   * solo aplica si la consulta sigue siendo la del primer render.
+   */
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      let stored: unknown = null
+      try {
+        stored = JSON.parse(
+          window.localStorage.getItem(FILTERS_STORAGE_KEY) ?? "null"
+        ) as unknown
+      } catch {
+        return
+      }
+      const allowed = new Set(
+        distribuidorName ? ["estado", "dias"] : ["estado", "reseller", "dias"]
+      )
+      const revived = reviveFilterQuery(stored, allowed)
+      if (revived) {
+        setQuery((current) =>
+          current === initialQueryRef.current ? revived : current
+        )
+      }
+    })
+  }, [distribuidorName])
+
+  /**
+   * Persistencia de los filtros creados: cada cambio de consulta — chips
+   * nuevos, edición de valores y también el limpiado de «Todos» — se guarda
+   * para la próxima recarga. Mientras la consulta siga siendo la del primer
+   * render no hay nada nuevo que escribir.
+   */
+  useEffect(() => {
+    if (query === initialQueryRef.current) return
+    try {
+      window.localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(query))
+    } catch {
+      // Cuota agotada o almacenamiento bloqueado: la sesión sigue en memoria.
+    }
+  }, [query])
 
   useEffect(() => {
     const requestId = ++requestCounter.current
@@ -921,76 +1073,102 @@ export function ClientesAccordion({
           operatorLabels={CLIENT_FILTER_OPERATOR_LABELS}
           size="sm"
         >
-          <div
-            role="toolbar"
-            aria-label={LAB_FILTER_LABELS.filtersLabel}
-            className="flex flex-nowrap items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 [&_[data-slot=filter-chip]>[data-slot]:first-child]:rounded-l-full [&_[data-slot=filter-chip]>[data-slot]:last-child]:rounded-r-full!"
-          >
-            <ToggleGroup
-              variant="outline"
-              size="sm"
-              value={[preset]}
-              onValueChange={(groupValue) => {
-                // Radio fijo: volver a pulsar la vista activa no la suelta.
-                // «Todos» además limpia los filtros manuales: la vista muestra
-                // el listado completo sin condiciones.
-                const next =
-                  PRESET_ITEMS.find((item) =>
-                    groupValue.includes(item.value)
-                  )?.value ?? preset
-                setPreset(next)
-                if (next === "todos") {
-                  setQuery((current) => clearFilterQuery(current))
-                }
-              }}
-              aria-label="Vistas preconfiguradas de clientes"
+          <div className="flex flex-col gap-2">
+            {/*
+             * Renglón 1: las vistas preconfiguradas y el botón «Añadir
+             * filtro», en una sola fila desplazable en horizontal con el
+             * scrollbar oculto. El «+» se queda arriba: los filtros que crea
+             * bajan al renglón de abajo.
+             */}
+            <div
+              role="toolbar"
+              aria-label={LAB_FILTER_LABELS.filtersLabel}
+              className="flex flex-nowrap items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
             >
-              {PRESET_ITEMS.map((item) => (
-                <ToggleGroupItem
-                  key={item.value}
-                  value={item.value}
-                  className={`rounded-full ${PRESET_ACTIVE_CLASS}`}
-                >
-                  {item.label}
-                  <Badge variant="outline" size="xs" className={PRESET_COUNT_CLASS}>
-                    {presetCounts[item.value]}
-                  </Badge>
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-            {rules.map((rule, index) => {
-              const count = ruleCounts.get(rule.id)
-              return (
-                <Fragment key={rule.id}>
-                  <FilterChip rule={rule} index={index} />
-                  {count !== undefined ? (
-                    <Badge
-                      variant="outline"
-                      size="xl"
-                      className="rounded-full px-3 tabular-nums"
-                    >
-                      {count}
+              <ToggleGroup
+                variant="outline"
+                size="sm"
+                value={[preset]}
+                onValueChange={(groupValue) => {
+                  // Radio fijo: volver a pulsar la vista activa no la suelta.
+                  // «Todos» además limpia los filtros manuales: la vista muestra
+                  // el listado completo sin condiciones.
+                  const next =
+                    PRESET_ITEMS.find((item) =>
+                      groupValue.includes(item.value)
+                    )?.value ?? preset
+                  setPreset(next)
+                  if (next === "todos") {
+                    setQuery((current) => clearFilterQuery(current))
+                  }
+                }}
+                aria-label="Vistas preconfiguradas de clientes"
+              >
+                {PRESET_ITEMS.map((item) => (
+                  <ToggleGroupItem
+                    key={item.value}
+                    value={item.value}
+                    className={`rounded-full ${PRESET_ACTIVE_CLASS}`}
+                  >
+                    {item.label}
+                    <Badge variant="outline" size="xs" className={PRESET_COUNT_CLASS}>
+                      {presetCounts[item.value]}
                     </Badge>
-                  ) : null}
-                </Fragment>
-              )
-            })}
-            <FiltersBuilder
-              /* El picker abre como una vista de «Crear filtro»: sin buscador
-                 de atributos (la fila de búsqueda se oculta desde el
-                 consumidor) y con el título impreso sobre la lista. */
-              className="before:text-foreground before:font-medium before:tracking-tight before:block before:content-['Crear_filtro'] before:px-3 before:pb-1 before:pt-2.5 [&_[data-slot=cascader-nav]]:hidden"
-              trigger={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label="Añadir filtro"
-                  className="size-7 rounded-full bg-foreground p-0 text-background hover:bg-foreground/80 [&_svg:not([class*='size-'])]:size-4"
-                >
-                  <PlusIcon aria-hidden="true" />
-                </Button>
-              }
-            />
+                  </ToggleGroupItem>
+                ))}
+              </ToggleGroup>
+              <FiltersBuilder
+                /* El picker abre como una vista de «Crear filtro»: sin buscador
+                   de atributos (la fila de búsqueda se oculta desde el
+                   consumidor) y con el título impreso sobre la lista. */
+                className="before:text-foreground before:font-medium before:tracking-tight before:block before:content-['Crear_filtro'] before:px-3 before:pb-1 before:pt-2.5 [&_[data-slot=cascader-nav]]:hidden"
+                trigger={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    aria-label="Añadir filtro"
+                    className="size-7 rounded-full bg-foreground p-0 text-background hover:bg-foreground/80 [&_svg:not([class*='size-'])]:size-4"
+                  >
+                    <PlusIcon aria-hidden="true" />
+                  </Button>
+                }
+              />
+            </div>
+            {/*
+             * Renglón 2: el stack de filtros creados. Cada chip viaja con su
+             * contador en un paquete indivisible y el contenedor envuelve
+             * (`flex-wrap`): al no caber, el filtro baja al renglón siguiente
+             * y la pila crece hacia abajo, siempre legible en lugar de
+             * escaparse en el scroll horizontal.
+             */}
+            {rules.length > 0 ? (
+              <div
+                role="group"
+                aria-label="Filtros creados"
+                className="flex flex-wrap items-center gap-2 [&_[data-slot=filter-chip]>[data-slot]:first-child]:rounded-l-full [&_[data-slot=filter-chip]>[data-slot]:last-child]:rounded-r-full!"
+              >
+                {rules.map((rule, index) => {
+                  const count = ruleCounts.get(rule.id)
+                  return (
+                    <span
+                      key={rule.id}
+                      className="flex shrink-0 items-center gap-1.5"
+                    >
+                      <FilterChip rule={rule} index={index} />
+                      {count !== undefined ? (
+                        <Badge
+                          variant="outline"
+                          size="xl"
+                          className="rounded-full px-3 tabular-nums"
+                        >
+                          {count}
+                        </Badge>
+                      ) : null}
+                    </span>
+                  )
+                })}
+              </div>
+            ) : null}
           </div>
         </Filters>
       ) : null}
