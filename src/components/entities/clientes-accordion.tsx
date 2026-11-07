@@ -30,8 +30,11 @@
  *   `pointer-events-none` y solo el botón recibe toques, así el resto de la
  *   fila sigue alternando el acordeón. El botón es hermano del trigger y no
  *   descendiente: un `<button>` anidado rompería el HTML y la hidratación.
- * - Tamaño móvil: blanco táctil de 44×44 px (`size-11`) con icono de 28 px
- *   (`size-7`) en negro puro (`text-black`).
+ * - Tamaño móvil: contenedor táctil de 36×36 px (`Button ghost size="icon"`
+ *   con `h-9 w-9 rounded-full`) e icono de 20 px (`size-5` en el propio svg:
+ *   la base del Button fija `size-4` para svg sin clase, y esa regla gana a
+ *   un `[&_svg]` del consumidor) en negro puro en claro y blanco puro en
+ *   oscuro (`text-black dark:text-white`).
  * - Feedback de pulsación: escala a 90 % con fondo `primary/15` e icono
  *   `primary` (curva de la casa, 200 ms); con `motion-reduce` se conserva
  *   solo el cambio de color.
@@ -63,6 +66,22 @@
  * regla cuenta sobre el listado completo y cada siguiente sobre el
  * resultado de las anteriores (los datos locales que dejó el filtro previo).
  *
+ * Antes de los chips, la barra abre con **vistas preconfiguradas**
+ * (ToggleGroup outline, radio fijo), cada una con su contador: «Todos» —
+ * limpia también los filtros manuales —, «Por vencer» (regla fija hardcoded
+ * de menos de 3 días solo sobre clientes vigentes), «Activo» y «Inactivo»
+ * (parten el listado por el estado del semáforo: inactivo = todo lo que no
+ * está activo). Las reglas fijas viven fuera de la consulta editable para
+ * que el operador no pueda desconfigurarlas. La vista activa se pinta con
+ * el foreground del tema (negro en claro, blanco en oscuro). Todo va en una
+ * sola fila desplazable en horizontal con el scrollbar oculto; al final,
+ * «Añadir filtro» es un botón circular «+» con el mismo fondo del tema. El
+ * picker abre con el título «Crear filtro», sin buscador de atributos, y
+ * lista los campos como «por estado», «por distribuidor» y «por días para
+ * vencer» (las etiquetas leen el chip como una frase). Los chips se
+ * redondean a cápsula y la búsqueda lleva icono de lupa (InputGroup con
+ * addon inicial).
+ *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario,
  * nombre propio (sin acentos) o correo.
@@ -80,10 +99,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Fragment } from "react"
 import {
-  ListFilterPlusIcon,
   LoaderCircleIcon,
   PackageOpenIcon,
+  PlusIcon,
   RefreshCwIcon,
+  SearchIcon,
   ShoppingCartPlusIcon,
   TriangleAlertIcon,
 } from "lucide-react"
@@ -110,7 +130,11 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { Progress } from "@/components/ui/progress"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -121,10 +145,19 @@ import {
 } from "@/components/ui/accordion"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group"
 import { Filters } from "@/components/reui/filters/filters"
 import { FilterChip } from "@/components/reui/filters/filters-chip"
 import { FiltersBuilder } from "@/components/reui/filters/filters-builder"
-import { createFilterQuery, flattenFilterRules, isFilterRuleComplete } from "@/components/reui/filters/filters-query"
+import {
+  clearFilterQuery,
+  createFilterQuery,
+  flattenFilterRules,
+  isFilterRuleComplete,
+} from "@/components/reui/filters/filters-query"
 import type {
   FilterField,
   FilterOption,
@@ -161,6 +194,59 @@ function initials(userName: string): string {
 
 /** Ventana de urgencia: la barra se agota durante los 30 días previos al vencimiento. */
 const PROGRESS_WINDOW_DAYS = 30
+
+/**
+ * Ventana del filtro preconfigurado «Por vencer»: hardcoded, menos de 3 días.
+ * Como toda regla sobre días, solo considera clientes vigentes (nunca vencidos).
+ */
+const POR_VENCER_DAYS = 3
+
+/** Vistas preconfiguradas de la barra de filtros. */
+type ClientPreset = "todos" | "por-vencer" | "activo" | "inactivo"
+
+/** Vistas en orden de la barra; el orden define la prioridad del radio fijo. */
+const PRESET_ITEMS: { value: ClientPreset; label: string }[] = [
+  { value: "todos", label: "Todos" },
+  { value: "por-vencer", label: "Por vencer" },
+  { value: "activo", label: "Activo" },
+  { value: "inactivo", label: "Vencido" },
+]
+
+/**
+ * ¿El cliente entra en la vista preconfigurada? Reglas fijas, fuera de la
+ * consulta editable: «Por vencer» es hardcoded (<3 días, solo vigentes, como
+ * toda regla de días) y «Activo»/«Vencido» parten el listado por el estado
+ * del semáforo (la vista «Vencido» es todo lo que no está activo).
+ */
+function matchesPreset(client: FlujoClient, preset: ClientPreset): boolean {
+  switch (preset) {
+    case "todos":
+      return true
+    case "por-vencer":
+      return (
+        client.statusLabel !== "vencido" &&
+        client.daysRemaining !== null &&
+        client.daysRemaining < POR_VENCER_DAYS
+      )
+    case "activo":
+      return client.statusLabel === "activo"
+    case "inactivo":
+      return client.statusLabel !== "activo"
+  }
+}
+
+/**
+ * Vista activa: fondo del color de primer plano del tema (negro en claro,
+ * blanco en oscuro) con el texto en el color opuesto; el hover no la apaga.
+ * Los botones de vista van en cápsula (`rounded-full`), igual que los chips,
+ * para que ese fondo se lea circular.
+ */
+const PRESET_ACTIVE_CLASS =
+  "aria-pressed:bg-foreground aria-pressed:text-background hover:aria-pressed:bg-foreground"
+
+/** Contador dentro de una vista: se invierte sobre el fondo activo. */
+const PRESET_COUNT_CLASS =
+  "rounded-full tabular-nums group-aria-pressed/toggle:border-background/40 group-aria-pressed/toggle:bg-transparent dark:group-aria-pressed/toggle:border-background/40 dark:group-aria-pressed/toggle:bg-transparent"
 
 function expiryProgress(days: number | null): number {
   if (days === null || days <= 0) return 0
@@ -277,6 +363,7 @@ export function ClientesAccordion({
   const [fetchState, setFetchState] = useState<FetchState>("loading")
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState("")
+  const [preset, setPreset] = useState<ClientPreset>("todos")
   const [query, setQuery] = useState<FilterQuery>(() => createFilterQuery())
   const [reloadCount, setReloadCount] = useState(0)
   const [syncOpen, setSyncOpen] = useState(false)
@@ -430,6 +517,18 @@ export function ClientesAccordion({
     return counts
   }, [clients])
 
+  /** Cuántos clientes entran en cada vista preconfigurada. */
+  const presetCounts = useMemo(() => {
+    const counts = {} as Record<ClientPreset, number>
+    for (const item of PRESET_ITEMS) counts[item.value] = 0
+    for (const client of clients) {
+      for (const item of PRESET_ITEMS) {
+        if (matchesPreset(client, item.value)) counts[item.value] += 1
+      }
+    }
+    return counts
+  }, [clients])
+
   const resellerCounts = useMemo(() => {
     const counts = new Map<string, number>()
     for (const client of clients) {
@@ -463,7 +562,7 @@ export function ClientesAccordion({
     const fields: FilterField[] = [
       {
         id: "estado",
-        label: "Estado",
+        label: "por estado",
         type: "select",
         options: (
           [
@@ -484,14 +583,14 @@ export function ClientesAccordion({
     if (!distribuidorName) {
       fields.push({
         id: "reseller",
-        label: "Distribuidor",
+        label: "por distribuidor",
         type: "select",
         options: resellerOptions,
       })
     }
     fields.push({
       id: "dias",
-      label: "Días para vencer",
+      label: "por días para vencer",
       type: "number",
     })
     return fields
@@ -507,7 +606,13 @@ export function ClientesAccordion({
     const eligible = hasDiasRule
       ? clients.filter((client) => client.statusLabel !== "vencido")
       : clients
-    const byQuery = applyFilterQuery(eligible, query, {
+    // Vista preconfigurada: regla fija FUERA de la consulta editable, para
+    // que el operador no pueda desconfigurarla; «Por vencer» excluye vencidos.
+    const withPreset =
+      preset === "todos"
+        ? eligible
+        : eligible.filter((client) => matchesPreset(client, preset))
+    const byQuery = applyFilterQuery(withPreset, query, {
       estado: (row) => row.statusLabel,
       reseller: resellerOf,
       dias: (row) => row.daysRemaining,
@@ -520,10 +625,10 @@ export function ClientesAccordion({
         foldTerm(client.email ?? "").includes(term) ||
         foldTerm(clientName(client, clientNames)).includes(term)
     )
-  }, [clients, query, searchInput, resellerOf, clientNames])
+  }, [clients, preset, query, searchInput, resellerOf, clientNames])
 
   const searching = searchInput.trim().length > 0
-  const hasFilters = query.rules.length > 0
+  const hasFilters = query.rules.length > 0 || preset !== "todos"
   const rules = useMemo(() => flattenFilterRules(query), [query])
 
   /** Conteos en cascada: cada regla cuenta sobre el resultado de la anterior. */
@@ -553,13 +658,18 @@ export function ClientesAccordion({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
-        <Input
-          value={searchInput}
-          onChange={(event) => setSearchInput(event.target.value)}
-          placeholder="Buscar"
-          aria-label="Buscar cliente por usuario, nombre o correo"
-          className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted px-4 focus-visible:border-transparent"
-        />
+        <InputGroup className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted">
+          <InputGroupAddon align="inline-start" className="pl-3.5">
+            <SearchIcon aria-hidden="true" />
+          </InputGroupAddon>
+          <InputGroupInput
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+            placeholder="Buscar"
+            aria-label="Buscar cliente por usuario, nombre o correo"
+            className="h-full text-base"
+          />
+        </InputGroup>
         <Button
           variant="ghost"
           onClick={() => setSyncOpen(true)}
@@ -599,8 +709,40 @@ export function ClientesAccordion({
           <div
             role="toolbar"
             aria-label={LAB_FILTER_LABELS.filtersLabel}
-            className="flex flex-wrap items-center gap-2"
+            className="flex flex-nowrap items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0 [&_[data-slot=filter-chip]>[data-slot]:first-child]:rounded-l-full [&_[data-slot=filter-chip]>[data-slot]:last-child]:rounded-r-full!"
           >
+            <ToggleGroup
+              variant="outline"
+              size="sm"
+              value={[preset]}
+              onValueChange={(groupValue) => {
+                // Radio fijo: volver a pulsar la vista activa no la suelta.
+                // «Todos» además limpia los filtros manuales: la vista muestra
+                // el listado completo sin condiciones.
+                const next =
+                  PRESET_ITEMS.find((item) =>
+                    groupValue.includes(item.value)
+                  )?.value ?? preset
+                setPreset(next)
+                if (next === "todos") {
+                  setQuery((current) => clearFilterQuery(current))
+                }
+              }}
+              aria-label="Vistas preconfiguradas de clientes"
+            >
+              {PRESET_ITEMS.map((item) => (
+                <ToggleGroupItem
+                  key={item.value}
+                  value={item.value}
+                  className={`rounded-full ${PRESET_ACTIVE_CLASS}`}
+                >
+                  {item.label}
+                  <Badge variant="outline" size="xs" className={PRESET_COUNT_CLASS}>
+                    {presetCounts[item.value]}
+                  </Badge>
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
             {rules.map((rule, index) => {
               const count = ruleCounts.get(rule.id)
               return (
@@ -619,10 +761,18 @@ export function ClientesAccordion({
               )
             })}
             <FiltersBuilder
+              /* El picker abre como una vista de «Crear filtro»: sin buscador
+                 de atributos (la fila de búsqueda se oculta desde el
+                 consumidor) y con el título impreso sobre la lista. */
+              className="before:text-foreground before:font-medium before:tracking-tight before:block before:content-['Crear_filtro'] before:px-3 before:pb-1 before:pt-2.5 [&_[data-slot=cascader-nav]]:hidden"
               trigger={
-                <Button variant="ghost" size="sm">
-                  <ListFilterPlusIcon aria-hidden="true" />
-                  Añadir filtro
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Añadir filtro"
+                  className="size-7 rounded-full bg-foreground p-0 text-background hover:bg-foreground/80 [&_svg:not([class*='size-'])]:size-4"
+                >
+                  <PlusIcon aria-hidden="true" />
                 </Button>
               }
             />
@@ -738,13 +888,16 @@ export function ClientesAccordion({
                 <div className="pointer-events-none absolute inset-y-0 right-8 z-10 flex items-center">
                   <Button
                     variant="ghost"
-                    size="icon-lg"
+                    size="icon"
                     onClick={() => openPurchase(client)}
                     disabled={purchasing}
                     aria-label={`Comprar 1 mes para ${client.userName}`}
-                    className="pointer-events-auto size-11 shrink-0 rounded-full text-black transition-[transform,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-90 active:bg-primary/15 active:text-primary motion-reduce:active:scale-100 [&_svg]:size-7"
+                    className="pointer-events-auto h-9 w-9 shrink-0 rounded-full text-black dark:text-white transition-[transform,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-90 active:bg-primary/15 active:text-primary motion-reduce:active:scale-100"
                   >
-                    <ShoppingCartPlusIcon aria-hidden="true" />
+                    <ShoppingCartPlusIcon
+                      aria-hidden="true"
+                      className="size-5"
+                    />
                   </Button>
                 </div>
               </div>
