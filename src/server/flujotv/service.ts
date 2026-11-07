@@ -50,6 +50,33 @@ function findArray(
   return null
 }
 
+/**
+ * Igual que `findArray`, pero para el primer registro alcanzable con los
+ * nombres esperados: `/find_user` envuelve al cliente en un objeto único
+ * (`{ success, message, user: {...} }`) en lugar de un arreglo, y sin esto
+ * la normalización se tragaría el sobre entero (usuario `#1`, sin llave de
+ * distribuidor) y el alcance por distribuidor rechazaría a sus propios
+ * clientes. Dentro de cada llave candidata prefiere el registro más
+ * profundo (`{ data: { user: {...} } }` → el `user`) antes que el envoltorio.
+ */
+function findRecord(
+  payload: unknown,
+  keys: string[]
+): Record<string, unknown> | null {
+  if (!isRecord(payload)) return null
+  for (const key of keys) {
+    const value = payload[key]
+    if (isRecord(value)) return findRecord(value, keys) ?? value
+  }
+  for (const value of Object.values(payload)) {
+    if (isRecord(value)) {
+      const nested = findRecord(value, keys)
+      if (nested) return nested
+    }
+  }
+  return null
+}
+
 function pickString(
   source: Record<string, unknown>,
   keys: string[]
@@ -710,6 +737,10 @@ export async function getFlujoClient(
     const rows = findArray(response.data, ["clients", "users", "items", "results"])
     if (rows && rows.length > 0 && isRecord(rows[0])) {
       return normalizeClient(rows[0], 0)
+    }
+    const single = findRecord(response.data, ["client", "user", "cliente", "data"])
+    if (single) {
+      return normalizeClient(single, 0)
     }
     return normalizeClient(response.data, 0)
   }
