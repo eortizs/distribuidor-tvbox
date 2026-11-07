@@ -38,17 +38,20 @@
  * - Feedback de pulsación: escala a 90 % con fondo `primary/15` e icono
  *   `primary` (curva de la casa, 200 ms); con `motion-reduce` se conserva
  *   solo el cambio de color.
- * - Flujo de pago: al pulsar abre un AlertDialog de confirmación con el
- *   resumen de la operación (usuario, renovación de 1 mes, importe en MXN).
- *   Confirmar llama `POST /api/mercadopago/orders`, que crea la orden
+ * - Flujo de pago: al pulsar abre un **bottom sheet** (Drawer de Base UI,
+ *   anclado al borde inferior con `swipeDirection="down"` y asa de arrastre
+ *   `showSwipeHandle`, patrón móvil moderno) con el resumen de la operación
+ *   (usuario, renovación de 1 mes, importe en MXN) y la acción primaria
+ *   «Pagar con Mercado Pago» a ancho completo. Confirmar llama
+ *   `POST /api/mercadopago/orders`, que crea la orden
  *   `pending` y la preferencia de Mercado Pago (`purpose: wallet_purchase`:
  *   solo pagan cuentas de Mercado Pago, wallet a wallet), y redirige al
  *   `init_point` del checkout. La renovación NO ocurre aquí: el webhook
  *   `POST /api/mercadopago/webhook` verifica el pago contra la API de MP
  *   (monto, moneda, external_reference) y recién entonces renueva la licencia
- *   en el panel FlujoTV. El diálogo no se cierra mientras procesa (Escape
- *   ignorado) y los fallos avisan con toast además del Alert dentro del
- *   diálogo.
+ *   en el panel FlujoTV. El sheet no se cierra mientras procesa (Escape y
+ *   swipe bloqueados) y los fallos avisan con toast además del Alert dentro
+ *   del sheet.
  * - Al volver de Mercado Pago (back_urls a `/clientes?orden=…&estado=…`) el
  *   componente muestra un Alert con el resultado y sondea
  *   `GET /api/mercadopago/orders/{id}` cada 2 s: al ver la orden `renewed`
@@ -143,9 +146,17 @@ import {
   AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
-  AlertDialogMedia,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  Drawer,
+  DrawerClose,
+  DrawerContent,
+  DrawerDescription,
+  DrawerFooter,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer"
 import {
   Empty,
   EmptyContent,
@@ -1355,81 +1366,97 @@ export function ClientesAccordion({
         </AlertDialogContent>
       </AlertDialog>
 
-      <AlertDialog
+      {/*
+       * Bottom sheet de compra (Drawer de Base UI, borde inferior con asa de
+       * arrastre y swipe para cerrar). Controlado: el botón de compra de la
+       * fila fija el cliente objetivo y abre; Cancelar cierra vía DrawerClose.
+       * Mientras se procesa el pago no se cierra ni con Escape ni con swipe.
+       */}
+      <Drawer
         open={purchaseOpen}
         onOpenChange={(open) => {
-          if (!open && !purchasing) setPurchaseOpen(false)
+          if (!open && purchasing) return
+          setPurchaseOpen(open)
         }}
+        showSwipeHandle
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogMedia>
-              <ShoppingCartPlusIcon aria-hidden="true" />
-            </AlertDialogMedia>
-            <AlertDialogTitle>¿Confirmar la compra?</AlertDialogTitle>
-            <AlertDialogDescription>
+        <DrawerContent className="max-h-[80vh]">
+          <DrawerHeader>
+            <DrawerTitle>¿Confirmar la compra?</DrawerTitle>
+            <DrawerDescription>
               Se abrirá el checkout de Mercado Pago para pagar con tu cuenta de
               Mercado Pago. La licencia se renueva automáticamente cuando se
               confirma el pago.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          {purchaseTarget ? (
-            <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
-              <dt className="text-muted-foreground">Usuario</dt>
-              <dd className="truncate font-medium">
-                {purchaseTarget.userName}
-              </dd>
-              <dt className="text-muted-foreground">Renovación</dt>
-              <dd className="font-medium">1 mes</dd>
-              <dt className="text-muted-foreground">Importe</dt>
-              <dd className="font-medium">
-                {priceMxn !== null ? formatMxn(priceMxn) : "No disponible"}
-              </dd>
-              <dt className="text-muted-foreground">Vigencia actual</dt>
-              <dd className="font-medium">
-                {purchaseTarget.expiresAt
-                  ? formatFlujoDate(purchaseTarget.expiresAt)
-                  : "—"}
-              </dd>
-            </dl>
-          ) : null}
-          {priceMxn === null ? (
-            <Alert variant="warning">
-              <TriangleAlertIcon aria-hidden="true" />
-              <AlertTitle>Pago no configurado</AlertTitle>
-              <AlertDescription>
-                <p>
-                  El servidor no tiene definido el precio de la licencia
-                  (LICENSE_PRICE_MXN). No se puede iniciar el pago.
-                </p>
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {purchaseError ? (
-            <Alert variant="destructive">
-              <TriangleAlertIcon aria-hidden="true" />
-              <AlertTitle>La compra no se completó</AlertTitle>
-              <AlertDescription>
-                <p>{purchaseError}</p>
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={purchasing}>
-              Cancelar
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(event) => {
-                event.preventDefault()
-                void submitPurchase()
-              }}
+            </DrawerDescription>
+          </DrawerHeader>
+          <div className="no-scrollbar flex flex-col gap-3 overflow-y-auto px-4">
+            {purchaseTarget ? (
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
+                <dt className="text-muted-foreground">Usuario</dt>
+                <dd className="truncate font-medium">
+                  {purchaseTarget.userName}
+                </dd>
+                <dt className="text-muted-foreground">Renovación</dt>
+                <dd className="font-medium">1 mes</dd>
+                <dt className="text-muted-foreground">Importe</dt>
+                <dd className="font-medium">
+                  {priceMxn !== null ? formatMxn(priceMxn) : "No disponible"}
+                </dd>
+                <dt className="text-muted-foreground">Vigencia actual</dt>
+                <dd className="font-medium">
+                  {purchaseTarget.expiresAt
+                    ? formatFlujoDate(purchaseTarget.expiresAt)
+                    : "—"}
+                </dd>
+              </dl>
+            ) : null}
+            {priceMxn === null ? (
+              <Alert variant="warning">
+                <TriangleAlertIcon aria-hidden="true" />
+                <AlertTitle>Pago no configurado</AlertTitle>
+                <AlertDescription>
+                  <p>
+                    El servidor no tiene definido el precio de la licencia
+                    (LICENSE_PRICE_MXN). No se puede iniciar el pago.
+                  </p>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {purchaseError ? (
+              <Alert variant="destructive">
+                <TriangleAlertIcon aria-hidden="true" />
+                <AlertTitle>La compra no se completó</AlertTitle>
+                <AlertDescription>
+                  <p>{purchaseError}</p>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+          <DrawerFooter>
+            <Button
+              size="lg"
+              onClick={() => void submitPurchase()}
               disabled={purchasing || priceMxn === null}
             >
-              {purchasing ? "Abriendo checkout…" : "Pagar con Mercado Pago"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              {purchasing ? (
+                <>
+                  <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
+                  Abriendo checkout…
+                </>
+              ) : (
+                "Pagar con Mercado Pago"
+              )}
+            </Button>
+            <DrawerClose
+              render={
+                <Button variant="outline" size="lg" disabled={purchasing}>
+                  Cancelar
+                </Button>
+              }
+            />
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
     </div>
   )
 }
