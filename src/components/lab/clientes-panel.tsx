@@ -6,7 +6,6 @@ import { useTable } from "@tanstack/react-table"
 import {
   EyeIcon,
   EyeOffIcon,
-  KeyRoundIcon,
   LoaderCircleIcon,
   PackageOpenIcon,
   RefreshCwIcon,
@@ -83,10 +82,9 @@ type FetchState = "loading" | "success" | "error"
 
 interface ClientesPanelProps {
   reloadToken: number
-  onRenew: (userName: string) => void
 }
 
-export function ClientesPanel({ reloadToken, onRenew }: ClientesPanelProps) {
+export function ClientesPanel({ reloadToken }: ClientesPanelProps) {
   const [clients, setClients] = useState<FlujoClient[]>([])
   const [endpoint, setEndpoint] = useState<string>("")
   const [fetchState, setFetchState] = useState<FetchState>("loading")
@@ -299,28 +297,8 @@ export function ClientesPanel({ reloadToken, onRenew }: ClientesPanelProps) {
         },
         size: 170,
       },
-      {
-        accessorKey: "id",
-        id: "actions",
-        header: "",
-        enableSorting: false,
-        cell: ({ row }) => (
-          <div className="text-end">
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => onRenew(row.original.userName)}
-              aria-label={`Renovar la licencia de ${row.original.userName}`}
-            >
-              <KeyRoundIcon aria-hidden="true" />
-              Renovar
-            </Button>
-          </div>
-        ),
-        size: 120,
-      },
     ],
-    [onRenew, revealed, toggleReveal]
+    [revealed, toggleReveal]
   )
 
   const table = useTable({

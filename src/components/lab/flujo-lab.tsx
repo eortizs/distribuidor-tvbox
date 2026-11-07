@@ -23,10 +23,9 @@ import { ConsolaPanel } from "./consola-panel"
 import { fetchFlujoStatus } from "./flujo-api"
 import { FlujoStatusCard } from "./flujo-status-card"
 import { LicenciasPanel } from "./licencias-panel"
-import { RenovacionPanel } from "./renovacion-panel"
 import { ResellersPanel } from "./resellers-panel"
 
-type LabTab = "clientes" | "resellers" | "licencias" | "renovacion" | "consola"
+type LabTab = "clientes" | "resellers" | "licencias" | "consola"
 
 interface FlujoLabProps {
   /** Estado resuelto en el servidor: la primera pintura ya es real. */
@@ -37,7 +36,6 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
   const [tab, setTab] = useState<LabTab>("clientes")
   const [status, setStatus] = useState<FlujoStatus | null>(initialStatus)
   const [statusError, setStatusError] = useState<string | null>(null)
-  const [renewalTarget, setRenewalTarget] = useState("")
   const [reloadToken, setReloadToken] = useState(0)
 
   const loadStatus = useCallback(() => {
@@ -59,11 +57,6 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
     loadStatus()
   }, [loadStatus])
 
-  const goToRenewal = useCallback((userName: string) => {
-    setRenewalTarget(userName)
-    setTab("renovacion")
-  }, [])
-
   const reloadTables = useCallback(() => {
     setReloadToken((token) => token + 1)
   }, [])
@@ -84,8 +77,10 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
         <div className="flex flex-col gap-0.5">
           <h1 className="text-lg font-semibold tracking-tight">API FlujoTV</h1>
           <p className="text-muted-foreground text-sm">
-            Consulta las licencias de los clientes del panel, revisa su vigencia y
-            ejecuta renovaciones sin salir del tablero.
+            Consulta las licencias de los clientes del panel y revisa su
+            vigencia. La renovación se cobra con Mercado Pago desde
+            <span className="font-mono"> /clientes</span>; aquí no hay
+            renovación directa.
           </p>
         </div>
       </div>
@@ -134,15 +129,11 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
             <TabsTrigger value="clientes">Clientes</TabsTrigger>
             <TabsTrigger value="resellers">Resellers</TabsTrigger>
             <TabsTrigger value="licencias">Historial</TabsTrigger>
-            <TabsTrigger value="renovacion">Renovación</TabsTrigger>
             <TabsTrigger value="consola">Consola</TabsTrigger>
           </TabsList>
 
           <TabsContent value="clientes" className="mt-4">
-            <ClientesPanel
-              reloadToken={reloadToken}
-              onRenew={goToRenewal}
-            />
+            <ClientesPanel reloadToken={reloadToken} />
           </TabsContent>
 
           <TabsContent value="resellers" className="mt-4">
@@ -151,14 +142,6 @@ export function FlujoLab({ initialStatus }: FlujoLabProps) {
 
           <TabsContent value="licencias" className="mt-4">
             <LicenciasPanel reloadToken={reloadToken} />
-          </TabsContent>
-
-          <TabsContent value="renovacion" className="mt-4">
-            <RenovacionPanel
-              key={renewalTarget}
-              target={renewalTarget}
-              onRenewed={reloadTables}
-            />
           </TabsContent>
 
           <TabsContent value="consola" className="mt-4">

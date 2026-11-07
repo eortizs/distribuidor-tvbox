@@ -14,6 +14,20 @@ export async function POST(request: Request) {
   try {
     const user = await requireApiUser()
     if (!user) return unauthorizedResponse()
+    // Solo admin: la consola cruda permite operar la API de licencias
+    // (p. ej. renovaciones) sin pasar por el cobro de Mercado Pago.
+    if (user.role !== "admin") {
+      return Response.json(
+        {
+          ok: false,
+          error: {
+            code: "forbidden",
+            message: "La consola cruda es solo para administradores.",
+          },
+        },
+        { status: 403 }
+      )
+    }
 
     const parsed = await readJsonBody(request)
     if (!parsed.ok) return parsed.response

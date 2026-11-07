@@ -38,19 +38,27 @@
  * - Feedback de pulsación: escala a 90 % con fondo `primary/15` e icono
  *   `primary` (curva de la casa, 200 ms); con `motion-reduce` se conserva
  *   solo el cambio de color.
- * - Flujo: al pulsar abre un AlertDialog de confirmación con el resumen de
- *   la operación (usuario, renovación de 1 mes, vigencia actual). Confirmar
- *   ejecuta `POST /api/flujotv/renewals` (months 1) con clave de
- *   idempotencia `compra-<uuid>` que se conserva mientras se repita el
- *   mismo cliente sin éxito: un reintento tras un error de red no cobra dos
- *   veces; al éxito la clave se consume. El diálogo no se cierra mientras
- *   procesa (Escape ignorado) y los fallos avisan con toast además del
- *   Alert dentro del diálogo.
- * - Tras el éxito la fila se refresca con una lectura en vivo del cliente
+ * - Flujo de pago: al pulsar abre un AlertDialog de confirmación con el
+ *   resumen de la operación (usuario, renovación de 1 mes, importe en MXN).
+ *   Confirmar llama `POST /api/mercadopago/orders`, que crea la orden
+ *   `pending` y la preferencia de Mercado Pago (`purpose: wallet_purchase`:
+ *   solo pagan cuentas de Mercado Pago, wallet a wallet), y redirige al
+ *   `init_point` del checkout. La renovación NO ocurre aquí: el webhook
+ *   `POST /api/mercadopago/webhook` verifica el pago contra la API de MP
+ *   (monto, moneda, external_reference) y recién entonces renueva la licencia
+ *   en el panel FlujoTV. El diálogo no se cierra mientras procesa (Escape
+ *   ignorado) y los fallos avisan con toast además del Alert dentro del
+ *   diálogo.
+ * - Al volver de Mercado Pago (back_urls a `/clientes?orden=…&estado=…`) el
+ *   componente muestra un Alert con el resultado y sondea
+ *   `GET /api/mercadopago/orders/{id}` cada 2 s: al ver la orden `renewed`
+ *   refresca la fila con una lectura en vivo del cliente
  *   (`GET /api/flujotv/clients/{usuario}` → `/find_user`, sin caché) en vez
  *   de recargar el listado: el listado viene del snapshot cacheado del panel
  *   y no reflejaría la renovación, y presentar vencimiento viejo como fresco
- *   invitaría a comprar dos veces.
+ *   invitaría a comprar dos veces. El cobro con renovación fallida
+ *   (`renewal_failed`) avisa para que el admin la reintente;
+ *   `rejected`/`cancelled` informa que no hubo cargo.
  *
  * La pantalla compone además la barra de **filtros** ReUI (`filters` en
  * variante básica, copia en español del Lab) sobre el listado ya descargado:
@@ -96,9 +104,10 @@
  * reintentan o sincronizan.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Fragment } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import {
+  CircleCheckIcon,
   LoaderCircleIcon,
   PackageOpenIcon,
   PlusIcon,
@@ -166,6 +175,7 @@ import type {
   FilterQuery,
 } from "@/components/reui/filters/filters-types"
 import type { FilterOperatorLabels } from "@/components/reui/filters/filters-operators"
+import { formatMxn } from "@/lib/finanzas"
 import {
   formatFlujoDate,
   type FlujoClient,
@@ -176,8 +186,8 @@ import {
   fetchFlujoClients,
   fetchFlujoResellers,
   refreshFlujo,
-  renewFlujoLicense,
 } from "@/components/lab/flujo-api"
+import { createPaymentOrder, fetchPaymentOrder, type PaymentOrder } from "./pago-api"
 import {
   applyFilterQuery,
   matchesFilterRule,
@@ -352,12 +362,40 @@ const CLIENT_FILTER_OPERATOR_LABELS: FilterOperatorLabels = {
   not_empty: "no está vacío",
 }
 
-export function ClientesAccordion({
-  distribuidorName = null,
-}: {
+/**
+ * Aviso de retorno del checkout de Mercado Pago. El estado de display se
+ * DERIVA: mientras hay orden de retorno sin resultado terminal, es
+ * `working` (sondeo) o `rejected` si MP ya devolvió por el back_url de
+ * fallo (definitivo, sin cargo). El sondeo solo fija `pollResult` desde
+ * callbacks asíncronos cuando la orden alcanza un estado terminal.
+ * - `renewed`: webhook aplicó la renovación; fila refrescada.
+ * - `renewal_failed`: cobro confirmado, renovación fallida (reintento admin).
+ * - `rejected`: pago rechazado/cancelado; sin cargo.
+ * - `pending`: el sondeo expiró sin verificación; la renovación llegará igual.
+ */
+type PollStatus =
+  | "renewed"
+  | "renewal_failed"
+  | "rejected"
+  | "pending"
+
+interface ClientesAccordionProps {
   /** Reseller ligado a la cuenta (perfil distribuidor); null = sin alcance. */
   distribuidorName?: string | null
-}) {
+  /** Precio MXN del mes de renovación (del .env del servidor); null = sin config. */
+  priceMxn?: number | null
+  /** Id de la orden de pago en el retorno del checkout (back_urls). */
+  returnOrder?: string | null
+  /** Estado declarado por el back_url: aprobado | rechazado | pendiente. */
+  returnState?: string | null
+}
+
+export function ClientesAccordion({
+  distribuidorName = null,
+  priceMxn = null,
+  returnOrder = null,
+  returnState = null,
+}: ClientesAccordionProps) {
   const [clients, setClients] = useState<FlujoClient[]>([])
   const [clientNames, setClientNames] = useState<Record<string, string>>({})
   const [resellerNames, setResellerNames] = useState<string[]>([])
@@ -372,11 +410,15 @@ export function ClientesAccordion({
   const [syncing, setSyncing] = useState(false)
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [purchaseTarget, setPurchaseTarget] = useState<FlujoClient | null>(null)
-  const [purchaseKey, setPurchaseKey] = useState("")
   const [purchasing, setPurchasing] = useState(false)
   const [purchaseError, setPurchaseError] = useState<string | null>(null)
+  const [pollResult, setPollResult] = useState<{
+    status: PollStatus
+    order: PaymentOrder | null
+  } | null>(null)
 
   const requestCounter = useRef(0)
+  const router = useRouter()
 
   useEffect(() => {
     const requestId = ++requestCounter.current
@@ -461,17 +503,11 @@ export function ClientesAccordion({
     }
   }, [reload])
 
-  const openPurchase = useCallback(
-    (client: FlujoClient) => {
-      if (purchaseTarget?.id !== client.id || !purchaseKey) {
-        setPurchaseKey(`compra-${crypto.randomUUID()}`)
-      }
-      setPurchaseTarget(client)
-      setPurchaseError(null)
-      setPurchaseOpen(true)
-    },
-    [purchaseTarget, purchaseKey]
-  )
+  const openPurchase = useCallback((client: FlujoClient) => {
+    setPurchaseTarget(client)
+    setPurchaseError(null)
+    setPurchaseOpen(true)
+  }, [])
 
   const submitPurchase = useCallback(async () => {
     if (!purchaseTarget) return
@@ -479,36 +515,123 @@ export function ClientesAccordion({
     setPurchasing(true)
     setPurchaseError(null)
     try {
-      await renewFlujoLicense({
-        userName,
-        months: 1,
-        idempotencyKey: purchaseKey,
-      })
-      toast.success("Renovación registrada", {
-        description: `${userName} · 1 mes`,
-      })
-      setPurchaseKey("")
-      setPurchaseOpen(false)
-      fetchFlujoClient(userName)
-        .then((fresh) => {
-          if (fresh) {
-            setClients((rows) =>
-              rows.map((row) => (row.id === fresh.id ? fresh : row))
-            )
-          }
-        })
-        .catch(() => {})
+      const order = await createPaymentOrder({ userName, months: 1 })
+      // Redirección completa al checkout de Mercado Pago (wallet_purchase):
+      // el pago ocurre fuera del panel y el retorno lo maneja el aviso de
+      // retorno; la renovación la aplica el webhook del servidor.
+      window.location.assign(order.initPoint)
     } catch (error) {
       const message =
         error instanceof Error
           ? error.message
-          : "No se pudo completar la compra."
+          : "No se pudo iniciar el pago."
       setPurchaseError(message)
-      toast.error(message)
-    } finally {
       setPurchasing(false)
     }
-  }, [purchaseTarget, purchaseKey])
+  }, [purchaseTarget])
+
+  /** Refresca una fila con la lectura en vivo del cliente en el panel. */
+  const refreshRow = useCallback((userName: string) => {
+    fetchFlujoClient(userName)
+      .then((fresh) => {
+        if (fresh) {
+          setClients((rows) =>
+            rows.map((row) => (row.id === fresh.id ? fresh : row))
+          )
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  /**
+   * Retorno del checkout (`?orden=…&estado=…`): sondea el estado de la orden
+   * hasta verla `renewed` —la renovación la aplica el webhook, típicamente en
+   * unos segundos— y refresca la fila con el dato vivo del panel. La llegada
+   * por el back_url de fallo no se sondea: es definitiva y no hubo cargo
+   * (el estado de display «rechazado» se deriva en el render, sin setState).
+   * Al confirmarse la renovación se limpia la query (`router.replace`) para
+   * que recargar la página no repita el sondeo.
+   */
+  useEffect(() => {
+    if (!returnOrder || returnState === "rechazado") return
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let attempts = 0
+    // Última lectura de la orden: alimenta los avisos que muestran datos
+    // (usuario, importe) incluso cuando el sondeo expira en «pendiente».
+    let lastOrder: PaymentOrder | null = null
+
+    const tick = async () => {
+      attempts += 1
+      let order: PaymentOrder | null = null
+      try {
+        order = await fetchPaymentOrder(returnOrder)
+      } catch {
+        order = null
+      }
+      if (cancelled) return
+
+      if (order) {
+        lastOrder = order
+        if (order.status === "renewed") {
+          setPollResult({ status: "renewed", order })
+          toast.success("Renovación aplicada", {
+            description: `${order.user_name} · ${order.months} ${
+              order.months === 1 ? "mes" : "meses"
+            } · ${formatMxn(order.amount)}`,
+          })
+          refreshRow(order.user_name)
+          router.replace("/clientes")
+          return
+        }
+        if (order.status === "renewal_failed") {
+          setPollResult({ status: "renewal_failed", order })
+          return
+        }
+        if (order.status === "rejected" || order.status === "cancelled") {
+          setPollResult({ status: "rejected", order })
+          return
+        }
+      }
+
+      if (attempts >= 30) {
+        // ~60 s de sondeo sin confirmación: el pago sigue en proceso o el
+        // webhook está tardando; la conciliación del servidor lo recupera.
+        setPollResult({ status: "pending", order: lastOrder })
+        return
+      }
+      timer = setTimeout(() => {
+        void tick()
+      }, 2000)
+    }
+
+    timer = setTimeout(() => {
+      void tick()
+    }, 400)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [returnOrder, returnState, refreshRow, router])
+
+  /**
+   * Estado de display del aviso de retorno, derivado sin estado extra: el
+   * resultado terminal del sondeo manda y DEBE sobrevivir a la limpieza de la
+   * query (`router.replace` borra `returnOrder` pero el componente conserva
+   * `pollResult`), o el aviso de éxito se desmontaría al instante. Sin
+   * resultado terminal: «rechazado» si MP devolvió por el back_url de fallo,
+   * «working» si se viene del checkout con sondeo activo, y nada sin orden
+   * de retorno.
+   */
+  const returnStatus: "working" | PollStatus | null =
+    pollResult?.status ??
+    (!returnOrder
+      ? null
+      : returnState === "rechazado"
+        ? "rejected"
+        : "working")
 
   /** Facetas por opción, calculadas sobre el listado cargado. */
   const estadoCounts = useMemo(() => {
@@ -704,6 +827,78 @@ export function ClientesAccordion({
           )}
         </Button>
       </div>
+
+      {/*
+       * Aviso de retorno del checkout de Mercado Pago (back_urls). El estado
+       * real vive en la orden y lo confirma el webhook; el sondeo refresca la
+       * fila al ver `renewed` y limpia la query para no repetir el sondeo.
+       */}
+      {returnStatus === "working" ? (
+        <Alert variant="info">
+          <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
+          <AlertTitle>Pago en verificación</AlertTitle>
+          <AlertDescription>
+            <p>
+              Estamos confirmando el pago con Mercado Pago y aplicando la
+              renovación; la fila se actualizará en unos segundos. Puedes
+              cerrar esta página sin riesgo: el cobro ya quedó registrado.
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : returnStatus === "renewed" ? (
+        <Alert variant="success">
+          <CircleCheckIcon aria-hidden="true" />
+          <AlertTitle>Renovación aplicada</AlertTitle>
+          <AlertDescription>
+            <p>
+              {pollResult?.order
+                ? `${pollResult.order.user_name} · ${pollResult.order.months} ${
+                    pollResult.order.months === 1 ? "mes" : "meses"
+                  } · ${formatMxn(pollResult.order.amount)}`
+                : "La licencia quedó renovada y la fila ya muestra el vencimiento nuevo."}
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : returnStatus === "renewal_failed" ? (
+        <Alert variant="destructive">
+          <TriangleAlertIcon aria-hidden="true" />
+          <AlertTitle>El pago llegó pero la renovación falló</AlertTitle>
+          <AlertDescription>
+            <p>
+              {pollResult?.order
+                ? `Mercado Pago confirmó ${formatMxn(pollResult.order.amount)} para ${pollResult.order.user_name}, `
+                : ""}
+              pero la renovación no se pudo aplicar en el panel. Avisa al
+              administrador para que la reintente
+              {returnOrder ? ` con la orden ${returnOrder}` : ""}.
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : returnStatus === "rejected" ? (
+        <Alert variant="destructive">
+          <TriangleAlertIcon aria-hidden="true" />
+          <AlertTitle>El pago no se completó</AlertTitle>
+          <AlertDescription>
+            <p>
+              Mercado Pago rechazó o canceló el pago, así que no se hizo
+              ningún cargo ni renovación. Puedes intentarlo de nuevo con el
+              botón de compra.
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : returnStatus === "pending" ? (
+        <Alert variant="warning">
+          <TriangleAlertIcon aria-hidden="true" />
+          <AlertTitle>La renovación sigue en proceso</AlertTitle>
+          <AlertDescription>
+            <p>
+              El pago quedó registrado; la renovación se aplicará en cuanto
+              Mercado Pago lo confirme. Recarga en un momento para ver la fila
+              actualizada.
+            </p>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {syncing ? (
         <p
@@ -982,8 +1177,9 @@ export function ClientesAccordion({
             </AlertDialogMedia>
             <AlertDialogTitle>¿Confirmar la compra?</AlertDialogTitle>
             <AlertDialogDescription>
-              Compra automática de renovación en el panel de FlujoTV. La
-              operación queda registrada y no se puede deshacer desde aquí.
+              Se abrirá el checkout de Mercado Pago para pagar con tu cuenta de
+              Mercado Pago. La licencia se renueva automáticamente cuando se
+              confirma el pago.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {purchaseTarget ? (
@@ -994,6 +1190,10 @@ export function ClientesAccordion({
               </dd>
               <dt className="text-muted-foreground">Renovación</dt>
               <dd className="font-medium">1 mes</dd>
+              <dt className="text-muted-foreground">Importe</dt>
+              <dd className="font-medium">
+                {priceMxn !== null ? formatMxn(priceMxn) : "No disponible"}
+              </dd>
               <dt className="text-muted-foreground">Vigencia actual</dt>
               <dd className="font-medium">
                 {purchaseTarget.expiresAt
@@ -1001,6 +1201,18 @@ export function ClientesAccordion({
                   : "—"}
               </dd>
             </dl>
+          ) : null}
+          {priceMxn === null ? (
+            <Alert variant="warning">
+              <TriangleAlertIcon aria-hidden="true" />
+              <AlertTitle>Pago no configurado</AlertTitle>
+              <AlertDescription>
+                <p>
+                  El servidor no tiene definido el precio de la licencia
+                  (LICENSE_PRICE_MXN). No se puede iniciar el pago.
+                </p>
+              </AlertDescription>
+            </Alert>
           ) : null}
           {purchaseError ? (
             <Alert variant="destructive">
@@ -1020,9 +1232,9 @@ export function ClientesAccordion({
                 event.preventDefault()
                 void submitPurchase()
               }}
-              disabled={purchasing}
+              disabled={purchasing || priceMxn === null}
             >
-              {purchasing ? "Procesando…" : "Confirmar compra"}
+              {purchasing ? "Abriendo checkout…" : "Pagar con Mercado Pago"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

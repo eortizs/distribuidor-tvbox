@@ -5,7 +5,6 @@ import type {
   FlujoClientsResponse,
   FlujoLicensesResponse,
   FlujoRawResult,
-  FlujoRenewalResult,
   FlujoResellersResponse,
   FlujoStatus,
 } from "@/lib/flujotv"
@@ -90,25 +89,6 @@ export async function fetchFlujoLicenses(): Promise<FlujoLicensesResponse> {
 export async function fetchFlujoResellers(): Promise<FlujoResellersResponse> {
   const response = await fetch("/api/flujotv/resellers", { cache: "no-store" })
   return parse<FlujoResellersResponse>(response)
-}
-
-export async function renewFlujoLicense(params: {
-  userName: string
-  months: number
-  idempotencyKey: string
-}): Promise<FlujoRenewalResult> {
-  const response = await fetch("/api/flujotv/renewals", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": params.idempotencyKey,
-    },
-    body: JSON.stringify({
-      user_name: params.userName,
-      months: params.months,
-    }),
-  })
-  return parse<FlujoRenewalResult>(response)
 }
 
 export async function refreshFlujo(

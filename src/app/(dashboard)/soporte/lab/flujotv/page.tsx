@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 
 import { FlujoLab } from "@/components/lab/flujo-lab"
-import { requireUser } from "@/server/auth/guards"
+import { requireRole } from "@/server/auth/guards"
 import { getFlujoStatus } from "@/server/flujotv/service"
 
 export const metadata: Metadata = {
@@ -11,7 +11,9 @@ export const metadata: Metadata = {
 export const instant = false
 
 export default async function LabFlujoTvPage() {
-  await requireUser()
+  // Solo admin: incluye la consola cruda que permite operar la API de
+  // licencias (p. ej. renovaciones) sin pasar por el cobro de Mercado Pago.
+  await requireRole("admin")
   const status = await getFlujoStatus()
 
   return <FlujoLab initialStatus={status} />

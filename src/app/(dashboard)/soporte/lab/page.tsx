@@ -11,7 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { labModules } from "@/lib/lab"
-import { requireUser } from "@/server/auth/guards"
+import { requireRole } from "@/server/auth/guards"
 
 export const metadata: Metadata = {
   title: "Lab",
@@ -20,7 +20,10 @@ export const metadata: Metadata = {
 export const instant = false
 
 export default async function LabPage() {
-  await requireUser()
+  // Solo admin: el laboratorio expone la consola cruda hacia APIs con claves
+  // del servidor (FlujoTV), que permiten operar (p. ej. renovar) sin pasar
+  // por el cobro de Mercado Pago.
+  await requireRole("admin")
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
