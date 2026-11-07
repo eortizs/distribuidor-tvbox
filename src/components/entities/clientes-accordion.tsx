@@ -104,6 +104,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
+  XIcon,
   ShoppingCartPlusIcon,
   TriangleAlertIcon,
 } from "lucide-react"
@@ -133,6 +134,7 @@ import {
 import {
   InputGroup,
   InputGroupAddon,
+  InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Progress } from "@/components/ui/progress"
@@ -669,6 +671,24 @@ export function ClientesAccordion({
             aria-label="Buscar cliente por usuario, nombre o correo"
             className="h-full text-base"
           />
+          {/*
+           * Botón de limpieza (X) del buscador: visible solo con texto
+           * (`searching`). En móvil el área táctil es de 36px redonda y el
+           * addon anula el margen negativo del patrón (`mr-0 pr-2.5`) para
+           * que la X respire y no quede pegada al borde derecho del pill.
+           */}
+          {searching ? (
+            <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
+              <InputGroupButton
+                size="icon-sm"
+                className="size-9 rounded-full"
+                onClick={() => setSearchInput("")}
+                aria-label="Limpiar búsqueda"
+              >
+                <XIcon aria-hidden="true" />
+              </InputGroupButton>
+            </InputGroupAddon>
+          ) : null}
         </InputGroup>
         <Button
           variant="ghost"
