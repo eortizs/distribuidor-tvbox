@@ -1,31 +1,60 @@
 "use client"
 
 /**
- * Pantalla Herramientas (`/herramientas`): listado de herramientas compuesto
+ * Pantalla Herramientas (`/modulos`): listado de herramientas compuesto
  * con el mismo acordeón de la pantalla Clientes (`c-accordion-9` de ReUI,
  * una fila por herramienta, una sola abierta a la vez):
  *
  * - Fila: icono de la herramienta en tile (`size-12`, `bg-muted`); como
  *   título, el nombre y, como subtítulo, la breve descripción. La fila
  *   completa es un enlace real a la herramienta: al pulsarla se ejecuta.
- * - Al margen derecho, el botón settings-2 de lucide: es el trigger del
- *   acordeón y, al pulsarlo, despliega las opciones de la herramienta.
+ * - Al margen derecho, la estrella de favoritos y el botón settings-2 de
+ *   lucide: este último es el trigger del acordeón y, al pulsarlo,
+ *   despliega las opciones de la herramienta.
  * - Contenido expandido: dos botones en lista, **maquetas sin
  *   funcionalidad por ahora** — «Configurar» (fantasma, con icono de
  *   controles) y «Eliminar» (variante destructive, separada del resto).
+ *
+ * **Filtros** (`/clientes` como referencia): barra de vistas sobre el
+ * listado — «Todos», «Favoritos», los filtros creados por el usuario y el
+ * botón «Crear filtro» (círculo «+»). Cada vista lleva su contador en un
+ * Badge; la activa se pinta con el foreground del tema; volver a pulsar la
+ * vista activa no la suelta (radio fijo).
+ *
+ * - **Favorito**: estrella junto al nombre de cada módulo; la estrella
+ *   llena indica favorito. Es hermana del enlace (un botón dentro de un
+ *   `<a>` rompería el HTML): vive entre el enlace y el trigger.
+ * - **Crear filtro**: diálogo con nombre; los filtros nuevos aparecen como
+ *   vistas adicionales a «Todos» y «Favoritos».
+ * - **Clic sostenido (~0.5 s) sobre el módulo**: diálogo para asignarlo a
+ *   los filtros disponibles (selección múltiple). Si no hay filtros
+ *   creados, no hace nada. El pulso largo cancela el click del enlace
+ *   (guardia en la fase de captura) y cancela el gesto si hay arrastre.
+ *
+ * **Persistencia**: favoritos, filtros y asignaciones viven en
+ * localStorage (`modulos.filtros.v1`), mismo criterio que los filtros de
+ * `/clientes` (`clientes.filtros.v1`); la lectura corre en un microtask y
+ * se valida la forma (favoritos/hrefs desconocidos y asignaciones a filtros
+ * borrados se sueltan). Los cambios solo se escriben tras la restauración
+ * para no pisar lo guardado con los valores vacíos del montaje.
  */
 
 import Link from "next/link"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
+  PlusIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
+  StarIcon,
   TrashIcon,
   type LucideIcon,
 } from "lucide-react"
+import { toast } from "sonner"
 
+import { Badge } from "@/components/reui/badge"
 import {
   Accordion,
   AccordionContent,
@@ -33,6 +62,23 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Field, FieldLabel } from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import {
+  ToggleGroup,
+  ToggleGroupItem,
+} from "@/components/ui/toggle-group"
+import { cn } from "cn"
 
 interface Herramienta {
   title: string
@@ -41,86 +87,583 @@ interface Herramienta {
   icon: LucideIcon
 }
 
-/** Catálogo de herramientas publicadas en el hub `/herramientas`. */
+/** Filtro creado por el usuario (además de «Todos» y «Favoritos»). */
+interface ModuloFiltro {
+  id: string
+  name: string
+}
+
+/** Módulo → ids de filtros a los que pertenece. */
+type Asignaciones = Record<string, string[]>
+
+interface FiltrosGuardados {
+  favorites: string[]
+  categories: ModuloFiltro[]
+  assignments: Asignaciones
+}
+
+/** Catálogo de herramientas publicadas en el hub `/modulos`. */
 const herramientas: Herramienta[] = [
   {
     title: "Imágenes",
     description:
       "Genera y edita imágenes con IA desde texto, referencias o bocetos a mano.",
-    href: "/herramientas/imagenes",
+    href: "/modulos/imagenes",
     icon: ImageIcon,
   },
   {
     title: "Animación",
     description:
       "Del idea al render con el agente EVE: guiones, storyboards y entregables con costo y tiempo.",
-    href: "/herramientas/animacion",
+    href: "/modulos/animacion",
     icon: ClapperboardIcon,
   },
   {
     title: "Calculadora",
     description:
       "Cálculos rápidos con porcentaje comercial, desde botones o teclado.",
-    href: "/herramientas/calculadora",
+    href: "/modulos/calculadora",
     icon: CalculatorIcon,
   },
 ]
 
+const HREFS = new Set(herramientas.map((tool) => tool.href))
+
+/**
+ * Clave de localStorage donde viven favoritos, filtros creados y sus
+ * asignaciones; al recargar la página se restauran tal y como quedaron.
+ */
+const FILTROS_STORAGE_KEY = "modulos.filtros.v1"
+
+/** Duración del clic sostenido que abre la asignación a filtros (ms). */
+const LONG_PRESS_MS = 500
+
+/** Arrastre máximo (px) que se tolera sin cancelar el clic sostenido. */
+const LONG_PRESS_SLACK_PX = 10
+
+/** Vista activa: fondo del color de primer plano del tema, texto opuesto. */
+const VISTA_ACTIVE_CLASS =
+  "aria-pressed:bg-foreground aria-pressed:text-background hover:aria-pressed:bg-foreground"
+
+/** Contador dentro de una vista: se invierte sobre el fondo activo. */
+const VISTA_COUNT_CLASS =
+  "rounded-full tabular-nums group-aria-pressed/toggle:border-background/40 group-aria-pressed/toggle:bg-transparent dark:group-aria-pressed/toggle:border-background/40 dark:group-aria-pressed/toggle:bg-transparent"
+
+/**
+ * Valida la forma de lo guardado y suelta lo desconocido: favoritos de
+ * módulos inexistentes, filtros sin nombre y asignaciones a filtros que ya
+ * no existen.
+ */
+function reviveFiltros(stored: unknown): FiltrosGuardados | null {
+  if (!stored || typeof stored !== "object") return null
+  const raw = stored as {
+    favorites?: unknown
+    categories?: unknown
+    assignments?: unknown
+  }
+  const favorites = Array.isArray(raw.favorites)
+    ? [
+        ...new Set(
+          raw.favorites.filter(
+            (value): value is string => typeof value === "string" && HREFS.has(value)
+          )
+        ),
+      ]
+    : []
+  const categories = Array.isArray(raw.categories)
+    ? raw.categories
+        .map((item) => {
+          if (!item || typeof item !== "object") return null
+          const { id, name } = item as { id?: unknown; name?: unknown }
+          if (typeof id !== "string" || id === "") return null
+          if (typeof name !== "string" || name.trim() === "") return null
+          return { id, name: name.trim().slice(0, 40) }
+        })
+        .filter((item): item is ModuloFiltro => item !== null)
+    : []
+  const ids = new Set(categories.map((category) => category.id))
+  const assignments: Asignaciones = {}
+  if (raw.assignments && typeof raw.assignments === "object") {
+    for (const [href, list] of Object.entries(
+      raw.assignments as Record<string, unknown>
+    )) {
+      if (!HREFS.has(href) || !Array.isArray(list)) continue
+      const clean = [
+        ...new Set(
+          list.filter(
+            (value): value is string => typeof value === "string" && ids.has(value)
+          )
+        ),
+      ]
+      if (clean.length > 0) assignments[href] = clean
+    }
+  }
+  return { favorites, categories, assignments }
+}
+
 export function HerramientasAccordion() {
+  const [favorites, setFavorites] = useState<string[]>([])
+  const [categories, setCategories] = useState<ModuloFiltro[]>([])
+  const [assignments, setAssignments] = useState<Asignaciones>({})
+  const [view, setView] = useState<string>("todos")
+  const [createOpen, setCreateOpen] = useState(false)
+  const [assignTarget, setAssignTarget] = useState<{
+    tool: Herramienta
+    picked: Set<string>
+  } | null>(null)
+
+  /** La escritura a localStorage espera a que la restauración termine. */
+  const hydratedRef = useRef(false)
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      let stored: unknown = null
+      try {
+        stored = JSON.parse(
+          window.localStorage.getItem(FILTROS_STORAGE_KEY) ?? "null"
+        ) as unknown
+      } catch {
+        // Almacenamiento ilegible: se parte con los valores por defecto.
+      }
+      const revived = reviveFiltros(stored)
+      if (revived) {
+        setFavorites(revived.favorites)
+        setCategories(revived.categories)
+        setAssignments(revived.assignments)
+      }
+      hydratedRef.current = true
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!hydratedRef.current) return
+    try {
+      window.localStorage.setItem(
+        FILTROS_STORAGE_KEY,
+        JSON.stringify({ favorites, categories, assignments })
+      )
+    } catch {
+      // Cuota agotada o almacenamiento bloqueado: la sesión sigue en memoria.
+    }
+  }, [favorites, categories, assignments])
+
+  const toggleFavorite = (href: string) => {
+    setFavorites((prev) =>
+      prev.includes(href)
+        ? prev.filter((value) => value !== href)
+        : [...prev, href]
+    )
+  }
+
+  const createFilter = (name: string) => {
+    const clean = name.trim().slice(0, 40)
+    if (clean === "") return "Escribe un nombre para el filtro."
+    const duplicate = categories.some(
+      (category) => category.name.toLowerCase() === clean.toLowerCase()
+    )
+    if (duplicate) return "Ya existe un filtro con ese nombre."
+    const category = { id: crypto.randomUUID(), name: clean }
+    setCategories((prev) => [...prev, category])
+    return null
+  }
+
+  const saveAssignments = (tool: Herramienta, picked: Set<string>) => {
+    setAssignments((prev) => {
+      const next = { ...prev }
+      if (picked.size === 0) {
+        delete next[tool.href]
+      } else {
+        next[tool.href] = [...picked]
+      }
+      return next
+    })
+    toast.success(
+      picked.size === 0
+        ? `«${tool.title}» no pertenece a ningún filtro`
+        : `«${tool.title}» asignada a ${picked.size} ${
+            picked.size === 1 ? "filtro" : "filtros"
+          }`
+    )
+  }
+
+  const visible = useMemo(
+    () =>
+      herramientas.filter((tool) => {
+        if (view === "todos") return true
+        if (view === "favoritos") return favorites.includes(tool.href)
+        return (assignments[tool.href] ?? []).includes(view)
+      }),
+    [view, favorites, assignments]
+  )
+
+  /** Clic sostenido sobre un módulo: abre la asignación si hay filtros. */
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pressStart = useRef<{ x: number; y: number } | null>(null)
+  const longPressFired = useRef(false)
+
+  const clearPress = () => {
+    if (pressTimer.current) {
+      clearTimeout(pressTimer.current)
+      pressTimer.current = null
+    }
+    pressStart.current = null
+  }
+
+  const startPress = (tool: Herramienta, x: number, y: number) => {
+    clearPress()
+    pressStart.current = { x, y }
+    longPressFired.current = false
+    pressTimer.current = setTimeout(() => {
+      pressTimer.current = null
+      // Sin filtros creados el gesto no hace nada, según lo acordado.
+      if (categories.length === 0) return
+      longPressFired.current = true
+      navigator.vibrate?.(30)
+      setAssignTarget({
+        tool,
+        picked: new Set(assignments[tool.href] ?? []),
+      })
+    }, LONG_PRESS_MS)
+  }
+
+  const categoryCount = (id: string) =>
+    herramientas.filter((tool) =>
+      (assignments[tool.href] ?? []).includes(id)
+    ).length
+
   return (
-    <Accordion multiple={false}>
-      {herramientas.map((tool) => (
-        <AccordionItem
-          key={tool.href}
-          value={tool.href}
-          className="bg-transparent p-0"
+    <div className="flex flex-col gap-4">
+      {/*
+       * Barra de vistas (misma composición que /clientes): renglón único
+       * desplazable en horizontal con el scrollbar oculto; el «+» de crear
+       * queda al final de las vistas.
+       */}
+      <div
+        role="toolbar"
+        aria-label="Filtros de módulos"
+        className="flex flex-nowrap items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
+      >
+        <ToggleGroup
+          variant="outline"
+          size="sm"
+          value={[view]}
+          onValueChange={(groupValue) => {
+            // Radio fijo: volver a pulsar la vista activa no la suelta.
+            const next = groupValue[0] ?? view
+            if (next !== view) setView(next)
+          }}
+          aria-label="Vistas de módulos"
         >
-          <div className="flex items-center">
-            <Link
-              href={tool.href}
-              className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1.5 py-2.5 transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 dark:hover:bg-muted/50"
+          <ToggleGroupItem value="todos" className={`rounded-full ${VISTA_ACTIVE_CLASS}`}>
+            Todos
+            <Badge variant="outline" size="xs" className={VISTA_COUNT_CLASS}>
+              {herramientas.length}
+            </Badge>
+          </ToggleGroupItem>
+          <ToggleGroupItem value="favoritos" className={`rounded-full ${VISTA_ACTIVE_CLASS}`}>
+            Favoritos
+            <Badge variant="outline" size="xs" className={VISTA_COUNT_CLASS}>
+              {favorites.length}
+            </Badge>
+          </ToggleGroupItem>
+          {categories.map((category) => (
+            <ToggleGroupItem
+              key={category.id}
+              value={category.id}
+              className={`rounded-full ${VISTA_ACTIVE_CLASS}`}
             >
-              <div
-                aria-hidden="true"
-                className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground [&_svg:not([class*='size-'])]:size-6"
+              {category.name}
+              <Badge variant="outline" size="xs" className={VISTA_COUNT_CLASS}>
+                {categoryCount(category.id)}
+              </Badge>
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Crear filtro"
+          onClick={() => setCreateOpen(true)}
+          className="size-7 rounded-full bg-foreground p-0 text-background hover:bg-foreground/80 [&_svg:not([class*='size-'])]:size-4"
+        >
+          <PlusIcon aria-hidden="true" />
+        </Button>
+      </div>
+
+      {visible.length === 0 ? (
+        <p className="text-muted-foreground text-sm" role="status">
+          {view === "favoritos"
+            ? "Marca la estrella de un módulo para verlo aquí."
+            : "Ningún módulo pertenece a este filtro. Mantén pulsado un módulo para asignarlo."}
+        </p>
+      ) : (
+        <Accordion multiple={false}>
+          {visible.map((tool) => {
+            const isFavorite = favorites.includes(tool.href)
+            return (
+              <AccordionItem
+                key={tool.href}
+                value={tool.href}
+                className="bg-transparent p-0"
               >
-                <tool.icon />
+                <div className="flex items-center">
+                  <Link
+                    href={tool.href}
+                    className="flex min-w-0 flex-1 select-none items-center gap-3 rounded-lg px-1.5 py-2.5 transition-colors outline-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 [touch-callout:none] [user-select:none] dark:hover:bg-muted/50"
+                    onPointerDown={(event) => {
+                      if (event.pointerType === "mouse" && event.button !== 0) {
+                        return
+                      }
+                      startPress(tool, event.clientX, event.clientY)
+                    }}
+                    onPointerMove={(event) => {
+                      const start = pressStart.current
+                      if (!pressTimer.current || !start) return
+                      if (
+                        Math.hypot(event.clientX - start.x, event.clientY - start.y) >
+                        LONG_PRESS_SLACK_PX
+                      ) {
+                        clearPress()
+                      }
+                    }}
+                    onPointerUp={clearPress}
+                    onPointerLeave={clearPress}
+                    onPointerCancel={clearPress}
+                    onContextMenu={(event) => event.preventDefault()}
+                    onClickCapture={(event) => {
+                      // El pulso largo ya abrió el diálogo: el click que
+                      // sigue no debe navegar ni expandir el acordeón.
+                      if (longPressFired.current) {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        longPressFired.current = false
+                      }
+                    }}
+                  >
+                    <div
+                      aria-hidden="true"
+                      className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground [&_svg:not([class*='size-'])]:size-6"
+                    >
+                      <tool.icon />
+                    </div>
+                    <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
+                      <span className="truncate text-base font-semibold tracking-tight">
+                        {tool.title}
+                      </span>
+                      <span className="text-muted-foreground line-clamp-2 text-left text-xs">
+                        {tool.description}
+                      </span>
+                    </div>
+                  </Link>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={() => toggleFavorite(tool.href)}
+                    aria-label={
+                      isFavorite
+                        ? `Quitar ${tool.title} de favoritos`
+                        : `Marcar ${tool.title} como favorito`
+                    }
+                    aria-pressed={isFavorite}
+                    className={cn(
+                      "mr-1 size-8 shrink-0 rounded-full",
+                      isFavorite
+                        ? "text-foreground [&_svg]:fill-current"
+                        : "text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    <StarIcon aria-hidden="true" />
+                  </Button>
+                  <AccordionTrigger
+                    aria-label={`Opciones de ${tool.title}`}
+                    className="mr-1.5 size-11 shrink-0 flex-none items-center justify-center rounded-full border-transparent p-0 text-muted-foreground hover:bg-muted hover:no-underline focus-visible:border-transparent dark:hover:bg-muted/50 aria-expanded:bg-muted dark:aria-expanded:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden"
+                  >
+                    <Settings2Icon aria-hidden="true" className="size-5" />
+                  </AccordionTrigger>
+                </div>
+                <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
+                  <div className="flex flex-col items-stretch gap-1 pb-1">
+                    <Button type="button" variant="ghost" size="lg" className="w-full max-w-56 justify-start">
+                      <SlidersHorizontalIcon aria-hidden="true" />
+                      Configurar
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="lg"
+                      className="w-full max-w-56 justify-start"
+                    >
+                      <TrashIcon aria-hidden="true" />
+                      Eliminar
+                    </Button>
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            )
+          })}
+        </Accordion>
+      )}
+
+      {createOpen ? (
+        <CrearFiltroDialog
+          onCreate={createFilter}
+          onDone={() => setCreateOpen(false)}
+        />
+      ) : null}
+      {assignTarget ? (
+        <AsignarFiltrosDialog
+          target={assignTarget}
+          categories={categories}
+          onSave={(picked) => {
+            saveAssignments(assignTarget.tool, picked)
+            setAssignTarget(null)
+          }}
+          onDone={() => setAssignTarget(null)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+/** Diálogo «Crear filtro»: alta de una categoría nueva para módulos. */
+function CrearFiltroDialog({
+  onCreate,
+  onDone,
+}: {
+  onCreate: (name: string) => string | null
+  onDone: () => void
+}) {
+  const [name, setName] = useState("")
+  const [error, setError] = useState<string | null>(null)
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault()
+    const failure = onCreate(name)
+    if (failure) {
+      setError(failure)
+      return
+    }
+    toast.success(`Filtro «${name.trim().slice(0, 40)}» creado`)
+    onDone()
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onDone() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Crear filtro</DialogTitle>
+          <DialogDescription>
+            Agrupa módulos bajo un nombre propio; aparecerá como vista junto a
+            «Todos» y «Favoritos».
+          </DialogDescription>
+        </DialogHeader>
+        <form onSubmit={submit} className="contents">
+          <Field>
+            <FieldLabel htmlFor="nuevo-filtro-nombre">Nombre</FieldLabel>
+            <Input
+              id="nuevo-filtro-nombre"
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value)
+                setError(null)
+              }}
+              placeholder="Ej. Ventas"
+              maxLength={40}
+              autoFocus
+              required
+            />
+            {error ? (
+              <p className="text-destructive text-sm" role="alert">
+                {error}
+              </p>
+            ) : null}
+          </Field>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              Cancelar
+            </DialogClose>
+            <Button type="submit">Crear</Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * Diálogo de asignación por clic sostenido: checkboxes con los filtros
+ * disponibles (los creados por el usuario; «Todos» y «Favoritos» no entran,
+ * la estrella ya cubre favoritos).
+ */
+function AsignarFiltrosDialog({
+  target,
+  categories,
+  onSave,
+  onDone,
+}: {
+  target: { tool: Herramienta; picked: Set<string> }
+  categories: ModuloFiltro[]
+  onSave: (picked: Set<string>) => void
+  onDone: () => void
+}) {
+  const [picked, setPicked] = useState<Set<string>>(target.picked)
+
+  const toggle = (id: string, checked: boolean) => {
+    setPicked((prev) => {
+      const next = new Set(prev)
+      if (checked) {
+        next.add(id)
+      } else {
+        next.delete(id)
+      }
+      return next
+    })
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => { if (!open) onDone() }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Asignar a filtros</DialogTitle>
+          <DialogDescription>
+            Elige en qué filtros aparece «{target.tool.title}». La estrella de
+            favoritos se maneja desde la fila.
+          </DialogDescription>
+        </DialogHeader>
+        <div
+          className="flex flex-col gap-1"
+          role="group"
+          aria-label="Filtros disponibles"
+        >
+          {categories.map((category) => {
+            const id = `asignar-${category.id}`
+            return (
+              <div key={category.id} className="flex items-center gap-3 py-1.5">
+                <Checkbox
+                  id={id}
+                  checked={picked.has(category.id)}
+                  onCheckedChange={(checked) => toggle(category.id, checked === true)}
+                />
+                <FieldLabel
+                  htmlFor={id}
+                  className="text-foreground text-sm font-medium"
+                >
+                  {category.name}
+                </FieldLabel>
               </div>
-              <div className="flex min-w-0 flex-1 flex-col justify-center gap-1">
-                <span className="truncate text-base font-semibold tracking-tight">
-                  {tool.title}
-                </span>
-                <span className="text-muted-foreground line-clamp-2 text-left text-xs">
-                  {tool.description}
-                </span>
-              </div>
-            </Link>
-            <AccordionTrigger
-              aria-label={`Opciones de ${tool.title}`}
-              className="mr-1.5 size-11 shrink-0 flex-none items-center justify-center rounded-full border-transparent p-0 text-muted-foreground hover:bg-muted hover:no-underline focus-visible:border-transparent dark:hover:bg-muted/50 aria-expanded:bg-muted dark:aria-expanded:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden"
-            >
-              <Settings2Icon aria-hidden="true" className="size-5" />
-            </AccordionTrigger>
-          </div>
-          <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
-            <div className="flex flex-col items-stretch gap-1 pb-1">
-              <Button type="button" variant="ghost" size="lg" className="w-full max-w-56 justify-start">
-                <SlidersHorizontalIcon aria-hidden="true" />
-                Configurar
-              </Button>
-              <Button
-                type="button"
-                variant="destructive"
-                size="lg"
-                className="w-full max-w-56 justify-start"
-              >
-                <TrashIcon aria-hidden="true" />
-                Eliminar
-              </Button>
-            </div>
-          </AccordionContent>
-        </AccordionItem>
-      ))}
-    </Accordion>
+            )
+          })}
+        </div>
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" />}>
+            Cancelar
+          </DialogClose>
+          <Button type="button" onClick={() => onSave(picked)}>
+            Guardar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
