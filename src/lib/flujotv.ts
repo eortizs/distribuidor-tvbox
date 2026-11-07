@@ -91,6 +91,28 @@ export interface FlujoClientsResponse {
   total: number | null
   /** Endpoint efectivo que respondió, por si hubo que reintentar. */
   endpoint: string
+  /**
+   * Mapa usuario (en minúsculas) → nombre propio del cliente, según la
+   * columna Notas del panel vía `/client_names`; null si esa lectura falló.
+   */
+  clientNames?: Record<string, string> | null
+}
+
+export interface FlujoClientName {
+  username: string
+  /** Nombre propio del cliente según la columna Notas del panel. */
+  name: string
+  distributor: string
+}
+
+export interface FlujoClientNamesResponse {
+  success: boolean
+  total: number
+  clients: FlujoClientName[]
+  /** Si la respuesta viene de la caché del panel de FlujoTV. */
+  fromCache: boolean | null
+  /** Antigüedad de la caché, tal como la reporta la API. */
+  cacheAge: string | null
 }
 
 export interface FlujoLicensesResponse {

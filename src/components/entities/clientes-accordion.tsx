@@ -6,18 +6,21 @@
  * con filas tipo WhatsApp para lectura cómoda en móvil:
  *
  * - Fila: avatar grande con iniciales (`size-12`); como subtítulo del
- *   nombre, la fecha de vencimiento ("vence 27 nov 2026") y, debajo, la
- *   barra de progreso (`ui/progress`) con el conteo compacto de días
- *   restantes a su derecha ("32d"); con vista previa de correo o plan solo
- *   si el cliente no tiene dato de vencimiento. Al margen derecho, punto de
+ *   nombre de usuario, el nombre propio del cliente según la columna Notas
+ *   del panel (mapa usuario → nombre de `/client_names`; si el panel no
+ *   reporta nombre no se muestra nada) y, debajo, la barra de progreso
+ *   (`ui/progress`) con el conteo compacto
+ *   de días restantes a su derecha ("32d"). Al margen derecho, punto de
  *   estado (verde activo, rojo vencido, ámbar pendiente, azul prueba; tokens
  *   semánticos). La barra recorre
  *   los días restantes en una ventana de urgencia de 30 días — llena con
  *   más de 30 días y agotándose al acercarse el vencimiento (rojo ≤5 días
  *   o dato desconocido, ámbar ≤15, primario el resto).
  * - Sin chevron de expansión ni anillo de foco en el trigger: la fila es el
- *   botón; el detalle vive en el contenido expandido.
- * - Contenido expandido: correo y plan.
+ *   botón; el detalle vive en el contenido expandido. Sin borde inferior
+ *   entre filas (`not-last:border-b-0`): el ritmo lo dan el espaciado y el
+ *   fondo al pasar el cursor.
+ * - Contenido expandido: fecha de vencimiento ("vence 27 nov 2026").
  *
  * Cada fila lleva además el botón de **compra rápida** (shopping-cart-plus
  * de lucide), colocado entre el contenido y el punto de estado:
@@ -61,7 +64,8 @@
  * resultado de las anteriores (los datos locales que dejó el filtro previo).
  *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
- * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario/correo.
+ * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario,
+ * nombre propio (sin acentos) o correo.
  * Con perfil distribuidor el servidor ya entrega solo los clientes de su
  * reseller ligado (prop `distribuidorName`): en ese caso la barra omite el
  * filtro de Distribuidor — todas las filas comparten el mismo — y no consulta
@@ -208,6 +212,30 @@ function rawClientReseller(client: FlujoClient): string {
   return ""
 }
 
+/**
+ * Nombre propio del cliente según la columna Notas del panel, del mapa que
+ * entrega `/client_names` (usuario en minúsculas → nombre); vacío si el
+ * panel no reporta nombre para ese usuario.
+ */
+function clientName(
+  client: FlujoClient,
+  names: Record<string, string>
+): string {
+  return names[client.userName.trim().toLowerCase()] ?? ""
+}
+
+/**
+ * Normaliza para comparar textos: minúsculas y sin acentos, igual que la
+ * búsqueda de `/client_names` («cambron» encuentra «Cambrón»).
+ */
+function foldTerm(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+}
+
 /** Subtítulo de la opción: cuántos clientes devuelve ese filtro. */
 function optionCount(count: number | undefined): string | undefined {
   if (count === undefined) return undefined
@@ -243,6 +271,7 @@ export function ClientesAccordion({
   distribuidorName?: string | null
 }) {
   const [clients, setClients] = useState<FlujoClient[]>([])
+  const [clientNames, setClientNames] = useState<Record<string, string>>({})
   const [resellerNames, setResellerNames] = useState<string[]>([])
   const [userResellers, setUserResellers] = useState<Record<string, string>>({})
   const [fetchState, setFetchState] = useState<FetchState>("loading")
@@ -285,6 +314,7 @@ export function ClientesAccordion({
               .catch(() => scoped)
         if (requestId !== requestCounter.current) return
         setClients(data.clients)
+        setClientNames(data.clientNames ?? {})
         setResellerNames(names)
         setUserResellers(byUser)
         setErrorMessage(null)
@@ -482,14 +512,15 @@ export function ClientesAccordion({
       reseller: resellerOf,
       dias: (row) => row.daysRemaining,
     })
-    const term = searchInput.trim().toLowerCase()
+    const term = foldTerm(searchInput)
     if (!term) return byQuery
     return byQuery.filter(
       (client) =>
-        client.userName.toLowerCase().includes(term) ||
-        (client.email ?? "").toLowerCase().includes(term)
+        foldTerm(client.userName).includes(term) ||
+        foldTerm(client.email ?? "").includes(term) ||
+        foldTerm(clientName(client, clientNames)).includes(term)
     )
-  }, [clients, query, searchInput, resellerOf])
+  }, [clients, query, searchInput, resellerOf, clientNames])
 
   const searching = searchInput.trim().length > 0
   const hasFilters = query.rules.length > 0
@@ -526,7 +557,7 @@ export function ClientesAccordion({
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
           placeholder="Buscar"
-          aria-label="Buscar cliente por usuario o correo"
+          aria-label="Buscar cliente por usuario, nombre o correo"
           className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted px-4 focus-visible:border-transparent"
         />
         <Button
@@ -667,7 +698,7 @@ export function ClientesAccordion({
             <AccordionItem
               key={client.id}
               value={client.id}
-              className="bg-transparent p-0"
+              className="not-last:border-b-0 bg-transparent p-0"
             >
               <div className="relative">
                 <AccordionTrigger className="items-center gap-3 rounded-lg px-1.5 py-2.5 hover:bg-muted hover:no-underline focus-visible:border-transparent focus-visible:ring-0 dark:hover:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden">
@@ -678,26 +709,22 @@ export function ClientesAccordion({
                     <span className="truncate text-base font-semibold tracking-tight">
                       {client.userName}
                     </span>
-                    {client.expiresAt || client.daysRemaining !== null ? (
-                      <div className="flex min-w-0 flex-col gap-1">
-                        <span className="text-muted-foreground truncate text-xs">
-                          vence {formatFlujoDate(client.expiresAt)}
-                        </span>
-                        <div className="flex items-center gap-2">
-                          <Progress
-                            value={expiryProgress(client.daysRemaining)}
-                            aria-label={`Días restantes de ${client.userName}`}
-                            className={`w-24 max-w-full shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
-                          />
-                          <span className="text-muted-foreground text-xs tabular-nums">
-                            {formatDaysCompact(client.daysRemaining)}
-                          </span>
-                        </div>
-                      </div>
-                    ) : client.email || client.plan ? (
+                    {clientName(client, clientNames) ? (
                       <span className="text-muted-foreground truncate text-xs">
-                        {client.email ?? client.plan}
+                        {clientName(client, clientNames)}
                       </span>
+                    ) : null}
+                    {client.expiresAt || client.daysRemaining !== null ? (
+                      <div className="flex items-center gap-2">
+                        <Progress
+                          value={expiryProgress(client.daysRemaining)}
+                          aria-label={`Días restantes de ${client.userName}`}
+                          className={`w-24 max-w-full shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
+                        />
+                        <span className="text-muted-foreground text-xs tabular-nums">
+                          {formatDaysCompact(client.daysRemaining)}
+                        </span>
+                      </div>
                     ) : null}
                   </div>
                   <div className="flex w-4 shrink-0 items-center justify-center">
@@ -724,9 +751,8 @@ export function ClientesAccordion({
               <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
                 <div className="flex flex-col gap-1 pb-1 text-xs">
                   <span className="truncate">
-                    {client.email ?? "Sin correo"}
+                    vence {formatFlujoDate(client.expiresAt)}
                   </span>
-                  <span>{client.plan ?? "Sin plan"}</span>
                 </div>
               </AccordionContent>
             </AccordionItem>

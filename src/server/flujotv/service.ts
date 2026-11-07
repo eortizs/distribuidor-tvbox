@@ -645,6 +645,45 @@ export async function getFlujoUserResellers(): Promise<
   return Object.fromEntries(users)
 }
 
+/**
+ * Nombres propios de los clientes según la columna Notas del panel
+ * (`/client_names`): mapa usuario (en minúsculas) → nombre. La búsqueda por
+ * fragmento y sin acentos la hace el endpoint; aquí solo se consume el
+ * listado completo.
+ */
+export async function fetchFlujoClientNames(): Promise<{
+  clientNames: Record<string, string>
+  fromCache: boolean | null
+  cacheAge: string | null
+}> {
+  const response = await flujoRequest<unknown>("/client_names", {
+    method: "GET",
+    timeoutMs: FLUJO_READ_TIMEOUT_MS,
+  })
+
+  const rows = findArray(response.data, ["clients", "items", "results", "data"])
+  const clientNames: Record<string, string> = {}
+  for (const row of rows ?? []) {
+    if (!isRecord(row)) continue
+    const username = pickString(row, [
+      "username",
+      "user_name",
+      "userName",
+      "user",
+    ])
+    const name = pickString(row, ["name", "nombre"])
+    if (!username || !name) continue
+    clientNames[username.trim().toLowerCase()] = name
+  }
+
+  const meta = isRecord(response.data) ? response.data : null
+  return {
+    clientNames,
+    fromCache: typeof meta?.from_cache === "boolean" ? meta.from_cache : null,
+    cacheAge: typeof meta?.cache_age === "string" ? meta.cache_age : null,
+  }
+}
+
 export async function getFlujoClient(
   userName: string,
   options: { includeCredentials?: boolean; full?: boolean } = {}
