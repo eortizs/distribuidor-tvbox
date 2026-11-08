@@ -1,13 +1,19 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { flujoErrorResponse } from "@/server/flujotv/http"
-import { MercadoPagoError, mpErrorResponse } from "@/server/mercadopago/errors"
-import { retryOrderRenewal, toMpOrderPublic } from "@/server/mercadopago/service"
+import { mpErrorResponse } from "@/server/mercadopago/errors"
+import {
+  getMpOrder,
+  retryOrderRenewal,
+  toMpOrderPublic,
+} from "@/server/mercadopago/service"
 
 /**
- * Reintenta la renovación de una orden `renewal_failed` (pago ya cobrado por
- * Mercado Pago cuya renovación en el panel falló). Solo admin. No vuelve a
- * cobrar: re-ejecuta la renovación con la misma clave de idempotencia.
+ * Reintenta la renovación de una orden `renewal_failed` o `paid` varada.
+ * Admin: cualquier orden. Comprador: solo sus propias órdenes con renovación
+ * fallida (el pago/cupón ya quedó registrado y la clave de idempotencia
+ * determinista evita duplicar meses). No vuelve a cobrar: re-ejecuta la
+ * renovación con la misma clave de idempotencia.
  */
 export async function POST(
   _request: Request,
@@ -16,25 +22,51 @@ export async function POST(
   try {
     const user = await requireApiUser()
     if (!user) return unauthorizedResponse()
-    if (user.role !== "admin") {
+
+    const { id } = await params
+    const order = await getMpOrder(id)
+    if (!order) {
       return Response.json(
         {
           ok: false,
-          error: {
-            code: "forbidden",
-            message: "Solo un administrador puede reintentar renovaciones.",
-          },
+          error: { code: "not_found", message: "La orden no existe." },
         },
-        { status: 403 }
+        { status: 404 }
       )
     }
+    if (user.role !== "admin") {
+      const isBuyer = order.buyer_user_id === user.id
+      if (!isBuyer) {
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "forbidden",
+              message: "Solo un administrador puede reintentar esta orden.",
+            },
+          },
+          { status: 403 }
+        )
+      }
+      if (order.status !== "renewal_failed") {
+        return Response.json(
+          {
+            ok: false,
+            error: {
+              code: "forbidden",
+              message:
+                "Solo puedes reintentar órdenes tuyas con renovación fallida.",
+            },
+          },
+          { status: 403 }
+        )
+      }
+    }
 
-    const { id } = await params
-    const order = await retryOrderRenewal(id)
-    return Response.json({ ok: true, data: { order: toMpOrderPublic(order) } })
+    const fresh = await retryOrderRenewal(id)
+    return Response.json({ ok: true, data: { order: toMpOrderPublic(fresh) } })
   } catch (error) {
     if (error instanceof FlujoApiError) return flujoErrorResponse(error)
-    if (error instanceof MercadoPagoError) return mpErrorResponse(error)
     return mpErrorResponse(error)
   }
 }

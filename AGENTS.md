@@ -21,11 +21,20 @@ Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbo
 ### Procedimiento de despliegue (obligatorio tras cada cambio)
 
 ```bash
+node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs
 npm run build && pm2 reload distribuidor-tvbox
 ```
 
-1. `npm run build` (equivale a `eve build && next build`): genera el build en `.next`/`.output`.
-2. `pm2 reload distribuidor-tvbox`: reinicia el servidor para que cargue el manifiesto del build nuevo.
+1. **Migraciones de `db/` primero**: los scripts `apply-*.mjs` aplican su SQL de forma idempotente (`IF NOT EXISTS`) y son seguros de re-ejecutar. El código nuevo puede consultar columnas que solo existen tras correrlos; si se despliega sin migrar, las rutas de compra responden 500 (`SQL 42703`). Ante un cambio de esquema nuevo, crear su par `db/<tema>-schema.sql` + `db/apply-<tema>.mjs` y añadirlo aquí.
+2. `npm run build` (equivale a `eve build && next build`): genera el build en `.next`/`.output`.
+3. `pm2 reload distribuidor-tvbox`: reinicia el servidor para que cargue el manifiesto del build nuevo.
+
+### Variables de entorno relevantes (`.env`)
+
+- `MERCADOPAGO_ACCESS_TOKEN`, `LICENSE_PRICE_MXN`, `SITE_URL`: motor de pagos (sin ellas no hay checkout ni precio).
+- `TRANSFER_BANK_NAME`, `TRANSFER_ACCOUNT`, `TRANSFER_HOLDER`: datos bancarios de la transferencia; sin las tres, el método se oculta.
+- `COUPON_QA_ENABLED=1`: activa el cupón de QA `0000` (pago con cupón). **Desactivado por defecto**: un cupón siempre activo permitiría renovaciones gratis sin límite. Con `COUPON_QA_DAILY_LIMIT` (default 3) se topea los canjes por comprador en 24 h. El canje es idempotente por `request_id` (`mp_orders.coupon_request_id`, índice único parcial).
+- `FLUJO_API_KEY` (o la clave guardada en Configuración → API de licencias): clave del panel FlujoTV.
 
 ### Advertencia crítica
 

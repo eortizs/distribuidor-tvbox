@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto"
 import { pool } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { renewFlujoLicense } from "@/server/flujotv/service"
+import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 
-import { resolveMercadoPagoConfig } from "./config"
+import { resolveMercadoPagoConfig, isCouponQaEnabled, couponQaDailyLimit } from "./config"
 import { mercadoPagoRequest } from "./client"
 import { MercadoPagoError } from "./errors"
 
@@ -21,9 +22,12 @@ export type MpOrderStatus =
   | "rejected"
   | "cancelled"
 
+export type MpOrderMethod = "mercadopago" | "transferencia" | "cupon"
+
 export interface MpOrderRow {
   id: string
   status: MpOrderStatus
+  method: MpOrderMethod
   user_name: string
   months: number
   amount: number
@@ -32,6 +36,8 @@ export interface MpOrderRow {
   preference_id: string | null
   payment_id: number | null
   payment_status: string | null
+  ticket_file_id: string | null
+  coupon_code: string | null
   error: string | null
   renewed_at: string | null
   created_at: string
@@ -114,6 +120,12 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
   return {
     id: String(row.id),
     status: String(row.status) as MpOrderStatus,
+    method:
+      row.method === "transferencia"
+        ? "transferencia"
+        : row.method === "cupon"
+          ? "cupon"
+          : "mercadopago",
     user_name: String(row.user_name),
     months: Number(row.months),
     amount: Number(row.amount),
@@ -122,6 +134,14 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
     preference_id: row.preference_id === null ? null : String(row.preference_id),
     payment_id: row.payment_id === null ? null : Number(row.payment_id),
     payment_status: row.payment_status === null ? null : String(row.payment_status),
+    ticket_file_id:
+      row.ticket_file_id === null || row.ticket_file_id === undefined
+        ? null
+        : String(row.ticket_file_id),
+    coupon_code:
+      row.coupon_code === null || row.coupon_code === undefined
+        ? null
+        : String(row.coupon_code),
     error: row.error === null ? null : String(row.error),
     renewed_at:
       row.renewed_at === null ? null : new Date(row.renewed_at as string).toISOString(),
@@ -321,7 +341,8 @@ export type PaymentOutcome =
  */
 async function attemptOrderRenewal(
   order: MpOrderRow,
-  paymentId: string | null
+  paymentId: string | null,
+  renewalTimeoutMs?: number
 ): Promise<PaymentOutcome> {
   try {
     if (!isRenewalMonths(order.months)) {
@@ -335,6 +356,7 @@ async function attemptOrderRenewal(
       userName: order.user_name,
       months: order.months as RenewalMonths,
       idempotencyKey: `mp-${order.id}`,
+      timeoutMs: renewalTimeoutMs,
     })
     await pool.query(
       `UPDATE mp_orders
@@ -618,6 +640,377 @@ export async function retryOrderRenewal(orderId: string): Promise<MpOrderRow> {
 
   const fresh = await getMpOrder(order.id)
   return fresh ?? order
+}
+
+/* -------------------------------------------------------------------------- */
+/*                       Órdenes por transferencia bancaria                    */
+/* -------------------------------------------------------------------------- */
+
+export interface CreatedTransferOrder {
+  orderId: string
+  amount: number
+  currency: string
+}
+
+/**
+ * Crea la orden `pending` de una transferencia bancaria: el comprobante ya
+ * está guardado (`ticket_file_id`) y la renovación ocurre solo cuando el
+ * admin aprueba la revisión (`approveTransferOrder`), nunca al subirlo.
+ * El importe queda congelado en la orden, igual que en Mercado Pago.
+ */
+export async function createTransferOrder(params: {
+  userName: string
+  months: RenewalMonths
+  buyerUserId: string
+  ticketFileId: string
+}): Promise<CreatedTransferOrder> {
+  const orderId = randomUUID()
+  const amount =
+    Math.round(resolveMercadoPagoConfig().licensePriceMxn * params.months * 100) /
+    100
+
+  await pool.query(
+    `INSERT INTO mp_orders
+       (id, status, method, user_name, months, amount, currency, buyer_user_id,
+        external_reference, ticket_file_id)
+     VALUES ($1::uuid, 'pending', 'transferencia', $2, $3, $4, 'MXN', $5,
+             $1::text, $6::uuid)`,
+    [orderId, params.userName, params.months, amount, params.buyerUserId, params.ticketFileId]
+  )
+
+  notifyOrderChange(orderId)
+
+  return { orderId, amount, currency: "MXN" }
+}
+
+export interface TransferOrderPublic {
+  id: string
+  status: MpOrderStatus
+  user_name: string
+  months: number
+  amount: number
+  currency: string
+  buyer_username: string | null
+  ticket:
+    | { id: string; fileName: string; mimeType: string; sizeBytes: number }
+    | null
+  error: string | null
+  created_at: string
+}
+
+interface TransferJoinRow extends Record<string, unknown> {
+  buyer_username: string | null
+  ticket_file_name: string | null
+  ticket_mime_type: string | null
+  ticket_size_bytes: number | null
+}
+
+function parseTransferRow(row: TransferJoinRow): TransferOrderPublic {
+  const order = parseRow(row)
+  const ticketId = order.ticket_file_id
+  return {
+    id: order.id,
+    status: order.status,
+    user_name: order.user_name,
+    months: order.months,
+    amount: order.amount,
+    currency: order.currency,
+    buyer_username:
+      typeof row.buyer_username === "string" && row.buyer_username.length > 0
+        ? row.buyer_username
+        : null,
+    ticket:
+      ticketId &&
+      typeof row.ticket_file_name === "string" &&
+      typeof row.ticket_mime_type === "string"
+        ? {
+            id: ticketId,
+            fileName: row.ticket_file_name,
+            mimeType: row.ticket_mime_type,
+            sizeBytes: Number(row.ticket_size_bytes ?? 0),
+          }
+        : null,
+    error: order.error,
+    created_at: order.created_at,
+  }
+}
+
+/** Transferencias pendientes de revisión, las más nuevas primero (admin). */
+export async function listPendingTransferOrders(): Promise<
+  TransferOrderPublic[]
+> {
+  const result = await pool.query<TransferJoinRow>(
+    `SELECT o.*, u.username AS buyer_username,
+            f.file_name AS ticket_file_name, f.mime_type AS ticket_mime_type,
+            f.size_bytes AS ticket_size_bytes
+       FROM mp_orders o
+       LEFT JOIN users u ON u.id = o.buyer_user_id
+       LEFT JOIN user_files f ON f.id = o.ticket_file_id
+      WHERE o.method = 'transferencia' AND o.status = 'pending'
+      ORDER BY o.created_at DESC
+      LIMIT 50`
+  )
+  return result.rows.map(parseTransferRow)
+}
+
+/**
+ * Aprueba una transferencia pendiente: reclama la orden hacia `paid`
+ * atómicamente y ejecuta la renovación con la clave determinista
+ * `mp-<orderId>`. Con renovación fallida la orden queda `renewal_failed` y
+ * el reintento admin existente la recupera sin volver a cobrar.
+ */
+export async function approveTransferOrder(orderId: string): Promise<MpOrderRow> {
+  const order = await getMpOrder(orderId)
+  if (!order) {
+    throw new MercadoPagoError(404, "not_found", "La orden no existe.")
+  }
+  if (order.method !== "transferencia") {
+    throw new MercadoPagoError(
+      409,
+      "invalid_order_method",
+      "La orden no es una transferencia bancaria."
+    )
+  }
+  if (order.status !== "pending") {
+    throw new MercadoPagoError(
+      409,
+      "invalid_order_status",
+      `Solo se pueden aprobar transferencias pendientes (estado actual: ${order.status}).`
+    )
+  }
+
+  const claim = await pool.query(
+    `UPDATE mp_orders SET status = 'paid', updated_at = now()
+      WHERE id = $1 AND status = 'pending'`,
+    [order.id]
+  )
+  if (claim.rowCount === 0) {
+    throw new MercadoPagoError(
+      409,
+      "order_already_processed",
+      "La transferencia ya fue procesada por otra revisión."
+    )
+  }
+
+  const claimed = (await getMpOrder(order.id)) ?? order
+  const outcome = await attemptOrderRenewal(claimed, null)
+
+  log("mercadopago.transfer_review", {
+    order_id: order.id,
+    user_name: order.user_name,
+    decision: "approved",
+    outcome,
+  })
+
+  const fresh = await getMpOrder(order.id)
+  return fresh ?? claimed
+}
+
+/** Rechaza una transferencia pendiente (comprobante inválido, sin pago, etc.). */
+export async function rejectTransferOrder(
+  orderId: string,
+  reason: string | null
+): Promise<MpOrderRow> {
+  const order = await getMpOrder(orderId)
+  if (!order) {
+    throw new MercadoPagoError(404, "not_found", "La orden no existe.")
+  }
+  if (order.method !== "transferencia") {
+    throw new MercadoPagoError(
+      409,
+      "invalid_order_method",
+      "La orden no es una transferencia bancaria."
+    )
+  }
+  if (order.status !== "pending") {
+    throw new MercadoPagoError(
+      409,
+      "invalid_order_status",
+      `Solo se pueden rechazar transferencias pendientes (estado actual: ${order.status}).`
+    )
+  }
+
+  const claim = await pool.query(
+    `UPDATE mp_orders
+        SET status = 'rejected', error = $2, updated_at = now()
+      WHERE id = $1 AND status = 'pending'`,
+    [order.id, reason ? reason.slice(0, 500) : null]
+  )
+  if (claim.rowCount === 0) {
+    throw new MercadoPagoError(
+      409,
+      "order_already_processed",
+      "La transferencia ya fue procesada por otra revisión."
+    )
+  }
+
+  notifyOrderChange(order.id)
+  log("mercadopago.transfer_review", {
+    order_id: order.id,
+    user_name: order.user_name,
+    decision: "rejected",
+    reason: reason ? reason.slice(0, 300) : null,
+  })
+
+  const fresh = await getMpOrder(order.id)
+  return fresh ?? order
+}
+
+/* -------------------------------------------------------------------------- */
+/*                          Órdenes pagadas con cupón                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Cupones activos. Por ahora solo existe el 0000: compra directa de QA sin
+ * catálogo ni vigencia, conmutada con `COUPON_QA_ENABLED` (desactivada por
+ * defecto: un código de prueba permanente sería una fuente ilimitada de
+ * renovaciones gratis). Cuando exista un catálogo de cupones autorizados se
+ * sustituye por la consulta correspondiente (código → descuento/vigencia).
+ */
+const ACTIVE_COUPON_CODES = new Set(["0000"])
+
+export interface CreatedCouponOrder {
+  orderId: string
+  amount: number
+  currency: string
+  status: MpOrderStatus
+}
+
+/**
+ * Renovación pagada con cupón: valida el código, crea la orden ya `paid`
+ * (el cupón ES el pago) y ejecuta la renovación al instante con la clave
+ * determinista `mp-<orderId>`. Sin checkout ni revisión: si la renovación
+ * contra el panel falla la orden queda `renewal_failed` para el reintento,
+ * igual que en los otros métodos.
+ *
+ * Idempotente por `requestId`: el cliente genera un id por intención de
+ * canje y lo conserva entre reintentos (respuesta perdida, doble clic), así
+ * que repetir la solicitud devuelve la orden original en lugar de sumar
+ * otro mes. La renovación usa el presupuesto de compras (60 s), no el
+ * timeout largo: la respuesta no debe colgar más de lo que Cloudflare
+ * está dispuesto a esperar.
+ */
+export async function createCouponOrder(params: {
+  userName: string
+  months: RenewalMonths
+  buyerUserId: string
+  code: string
+  requestId: string
+}): Promise<CreatedCouponOrder> {
+  if (!isCouponQaEnabled()) {
+    throw new MercadoPagoError(
+      503,
+      "coupon_disabled",
+      "El pago con cupón está desactivado en el servidor."
+    )
+  }
+
+  const code = params.code.trim()
+  if (!ACTIVE_COUPON_CODES.has(code)) {
+    throw new MercadoPagoError(
+      422,
+      "invalid_coupon",
+      "El código de cupón no es válido."
+    )
+  }
+
+  // Tope de canjes por comprador en 24 h: un código de QA no debe permitir
+  // renovaciones ilimitadas aunque esté activado.
+  const redeemed = await pool.query(
+    `SELECT count(*)::int AS n
+       FROM mp_orders
+      WHERE method = 'cupon'
+        AND buyer_user_id = $1::uuid
+        AND created_at >= now() - interval '24 hours'`,
+    [params.buyerUserId]
+  )
+  const limit = couponQaDailyLimit()
+  if ((redeemed.rows[0]?.n ?? 0) >= limit) {
+    throw new MercadoPagoError(
+      429,
+      "coupon_limit",
+      `Ya canjeaste el máximo de ${limit} cupones por día.`
+    )
+  }
+
+  const amount =
+    Math.round(resolveMercadoPagoConfig().licensePriceMxn * params.months * 100) /
+    100
+
+  // INSERT con claim por request_id: un reintento con el mismo id no crea
+  // una segunda orden (índice único parcial), recupera la existente.
+  const inserted = await pool.query<{ id: string }>(
+    `INSERT INTO mp_orders
+       (id, status, method, user_name, months, amount, currency, buyer_user_id,
+        external_reference, coupon_code, coupon_request_id)
+     VALUES ($1::uuid, 'paid', 'cupon', $2, $3, $4, 'MXN', $5, $1::text, $6, $7)
+     ON CONFLICT (coupon_request_id) WHERE method = 'cupon' AND coupon_request_id IS NOT NULL
+     DO NOTHING
+     RETURNING id`,
+    [
+      randomUUID(),
+      params.userName,
+      params.months,
+      amount,
+      params.buyerUserId,
+      code,
+      params.requestId,
+    ]
+  )
+
+  let order: MpOrderRow | null
+  if (inserted.rows.length > 0) {
+    order = await getMpOrder(inserted.rows[0].id)
+  } else {
+    // Reintento con el mismo request_id: localiza la orden original del
+    // mismo comprador (el índice es global; un id ajeno no filtra nada).
+    const replayed = await pool.query<{ id: string }>(
+      `SELECT id FROM mp_orders
+        WHERE coupon_request_id = $1 AND buyer_user_id = $2::uuid`,
+      [params.requestId, params.buyerUserId]
+    )
+    order = replayed.rows[0] ? await getMpOrder(replayed.rows[0].id) : null
+    if (order) {
+      log("mercadopago.coupon_replay", {
+        order_id: order.id,
+        user_name: params.userName,
+        coupon: code,
+        status: order.status,
+      })
+    }
+  }
+
+  if (!order) {
+    throw new MercadoPagoError(
+      500,
+      "order_not_found",
+      "La orden de cupón no pudo crearse."
+    )
+  }
+
+  // Una orden reintento ya renovada no vuelve al panel: renovar de nuevo con
+  // la misma clave determinista sería un no-op costoso.
+  let outcome: PaymentOutcome
+  if (order.status === "renewed") {
+    outcome = "renewed"
+  } else {
+    outcome = await attemptOrderRenewal(order, null, FLUJO_PURCHASE_TIMEOUT_MS)
+  }
+
+  log("mercadopago.coupon_order", {
+    order_id: order.id,
+    user_name: params.userName,
+    months: params.months,
+    coupon: code,
+    outcome,
+  })
+
+  return {
+    orderId: order.id,
+    amount: order.amount,
+    currency: order.currency,
+    status: outcome === "renewal_failed" ? "renewal_failed" : "renewed",
+  }
 }
 
 /* -------------------------------------------------------------------------- */

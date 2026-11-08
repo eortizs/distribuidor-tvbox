@@ -713,7 +713,12 @@ export async function fetchFlujoClientNames(): Promise<{
 
 export async function getFlujoClient(
   userName: string,
-  options: { includeCredentials?: boolean; full?: boolean } = {}
+  options: {
+    includeCredentials?: boolean
+    full?: boolean
+    /** Presupuesto propio: las compras usan FLUJO_PURCHASE_TIMEOUT_MS. */
+    timeoutMs?: number
+  } = {}
 ): Promise<FlujoClient | null> {
   const extra: Record<string, string | number | boolean> = {}
   if (options.includeCredentials) extra.include_credentials = "true"
@@ -726,7 +731,7 @@ export async function getFlujoClient(
       { query: { username: userName, ...extra } },
       { query: { user: userName, ...extra } },
     ],
-    { method: "GET", timeoutMs: FLUJO_READ_TIMEOUT_MS }
+    { method: "GET", timeoutMs: options.timeoutMs ?? FLUJO_READ_TIMEOUT_MS }
   )
 
   if (isRecord(response.data)) {
@@ -782,6 +787,8 @@ export async function renewFlujoLicense(params: {
   userName: string
   months: RenewalMonths
   idempotencyKey: string
+  /** Presupuesto propio; por defecto el timeout largo (renovaciones sueltas). */
+  timeoutMs?: number
 }): Promise<FlujoRenewalResult> {
   const encoded = encodeURIComponent(params.userName)
   const response = await flujoRequest<unknown>(
@@ -790,7 +797,7 @@ export async function renewFlujoLicense(params: {
       method: "POST",
       body: { months: params.months },
       headers: { "Idempotency-Key": params.idempotencyKey },
-      timeoutMs: FLUJO_LONG_TIMEOUT_MS,
+      timeoutMs: params.timeoutMs ?? FLUJO_LONG_TIMEOUT_MS,
     }
   )
 

@@ -31,6 +31,15 @@ export interface FlujoResponse<T = unknown> {
 export const FLUJO_READ_TIMEOUT_MS = 30_000
 export const FLUJO_LONG_TIMEOUT_MS = 300_000
 
+/**
+ * Presupuesto para las llamadas que bloquean una compra (la guarda de alcance
+ * antes de cobrar). El panel de licencias puede tardar 20-60 s por lectura:
+ * con el timeout de lectura la compra fallaría con 504 aunque el panel solo
+ * esté lento. Techo en 60 s para que la compra completa siga dentro de la
+ * paciencia de Cloudflare (~100 s) junto con la renovación posterior.
+ */
+export const FLUJO_PURCHASE_TIMEOUT_MS = 60_000
+
 function buildQuery(query?: Record<string, FlujoQueryValue>): string {
   if (!query) return ""
   const params = new URLSearchParams()

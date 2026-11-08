@@ -5,6 +5,7 @@ import {
   resolveClientScope,
 } from "@/server/flujotv/scope"
 import { flujoErrorResponse } from "@/server/flujotv/http"
+import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { mpErrorResponse } from "@/server/mercadopago/errors"
 import { createPaymentOrder } from "@/server/mercadopago/service"
 import { readJsonBody } from "@/server/http"
@@ -78,7 +79,11 @@ export async function POST(request: Request) {
       )
     }
     if (scope.kind === "distributor") {
-      const target = await getFlujoClient(userName)
+      // La guarda de alcance no debe tirar la compra por lentitud del panel:
+      // usa el presupuesto de compras en lugar del timeout de lectura.
+      const target = await getFlujoClient(userName, {
+        timeoutMs: FLUJO_PURCHASE_TIMEOUT_MS,
+      })
       const allowed = target
         ? await isFlujoClientInScope(target, scope)
         : false

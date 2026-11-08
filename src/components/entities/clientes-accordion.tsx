@@ -40,18 +40,35 @@
  *   solo el cambio de color.
  * - Flujo de pago: al pulsar abre un **bottom sheet** (Drawer de Base UI,
  *   anclado al borde inferior con `swipeDirection="down"` y asa de arrastre
- *   `showSwipeHandle`, patrón móvil moderno) con el resumen de la operación
- *   (usuario, renovación de 1 mes, importe en MXN) y la acción primaria
- *   «Pagar con Mercado Pago» a ancho completo. Confirmar llama
- *   `POST /api/mercadopago/orders`, que crea la orden
- *   `pending` y la preferencia de Mercado Pago (`purpose: wallet_purchase`:
- *   solo pagan cuentas de Mercado Pago, wallet a wallet), y redirige al
- *   `init_point` del checkout. La renovación NO ocurre aquí: el webhook
- *   `POST /api/mercadopago/webhook` verifica el pago contra la API de MP
- *   (monto, moneda, external_reference) y recién entonces renueva la licencia
- *   en el panel FlujoTV. El sheet no se cierra mientras procesa (Escape y
- *   swipe bloqueados) y los fallos avisan con toast además del Alert dentro
- *   del sheet.
+ *   `showSwipeHandle`, patrón móvil moderno) con el resumen compacto de la
+ *   operación (usuario, renovación de 1 mes, importe en MXN a la derecha en
+ *   grande) y un **selector de método de pago** (RadioGroup en filas-tarjeta,
+ *   una línea de descripción por método):
+ *
+ *   - **Mercado Pago**: la acción primaria «Pagar con Mercado Pago» llama
+ *     `POST /api/mercadopago/orders`, que crea la orden `pending` y la
+ *     preferencia de Mercado Pago (`purpose: wallet_purchase`: solo pagan
+ *     cuentas de Mercado Pago, wallet a wallet), y redirige al `init_point`
+ *     del checkout. La renovación NO ocurre aquí: el webhook
+ *     `POST /api/mercadopago/webhook` verifica el pago contra la API de MP
+ *     (monto, moneda, external_reference) y recién entonces renueva la
+ *     licencia en el panel FlujoTV.
+ *   - **Transferencia bancaria**: muestra los datos bancarios del servidor
+ *     (banco, titular y cuenta con botón de copiar; env `TRANSFER_*`) y la
+ *     subida del ticket (foto o PDF, `useFileUpload`); «Enviar comprobante»
+ *     crea la orden `pending` con el ticket vía
+ *     `POST /api/transferencias/orders`. La renovación llega solo cuando el
+ *     admin aprueba la revisión (`TransferenciasReview`, sección solo admin
+ *     sobre el listado), y el evento en tiempo real `mp_order` refresca todo.
+ *   - **Cupón**: código de 4 dígitos con InputOTP (ejemplo `c-input-otp-2`
+ *     de ReUI); «Aplicar cupón» llama `POST /api/cupones/orders`, que valida
+ *     el código contra los cupones activos (por ahora solo `0000`, compra
+ *     directa sin validaciones) y renueva la licencia al instante. El código
+ *     queda en la orden (`coupon_code`) para la futura conciliación con el
+ *     catálogo de cupones autorizados.
+ *
+ *   El sheet no se cierra mientras procesa (Escape y swipe bloqueados) y los
+ *   fallos avisan con toast además del Alert dentro del sheet.
  * - Al volver de Mercado Pago (back_urls a `/clientes?orden=…&estado=…`) el
  *   componente muestra un Alert con el resultado y sondea
  *   `GET /api/mercadopago/orders/{id}` cada 2 s: al ver la orden `renewed`
@@ -122,13 +139,22 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
+import { REGEXP_ONLY_DIGITS } from "input-otp"
 import {
+  CheckIcon,
   CircleCheckIcon,
+  CopyIcon,
+  FileTextIcon,
+  ImageIcon,
+  LandmarkIcon,
   LoaderCircleIcon,
   PackageOpenIcon,
   PlusIcon,
   RefreshCwIcon,
   SearchIcon,
+  TicketPercentIcon,
+  UploadIcon,
+  WalletIcon,
   XIcon,
   ShoppingCartPlusIcon,
   TriangleAlertIcon,
@@ -136,6 +162,7 @@ import {
 import { toast } from "sonner"
 
 import { useRealtimeEvent } from "@/hooks/use-realtime"
+import { formatBytes, useFileUpload } from "@/hooks/use-file-upload"
 import { Alert, AlertDescription, AlertTitle } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
 import {
@@ -166,12 +193,27 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldTitle,
+} from "@/components/ui/field"
+import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
+import {
+  InputOTP,
+  InputOTPGroup,
+  InputOTPSlot,
+} from "@/components/ui/input-otp"
 import { Progress } from "@/components/ui/progress"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Accordion,
@@ -213,7 +255,16 @@ import {
   fetchFlujoResellers,
   refreshFlujo,
 } from "@/components/lab/flujo-api"
-import { createPaymentOrder, fetchPaymentOrder, type PaymentOrder } from "./pago-api"
+import {
+  createPaymentOrder,
+  createCouponOrder,
+  createTransferOrder,
+  fetchPaymentOrder,
+  retryOrderRenewal,
+  PagoRequestError,
+  type PaymentOrder,
+} from "./pago-api"
+import { TransferenciasReview } from "./transferencias-review"
 import {
   applyFilterQuery,
   matchesFilterRule,
@@ -221,6 +272,15 @@ import {
 import { LAB_FILTER_LABELS } from "@/components/lab/lab-i18n"
 
 type FetchState = "loading" | "success" | "error"
+
+/** Métodos de pago del bottom sheet de renovación. */
+type PayMethod = "mercadopago" | "transferencia" | "cupon"
+
+/** Tamaño máximo del ticket de transferencia (igual que el servidor). */
+const TICKET_MAX_BYTES = 10 * 1024 * 1024
+
+/** Longitud del código de cupón. */
+const COUPON_CODE_LENGTH = 4
 
 /** Iniciales del avatar a partir del nombre de usuario. */
 function initials(userName: string): string {
@@ -499,6 +559,19 @@ interface ClientesAccordionProps {
   returnOrder?: string | null
   /** Estado declarado por el back_url: aprobado | rechazado | pendiente. */
   returnState?: string | null
+  /** Datos bancarios para pagar por transferencia; null = método oculto. */
+  transferBank?: {
+    bank: string
+    account: string
+    holder: string
+  } | null
+  /**
+   * Cupón de QA activado en el servidor (`COUPON_QA_ENABLED=1`); false =
+   * la opción de cupón se oculta en lugar de ofrecer un canje rechazado.
+   */
+  couponEnabled?: boolean
+  /** Perfil admin: muestra la sección de transferencias por revisar. */
+  canReviewTransfers?: boolean
 }
 
 export function ClientesAccordion({
@@ -506,6 +579,9 @@ export function ClientesAccordion({
   priceMxn = null,
   returnOrder = null,
   returnState = null,
+  transferBank = null,
+  couponEnabled = false,
+  canReviewTransfers = false,
 }: ClientesAccordionProps) {
   const [clients, setClients] = useState<FlujoClient[]>([])
   const [clientNames, setClientNames] = useState<Record<string, string>>({})
@@ -522,11 +598,42 @@ export function ClientesAccordion({
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [purchaseTarget, setPurchaseTarget] = useState<FlujoClient | null>(null)
   const [purchasing, setPurchasing] = useState(false)
-  const [purchaseError, setPurchaseError] = useState<string | null>(null)
+  const [payError, setPayError] = useState<string | null>(null)
+  /** Método elegido en el sheet: Mercado Pago por defecto. */
+  const [payMethod, setPayMethod] = useState<PayMethod>("mercadopago")
+  const [submittingTransfer, setSubmittingTransfer] = useState(false)
+  const [submittingCoupon, setSubmittingCoupon] = useState(false)
+  const [couponCode, setCouponCode] = useState("")
+  /**
+   * Orden con renovación fallida pendiente de recuperación en este canje: el
+   * botón principal pasa de «Aplicar cupón» a «Reintentar renovación» (sin
+   * nuevo canje ni nuevo cargo; la clave determinista evita duplicar meses).
+   */
+  const [couponRetryOrderId, setCouponRetryOrderId] = useState<string | null>(
+    null
+  )
+  /**
+   * Id de la intención de canje vigente: se regenera al abrir el sheet y se
+   * conserva entre reintentos del mismo intento, de modo que un reintento
+   * tras una respuesta perdida devuelve la orden original (idempotente en el
+   * servidor) en lugar de sumar otro mes.
+   */
+  const couponRequestIdRef = useRef<string>("")
+  const [accountCopied, setAccountCopied] = useState(false)
   const [pollResult, setPollResult] = useState<{
     status: PollStatus
     order: PaymentOrder | null
   } | null>(null)
+
+  /**
+   * Ticket de la transferencia: un solo archivo (foto o PDF del comprobante),
+   * validado en cliente como en el servidor (tipo y tamaño) para fallar rápido.
+   */
+  const [ticketFiles, ticketActions] = useFileUpload({
+    accept: "image/*,application/pdf",
+    multiple: false,
+    maxSize: TICKET_MAX_BYTES,
+  })
 
   const requestCounter = useRef(0)
   const router = useRouter()
@@ -679,17 +786,26 @@ export function ClientesAccordion({
     }
   }, [reload])
 
-  const openPurchase = useCallback((client: FlujoClient) => {
-    setPurchaseTarget(client)
-    setPurchaseError(null)
-    setPurchaseOpen(true)
-  }, [])
+  const openPurchase = useCallback(
+    (client: FlujoClient) => {
+      setPurchaseTarget(client)
+      setPayMethod("mercadopago")
+      setPayError(null)
+      setCouponCode("")
+      setCouponRetryOrderId(null)
+      couponRequestIdRef.current =
+        typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
+      ticketActions.clearFiles()
+      setPurchaseOpen(true)
+    },
+    [ticketActions]
+  )
 
   const submitPurchase = useCallback(async () => {
     if (!purchaseTarget) return
     const userName = purchaseTarget.userName.trim()
     setPurchasing(true)
-    setPurchaseError(null)
+    setPayError(null)
     try {
       const order = await createPaymentOrder({ userName, months: 1 })
       // Redirección completa al checkout de Mercado Pago (wallet_purchase):
@@ -701,10 +817,53 @@ export function ClientesAccordion({
         error instanceof Error
           ? error.message
           : "No se pudo iniciar el pago."
-      setPurchaseError(message)
+      setPayError(message)
       setPurchasing(false)
     }
   }, [purchaseTarget])
+
+  /**
+   * Envía la renovación por transferencia bancaria: crea la orden `pending`
+   * con el ticket adjunto y cierra el sheet. La renovación llega cuando el
+   * admin aprueba la revisión; el evento en tiempo real refresca la fila.
+   */
+  const submitTransfer = useCallback(async () => {
+    if (!purchaseTarget) return
+    const ticket = ticketFiles.files[0]?.file
+    if (!(ticket instanceof File)) return
+    const userName = purchaseTarget.userName.trim()
+    setSubmittingTransfer(true)
+    setPayError(null)
+    try {
+      await createTransferOrder({ userName, months: 1, file: ticket })
+      setPurchaseOpen(false)
+      toast.success("Comprobante enviado", {
+        description: `La renovación de ${userName} se aplicará en cuanto se confirme el pago.`,
+      })
+    } catch (error) {
+      setPayError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo enviar el comprobante."
+      )
+    } finally {
+      setSubmittingTransfer(false)
+    }
+  }, [purchaseTarget, ticketFiles])
+
+  /** Copia la cuenta bancaria al portapapeles con feedback breve. */
+  const copyAccount = useCallback(() => {
+    if (!transferBank) return
+    navigator.clipboard
+      .writeText(transferBank.account)
+      .then(() => {
+        setAccountCopied(true)
+        window.setTimeout(() => setAccountCopied(false), 2000)
+      })
+      .catch(() => {
+        toast.error("No se pudo copiar la cuenta.")
+      })
+  }, [transferBank])
 
   /** Refresca una fila con la lectura en vivo del cliente en el panel. */
   const refreshRow = useCallback((userName: string) => {
@@ -718,6 +877,101 @@ export function ClientesAccordion({
       })
       .catch(() => {})
   }, [])
+
+  /**
+   * Canjea el cupón: el servidor valida el código contra los cupones activos
+   * (0000 con `COUPON_QA_ENABLED`) y, si es válido, renueva la licencia al
+   * instante. El canje es idempotente por `couponRequestIdRef`: un reintento
+   * tras una respuesta perdida devuelve la orden original en lugar de sumar
+   * otro mes.
+   */
+  const submitCoupon = useCallback(async () => {
+    if (!purchaseTarget || couponCode.length !== COUPON_CODE_LENGTH) return
+    const userName = purchaseTarget.userName.trim()
+    const requestId = couponRequestIdRef.current
+    if (requestId.length === 0) return
+    setSubmittingCoupon(true)
+    setPayError(null)
+    try {
+      const result = await createCouponOrder({
+        userName,
+        months: 1,
+        code: couponCode,
+        requestId,
+      })
+      if (result.status === "renewal_failed") {
+        // El canje quedó registrado pero la renovación no: el botón principal
+        // pasa a reintentar la renovación (misma orden, sin nuevo canje).
+        setCouponRetryOrderId(result.orderId)
+        setPayError(
+          `El cupón se aceptó y quedó registrado (orden ${result.orderId.slice(0, 8)}…), pero la renovación falló, probablemente por lentitud del panel de licencias. Pulsa «Reintentar renovación»: no se vuelve a canjar ni suma meses extra.`
+        )
+        refreshRow(userName)
+      } else {
+        setPurchaseOpen(false)
+        toast.success("Renovación aplicada", {
+          description: `${userName} · 1 mes · ${formatMxn(result.amount)}`,
+        })
+        refreshRow(userName)
+      }
+    } catch (error) {
+      // Con el panel de licencias lento la respuesta puede perderse después
+      // de que el cupón se aplicó y renovó: refresca la fila para que la
+      // nueva expiración sea visible. Pulsar de nuevo es seguro: el mismo
+      // request_id devuelve la orden original, no un canje nuevo.
+      refreshRow(userName)
+      const ambiguous =
+        error instanceof PagoRequestError &&
+        (error.code === "network_error" ||
+          error.code === "invalid_response" ||
+          error.code === "timeout")
+      const detail =
+        error instanceof Error
+          ? error.message
+          : "No se pudo aplicar el cupón."
+      setPayError(
+        ambiguous
+          ? `${detail} Puedes pulsar «Aplicar cupón» de nuevo: el canje no se duplica.`
+          : detail
+      )
+    } finally {
+      setSubmittingCoupon(false)
+    }
+  }, [purchaseTarget, couponCode, refreshRow])
+
+  /**
+   * Reintenta la renovación de la orden con renovación fallida de este canje:
+   * sin nuevo cargo ni canje; la clave determinista de la orden evita sumar
+   * meses dos veces.
+   */
+  const retryCouponRenewal = useCallback(async () => {
+    if (!couponRetryOrderId || !purchaseTarget) return
+    const userName = purchaseTarget.userName.trim()
+    setSubmittingCoupon(true)
+    setPayError(null)
+    try {
+      const result = await retryOrderRenewal(couponRetryOrderId)
+      if (result.status === "renewal_failed") {
+        setPayError(
+          `La renovación volvió a fallar (orden ${couponRetryOrderId.slice(0, 8)}…). Quedó registrada para revisión; inténtalo de nuevo en unos minutos.`
+        )
+      } else {
+        setPurchaseOpen(false)
+        toast.success("Renovación aplicada", {
+          description: `${userName} · 1 mes`,
+        })
+        refreshRow(userName)
+      }
+    } catch (error) {
+      setPayError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo reintentar la renovación."
+      )
+    } finally {
+      setSubmittingCoupon(false)
+    }
+  }, [couponRetryOrderId, purchaseTarget, refreshRow])
 
   /**
    * Retorno del checkout (`?orden=…&estado=…`): sondea el estado de la orden
@@ -1088,6 +1342,14 @@ export function ClientesAccordion({
         </p>
       ) : null}
 
+      {/*
+       * Revisión de transferencias (solo admin): la sección se monta sola
+       * cuando hay órdenes pendientes y desaparece al vaciarse.
+       */}
+      {canReviewTransfers ? (
+        <TransferenciasReview onApproved={refreshRow} />
+      ) : null}
+
       {fetchState === "success" && clients.length > 0 ? (
         <Filters
           fields={filterFields}
@@ -1307,7 +1569,9 @@ export function ClientesAccordion({
                     variant="ghost"
                     size="icon"
                     onClick={() => openPurchase(client)}
-                    disabled={purchasing}
+                    disabled={
+                      purchasing || submittingTransfer || submittingCoupon
+                    }
                     aria-label={`Comprar 1 mes para ${client.userName}`}
                     className="pointer-events-auto h-9 w-9 shrink-0 rounded-full text-black dark:text-white transition-[transform,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-90 active:bg-primary/15 active:text-primary motion-reduce:active:scale-100"
                   >
@@ -1367,49 +1631,275 @@ export function ClientesAccordion({
       </AlertDialog>
 
       {/*
-       * Bottom sheet de compra (Drawer de Base UI, borde inferior con asa de
+       * Bottom sheet de pago (Drawer de Base UI, borde inferior con asa de
        * arrastre y swipe para cerrar). Controlado: el botón de compra de la
        * fila fija el cliente objetivo y abre; Cancelar cierra vía DrawerClose.
        * Mientras se procesa el pago no se cierra ni con Escape ni con swipe.
+       *
+       * Estructura: resumen compacto (usuario, plazo, importe), selector de
+       * método (radio en tarjetas-fila: Mercado Pago o transferencia) y el
+       * panel del método activo; la acción primaria del pie cambia con el
+       * método. Sin párrafos explicativos: cada método describe su flujo en
+       * una línea dentro de su propia fila.
        */}
       <Drawer
         open={purchaseOpen}
         onOpenChange={(open) => {
-          if (!open && purchasing) return
+          if (!open && (purchasing || submittingTransfer || submittingCoupon))
+            return
           setPurchaseOpen(open)
         }}
         showSwipeHandle
       >
-        <DrawerContent className="max-h-[80vh]">
+        <DrawerContent>
           <DrawerHeader>
-            <DrawerTitle>¿Confirmar la compra?</DrawerTitle>
-            <DrawerDescription>
-              Se abrirá el checkout de Mercado Pago para pagar con tu cuenta de
-              Mercado Pago. La licencia se renueva automáticamente cuando se
-              confirma el pago.
-            </DrawerDescription>
+            <DrawerTitle>Renovar licencia</DrawerTitle>
+            <DrawerDescription>Elige cómo pagar.</DrawerDescription>
           </DrawerHeader>
-          <div className="no-scrollbar flex flex-col gap-3 overflow-y-auto px-4">
+          <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+            {/*
+             * Resumen: solo lo relevante — a quién, cuánto y por cuánto
+             * tiempo. El importe manda a la derecha en grande.
+             */}
             {purchaseTarget ? (
-              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-xs">
-                <dt className="text-muted-foreground">Usuario</dt>
-                <dd className="truncate font-medium">
-                  {purchaseTarget.userName}
-                </dd>
-                <dt className="text-muted-foreground">Renovación</dt>
-                <dd className="font-medium">1 mes</dd>
-                <dt className="text-muted-foreground">Importe</dt>
-                <dd className="font-medium">
-                  {priceMxn !== null ? formatMxn(priceMxn) : "No disponible"}
-                </dd>
-                <dt className="text-muted-foreground">Vigencia actual</dt>
-                <dd className="font-medium">
-                  {purchaseTarget.expiresAt
-                    ? formatFlujoDate(purchaseTarget.expiresAt)
-                    : "—"}
-                </dd>
-              </dl>
+              <div className="flex items-end justify-between gap-3">
+                <div className="min-w-0 flex flex-col gap-0.5">
+                  <span className="truncate text-sm font-semibold tracking-tight">
+                    {purchaseTarget.userName}
+                  </span>
+                  <span className="text-muted-foreground text-xs">
+                    Renovación de 1 mes
+                  </span>
+                </div>
+                <span className="text-lg font-semibold tabular-nums">
+                  {priceMxn !== null ? formatMxn(priceMxn) : "—"}
+                </span>
+              </div>
             ) : null}
+
+            {/*
+             * Selector de método: filas-tarjeta con radio al final; la
+             * seleccionada se resalta sola (has-data-checked del FieldLabel).
+             * La transferencia solo se ofrece si el servidor tiene los datos
+             * bancarios configurados; el cupón solo con el modo QA activado
+             * (`COUPON_QA_ENABLED=1`).
+             */}
+            <RadioGroup
+              value={payMethod}
+              onValueChange={(value) => {
+                setPayMethod(value as PayMethod)
+                setPayError(null)
+              }}
+              aria-label="Método de pago"
+            >
+              <FieldGroup className="gap-0">
+                <Field>
+                  <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                    <span className="flex min-w-0 items-center gap-2.5">
+                      <WalletIcon
+                        aria-hidden="true"
+                        className="size-4 shrink-0 opacity-60"
+                      />
+                      <FieldContent className="min-w-0">
+                        <FieldTitle>Mercado Pago</FieldTitle>
+                        <FieldDescription className="text-xs">
+                          En línea · renovación automática
+                        </FieldDescription>
+                      </FieldContent>
+                    </span>
+                    <RadioGroupItem value="mercadopago" />
+                  </FieldLabel>
+                </Field>
+                {transferBank ? (
+                  <>
+                    <Separator />
+                    <Field>
+                      <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <LandmarkIcon
+                            aria-hidden="true"
+                            className="size-4 shrink-0 opacity-60"
+                          />
+                          <FieldContent className="min-w-0">
+                            <FieldTitle>Transferencia</FieldTitle>
+                            <FieldDescription className="text-xs">
+                              Sube tu comprobante · activación al confirmar
+                            </FieldDescription>
+                          </FieldContent>
+                        </span>
+                        <RadioGroupItem value="transferencia" />
+                      </FieldLabel>
+                    </Field>
+                  </>
+                ) : null}
+                {couponEnabled ? (
+                  <>
+                    <Separator />
+                    <Field>
+                      <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <TicketPercentIcon
+                            aria-hidden="true"
+                            className="size-4 shrink-0 opacity-60"
+                          />
+                          <FieldContent className="min-w-0">
+                            <FieldTitle>Cupón</FieldTitle>
+                            <FieldDescription className="text-xs">
+                              Código de {COUPON_CODE_LENGTH} dígitos ·
+                              activación inmediata
+                            </FieldDescription>
+                          </FieldContent>
+                        </span>
+                        <RadioGroupItem value="cupon" />
+                      </FieldLabel>
+                    </Field>
+                  </>
+                ) : null}
+              </FieldGroup>
+            </RadioGroup>
+
+            {/*
+             * Panel del método activo: los datos bancarios para copiar y el
+             * ticket a subir. Solo aparece con transferencia seleccionada.
+             */}
+            {transferBank && payMethod === "transferencia" ? (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Banco</span>
+                    <span className="font-medium">{transferBank.bank}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Titular</span>
+                    <span className="truncate font-medium">
+                      {transferBank.holder}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">Cuenta</span>
+                    <span className="flex items-center gap-1 font-medium tabular-nums">
+                      {transferBank.account}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon-xs"
+                        onClick={copyAccount}
+                        aria-label="Copiar la cuenta bancaria"
+                      >
+                        {accountCopied ? (
+                          <CheckIcon aria-hidden="true" />
+                        ) : (
+                          <CopyIcon aria-hidden="true" />
+                        )}
+                      </Button>
+                    </span>
+                  </div>
+                </div>
+                <Separator />
+                {/*
+                 * Ticket: un archivo (foto o PDF). Sin archivo, botón de
+                 * subida a ancho completo; con archivo, el chip con quitar.
+                 */}
+                <input
+                  {...ticketActions.getInputProps({ className: "hidden" })}
+                  aria-hidden="true"
+                  tabIndex={-1}
+                />
+                {ticketFiles.files.length === 0 ? (
+                  <div className="flex flex-col gap-1.5">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="w-full border-dashed"
+                      onClick={ticketActions.openFileDialog}
+                      disabled={submittingTransfer}
+                    >
+                      <UploadIcon aria-hidden="true" />
+                      Subir ticket
+                    </Button>
+                    <p className="text-muted-foreground text-xs">
+                      Foto o PDF del comprobante, hasta{" "}
+                      {formatBytes(TICKET_MAX_BYTES)}.
+                    </p>
+                  </div>
+                ) : (
+                  <ul className="flex flex-wrap items-center gap-1.5">
+                    {ticketFiles.files.map((entry) => {
+                      const file = entry.file
+                      const Icon = file.type.startsWith("image/")
+                        ? ImageIcon
+                        : FileTextIcon
+                      return (
+                        <li key={entry.id} className="flex items-center gap-0.5">
+                          <Badge
+                            variant="secondary"
+                            radius="full"
+                            className="max-w-56 gap-1.5"
+                            title={`${file.name} · ${formatBytes(file.size)}`}
+                          >
+                            <Icon className="size-3" />
+                            <span className="min-w-0 truncate">{file.name}</span>
+                            <span className="tabular-nums opacity-70">
+                              {formatBytes(file.size)}
+                            </span>
+                          </Badge>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon-xs"
+                            disabled={submittingTransfer}
+                            onClick={() => ticketActions.removeFile(entry.id)}
+                            aria-label={`Quitar ${file.name}`}
+                          >
+                            <XIcon aria-hidden="true" />
+                          </Button>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                )}
+                {ticketFiles.errors.length > 0 ? (
+                  <p className="text-destructive text-xs" role="alert">
+                    {ticketFiles.errors[0]}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {/*
+             * Panel del cupón: código de 4 dígitos con InputOTP (un dígito
+             * por celda). El servidor valida el código contra los cupones
+             * activos al aplicar; un código inválido avisa con el Alert de
+             * error compartido de abajo.
+             */}
+            {payMethod === "cupon" ? (
+              <Field>
+                <FieldLabel htmlFor="coupon-code">Código del cupón</FieldLabel>
+                <div className="flex justify-center pt-1">
+                  <InputOTP
+                    id="coupon-code"
+                    maxLength={COUPON_CODE_LENGTH}
+                    pattern={REGEXP_ONLY_DIGITS}
+                    value={couponCode}
+                    onChange={(value) => {
+                      setCouponCode(value)
+                      setPayError(null)
+                    }}
+                    disabled={submittingCoupon}
+                  >
+                    <InputOTPGroup>
+                      {Array.from(
+                        { length: COUPON_CODE_LENGTH },
+                        (_, index) => (
+                          <InputOTPSlot key={index} index={index} />
+                        )
+                      )}
+                    </InputOTPGroup>
+                  </InputOTP>
+                </div>
+              </Field>
+            ) : null}
+
             {priceMxn === null ? (
               <Alert variant="warning">
                 <TriangleAlertIcon aria-hidden="true" />
@@ -1417,39 +1907,112 @@ export function ClientesAccordion({
                 <AlertDescription>
                   <p>
                     El servidor no tiene definido el precio de la licencia
-                    (LICENSE_PRICE_MXN). No se puede iniciar el pago.
+                    (LICENSE_PRICE_MXN).
                   </p>
                 </AlertDescription>
               </Alert>
             ) : null}
-            {purchaseError ? (
+            {payError ? (
               <Alert variant="destructive">
                 <TriangleAlertIcon aria-hidden="true" />
-                <AlertTitle>La compra no se completó</AlertTitle>
+                <AlertTitle>El pago no se completó</AlertTitle>
                 <AlertDescription>
-                  <p>{purchaseError}</p>
+                  <p>{payError}</p>
                 </AlertDescription>
               </Alert>
             ) : null}
           </div>
           <DrawerFooter>
-            <Button
-              size="lg"
-              onClick={() => void submitPurchase()}
-              disabled={purchasing || priceMxn === null}
-            >
-              {purchasing ? (
-                <>
-                  <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
-                  Abriendo checkout…
-                </>
-              ) : (
-                "Pagar con Mercado Pago"
-              )}
-            </Button>
+            {payMethod === "cupon" && couponRetryOrderId ? (
+              <Button
+                size="lg"
+                onClick={() => void retryCouponRenewal()}
+                disabled={submittingCoupon}
+              >
+                {submittingCoupon ? (
+                  <>
+                    <LoaderCircleIcon
+                      aria-hidden="true"
+                      className="animate-spin"
+                    />
+                    Reintentando…
+                  </>
+                ) : (
+                  "Reintentar renovación"
+                )}
+              </Button>
+            ) : payMethod === "cupon" ? (
+              <Button
+                size="lg"
+                onClick={() => void submitCoupon()}
+                disabled={
+                  submittingCoupon ||
+                  couponCode.length !== COUPON_CODE_LENGTH ||
+                  priceMxn === null
+                }
+              >
+                {submittingCoupon ? (
+                  <>
+                    <LoaderCircleIcon
+                      aria-hidden="true"
+                      className="animate-spin"
+                    />
+                    Aplicando…
+                  </>
+                ) : (
+                  "Aplicar cupón"
+                )}
+              </Button>
+            ) : payMethod === "transferencia" && transferBank ? (
+              <Button
+                size="lg"
+                onClick={() => void submitTransfer()}
+                disabled={
+                  submittingTransfer ||
+                  ticketFiles.files.length === 0 ||
+                  priceMxn === null
+                }
+              >
+                {submittingTransfer ? (
+                  <>
+                    <LoaderCircleIcon
+                      aria-hidden="true"
+                      className="animate-spin"
+                    />
+                    Enviando…
+                  </>
+                ) : (
+                  "Enviar comprobante"
+                )}
+              </Button>
+            ) : (
+              <Button
+                size="lg"
+                onClick={() => void submitPurchase()}
+                disabled={purchasing || priceMxn === null}
+              >
+                {purchasing ? (
+                  <>
+                    <LoaderCircleIcon
+                      aria-hidden="true"
+                      className="animate-spin"
+                    />
+                    Abriendo checkout…
+                  </>
+                ) : (
+                  "Pagar con Mercado Pago"
+                )}
+              </Button>
+            )}
             <DrawerClose
               render={
-                <Button variant="outline" size="lg" disabled={purchasing}>
+                <Button
+                  variant="outline"
+                  size="lg"
+                  disabled={
+                    purchasing || submittingTransfer || submittingCoupon
+                  }
+                >
                   Cancelar
                 </Button>
               }

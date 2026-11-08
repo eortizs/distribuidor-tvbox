@@ -22,6 +22,50 @@ export function licensePriceMxnOrNull(): number | null {
   return raw.length > 0 && Number.isFinite(value) && value > 0 ? value : null
 }
 
+export interface TransferBankConfig {
+  /** Nombre del banco receptor (p. ej. BBVA). */
+  bank: string
+  /** Cuenta receptora: CLABE, número de tarjeta o cuenta. */
+  account: string
+  /** Titular de la cuenta, tal como debe verse a nombre de quién se paga. */
+  holder: string
+}
+
+/**
+ * Cupón de QA (0000): por defecto DESACTIVADO. Es un código de prueba sin
+ * catálogo ni vigencia: si quedara siempre activo, cualquier cuenta con
+ * alcance podría renovar licencias gratis sin límite. Solo con
+ * `COUPON_QA_ENABLED=1` en el servidor se acepta el canje, y con el tope
+ * diario por comprador (`COUPON_QA_DAILY_LIMIT`) un código de prueba no se
+ * vuelve una fuente ilimitada de renovaciones.
+ */
+export function isCouponQaEnabled(): boolean {
+  return process.env.COUPON_QA_ENABLED?.trim() === "1"
+}
+
+/** Máximo de canjes de cupón por comprador en 24 horas. */
+export function couponQaDailyLimit(): number {
+  const raw = process.env.COUPON_QA_DAILY_LIMIT?.trim() ?? ""
+  const value = Number(raw)
+  return raw.length > 0 && Number.isInteger(value) && value > 0 ? value : 3
+}
+
+/**
+ * Datos bancarios que la UI muestra para pagar por transferencia, desde
+ * `.env` (`TRANSFER_BANK_NAME`, `TRANSFER_ACCOUNT`, `TRANSFER_HOLDER`).
+ * `null` si falta alguno: la opción de transferencia no se muestra en el
+ * sheet en lugar de ofrecer un pago que nadie puede recibir.
+ */
+export function transferBankDataOrNull(): TransferBankConfig | null {
+  const bank = process.env.TRANSFER_BANK_NAME?.trim() ?? ""
+  const account = process.env.TRANSFER_ACCOUNT?.trim() ?? ""
+  const holder = process.env.TRANSFER_HOLDER?.trim() ?? ""
+  if (bank.length === 0 || account.length === 0 || holder.length === 0) {
+    return null
+  }
+  return { bank, account, holder }
+}
+
 /**
  * Configuración del motor de pagos: credencial del vendedor, precio de la
  * renovación mensual y URL pública para las URLs de retorno y de notificación
