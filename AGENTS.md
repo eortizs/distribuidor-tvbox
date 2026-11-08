@@ -21,7 +21,7 @@ Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbo
 ### Procedimiento de despliegue (obligatorio tras cada cambio)
 
 ```bash
-node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs
+node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs && node db/apply-shopping-list.mjs
 npm run build && pm2 reload distribuidor-tvbox
 ```
 
@@ -35,6 +35,7 @@ npm run build && pm2 reload distribuidor-tvbox
 - `TRANSFER_BANK_NAME`, `TRANSFER_ACCOUNT`, `TRANSFER_HOLDER`: datos bancarios de la transferencia; sin las tres, el método se oculta.
 - `COUPON_QA_ENABLED=1`: activa el cupón de QA `0000` (pago con cupón). **Desactivado por defecto**: un cupón siempre activo permitiría renovaciones gratis sin límite. Con `COUPON_QA_DAILY_LIMIT` (default 3) se topea los canjes por comprador en 24 h. El canje es idempotente por `request_id` (`mp_orders.coupon_request_id`, índice único parcial).
 - `FLUJO_API_KEY` (o la clave guardada en Configuración → API de licencias): clave del panel FlujoTV.
+- `LISTA_COMPRAS_MODEL`: opcional; modelo del intérprete de Lista de compras (`/api/lista-compras/interpretar`). Sin ella usa `ASISTENTE_MODEL` con la misma `OPENROUTER_API_KEY`.
 
 ### Advertencia crítica
 

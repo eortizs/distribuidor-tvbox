@@ -2,6 +2,7 @@ import {
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
+  ShoppingBasketIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -53,6 +54,13 @@ export const MODULOS: Modulo[] = [
       "Cálculos rápidos con porcentaje comercial, desde botones o teclado.",
     href: "/modulos/calculadora",
     icon: CalculatorIcon,
+  },
+  {
+    title: "Lista de compras",
+    description:
+      "Dicta o escribe tu lista con IA: productos por categoría, cantidades y casillas de comprado.",
+    href: "/modulos/lista-de-compras",
+    icon: ShoppingBasketIcon,
   },
 ]
 
