@@ -292,6 +292,10 @@ export async function deleteAccount(input: {
       },
       tx
     )
+    // Los tickets se quitan antes de borrar al usuario: su FK hacia
+    // user_files es RESTRICT (protege la foto del borrado suelto) y la
+    // cascada del usuario no garantiza un orden que la satisfaga.
+    await tx.query("DELETE FROM tickets WHERE user_id = $1", [input.userId])
     await deleteUser(input.userId, tx)
     return archived
   })

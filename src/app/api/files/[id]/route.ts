@@ -4,6 +4,7 @@ import { Readable } from "node:stream"
 
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { errorResponse } from "@/server/http"
+import { ticketReferenciaActiva } from "@/server/tickets/repository"
 import {
   deleteUserFile,
   getUserFile,
@@ -143,6 +144,16 @@ export async function DELETE(_request: Request, ctx: RouteContext) {
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params
+    // La foto de un ticket forma parte del registro guardado: no se borra
+    // por esta vía aunque el dueño pida lo contrario (el registro no tiene
+    // borrado individual en esta versión).
+    if (await ticketReferenciaActiva(id)) {
+      throw new AppError(
+        409,
+        "archivo_vinculado_a_ticket",
+        "Esta imagen pertenece a un ticket guardado y no se puede borrar por separado."
+      )
+    }
     const deleted = await deleteUserFile(user.id, id)
     if (!deleted) throw new AppError(404, "not_found", "Archivo no encontrado")
 

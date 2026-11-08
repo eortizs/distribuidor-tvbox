@@ -2,6 +2,7 @@ import {
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
+  ReceiptTextIcon,
   ShoppingBasketIcon,
   type LucideIcon,
 } from "lucide-react"
@@ -61,6 +62,13 @@ export const MODULOS: Modulo[] = [
       "Dicta o escribe tu lista con IA: productos por categoría, cantidades y casillas de comprado.",
     href: "/modulos/lista-de-compras",
     icon: ShoppingBasketIcon,
+  },
+  {
+    title: "Alta de tickets",
+    description:
+      "Toma una foto del ticket o elige un archivo y la IA extrae sus datos para revisarlos y confirmarlos.",
+    href: "/modulos/alta-de-tickets",
+    icon: ReceiptTextIcon,
   },
 ]
 

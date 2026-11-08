@@ -29,11 +29,24 @@ const client = new Client({ connectionString: process.env.DATABASE_URL });
 await client.connect();
 
 try {
+  // Las fotos de tickets (módulo Alta de tickets, tabla `tickets`) nunca
+  // caducan: forman parte del registro guardado. Si la tabla todavía no
+  // existe (migración pendiente), el LEFT JOIN fallaría, así que se resuelve
+  // con un NOT EXISTS tolerante: primero se comprueba la existencia.
+  const ticketsTable = await client.query(
+    `SELECT to_regclass('public.tickets') AS reg`
+  );
+  const hayTickets = ticketsTable.rows[0]?.reg != null;
+  const exclusionTickets = hayTickets
+    ? `AND NOT EXISTS (SELECT 1 FROM tickets t WHERE t.file_id = user_files.id)`
+    : "";
+
   const result = await client.query(
     `SELECT id, user_id, stored_name
        FROM user_files
       WHERE kind = 'attachment'
         AND created_at < now() - ($1 || ' days')::interval
+        ${exclusionTickets}
       ORDER BY created_at`,
     [String(TTL_DAYS)]
   );

@@ -19,6 +19,13 @@ export interface CreateEntityOptions {
   source?: string
   occurredAt?: string
   provenance?: { fileHash?: string; rowIdx?: number }
+  /**
+   * Publica el evento en el bus de tiempo real (default true). Los módulos
+   * con privacidad estricta por propietario (p. ej. TicketCompra) lo pasan
+   * en false: el SSE de admin reenvía todos los eventos `entity`, así que
+   * publicarlos filtraría su existencia.
+   */
+  publish?: boolean
 }
 
 export interface MutationOptions {
@@ -26,6 +33,8 @@ export interface MutationOptions {
   reason?: string
   occurredAt?: string
   ownedByDistribuidorId?: string
+  /** Igual que en CreateEntityOptions; default true. */
+  publish?: boolean
 }
 
 const FORBIDDEN_PROPERTY_KEYS = new Set([
@@ -40,6 +49,8 @@ export interface OwnershipScope {
 
 export interface ListEntitiesParams {
   entityName?: string
+  /** Excluye un entity_name del listado (p. ej. TicketCompra, que va por su propio módulo). */
+  excludeEntityName?: string
   q?: string
   distribuidorId?: string
   includeDeleted?: boolean
@@ -293,11 +304,13 @@ export async function createEntity(
       occurredAt,
     })
 
-    await publishRealtime(tx, {
-      kind: "entity",
-      entityId: doc.id,
-      ...entityScope(doc),
-    })
+    if (options.publish !== false) {
+      await publishRealtime(tx, {
+        kind: "entity",
+        entityId: doc.id,
+        ...entityScope(doc),
+      })
+    }
 
     const inserted = await tx.query("SELECT * FROM entities WHERE id = $1", [
       doc.id,
@@ -341,6 +354,10 @@ export async function listEntities(
   if (params.entityName) {
     values.push(params.entityName)
     conditions.push(`entity_name = $${values.length}`)
+  }
+  if (params.excludeEntityName) {
+    values.push(params.excludeEntityName)
+    conditions.push(`entity_name <> $${values.length}`)
   }
   if (params.q) {
     const escaped = params.q.replace(/[\\%_]/g, (match) => `\\${match}`)
@@ -473,11 +490,13 @@ export async function updatePropertiesInTx(
     occurredAt,
   })
 
-  await publishRealtime(client, {
-    kind: "entity",
-    entityId: id,
-    ...entityScope(newDoc),
-  })
+  if (options.publish !== false) {
+    await publishRealtime(client, {
+      kind: "entity",
+      entityId: id,
+      ...entityScope(newDoc),
+    })
+  }
 
   return getEntityInsideTransaction(client, id)
 }
@@ -537,11 +556,13 @@ export async function softDeleteEntitiesByOwner(
         occurredAt,
       })
 
-      await publishRealtime(tx, {
-        kind: "entity",
-        entityId: id,
-        ...entityScope(doc),
-      })
+      if (options.publish !== false) {
+        await publishRealtime(tx, {
+          kind: "entity",
+          entityId: id,
+          ...entityScope(doc),
+        })
+      }
     }
 
     return result.rowCount ?? 0
@@ -608,11 +629,13 @@ export async function changeState(
       occurredAt,
     })
 
-    await publishRealtime(client, {
-      kind: "entity",
-      entityId: id,
-      ...entityScope(newDoc),
-    })
+    if (options.publish !== false) {
+      await publishRealtime(client, {
+        kind: "entity",
+        entityId: id,
+        ...entityScope(newDoc),
+      })
+    }
 
     const projected = await projectStatusLog(client, id)
     await client.query(

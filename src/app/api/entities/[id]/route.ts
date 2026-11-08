@@ -1,6 +1,8 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { ACCOUNT_ENTITY_NAME } from "@/server/auth/types"
+import { ENTITY_NAME_TICKET } from "@/lib/tickets"
 import { errorResponse, readJsonBody } from "@/server/http"
+import { assertPropietarioTicket } from "@/server/tickets/repository"
 import {
   changeState,
   getEntity,
@@ -25,6 +27,9 @@ export async function GET(_request: Request, ctx: RouteContext) {
 
     const { id } = await ctx.params
     const entity = await getEntity(id, scopeFor(user))
+    // TicketCompra es privado del propietario, sea cual sea el rol: un
+    // admin que no es dueño responde 404 (sin revelar existencia).
+    assertPropietarioTicket(entity.doc, user.id)
     return Response.json({ ok: true, data: entity })
   } catch (error) {
     return errorResponse(error)
@@ -85,6 +90,15 @@ export async function PATCH(request: Request, ctx: RouteContext) {
         403,
         "reserved_entity_name",
         "Entity 'Cuenta' is reserved for account management"
+      )
+    }
+    // TicketCompra solo se muta por su módulo dedicado (/api/tickets), que
+    // garantiza foto, journal y estados; el PATCH genérico lo bloquea.
+    if (current.doc.entityName === ENTITY_NAME_TICKET) {
+      throw new AppError(
+        403,
+        "reserved_entity_name",
+        "Entity 'TicketCompra' is managed by the tickets module"
       )
     }
 

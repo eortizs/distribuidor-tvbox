@@ -12,6 +12,7 @@ import {
 import { createEntity } from "@/server/umejson/repository"
 import { type UmeJson } from "@/server/umejson/types"
 import { ACCOUNT_ENTITY_NAME } from "@/server/auth/types"
+import { ENTITY_NAME_TICKET } from "@/lib/tickets"
 
 export async function POST(request: Request) {
   try {
@@ -71,6 +72,21 @@ export async function POST(request: Request) {
           error: {
             code: "reserved_entity_name",
             message: "Entity name 'Cuenta' is reserved for account management",
+          },
+        },
+        { status: 403 }
+      )
+    }
+    // TicketCompra solo se crea por el módulo Alta de tickets: garantiza la
+    // foto privada, la fila de control y la idempotencia del análisis.
+    if (doc.entityName === ENTITY_NAME_TICKET) {
+      return Response.json(
+        {
+          ok: false,
+          source: "umejson_api",
+          error: {
+            code: "reserved_entity_name",
+            message: "Entity name 'TicketCompra' is reserved for the tickets module",
           },
         },
         { status: 403 }
