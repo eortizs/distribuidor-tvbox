@@ -21,7 +21,7 @@ Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbo
 ### Procedimiento de despliegue (obligatorio tras cada cambio)
 
 ```bash
-node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs && node db/apply-mp-refunds.mjs && node db/apply-shopping-list.mjs
+node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs && node db/apply-mp-refunds.mjs && node db/apply-shopping-list.mjs && node db/apply-coupon-limit.mjs && node db/apply-coupon-monthly-limit.mjs
 npm run build && pm2 reload distribuidor-tvbox
 ```
 
@@ -33,7 +33,7 @@ npm run build && pm2 reload distribuidor-tvbox
 
 - `MERCADOPAGO_ACCESS_TOKEN`, `LICENSE_PRICE_MXN`, `SITE_URL`: motor de pagos (sin ellas no hay checkout ni precio).
 - `TRANSFER_BANK_NAME`, `TRANSFER_ACCOUNT`, `TRANSFER_HOLDER`: datos bancarios de la transferencia; sin las tres, el método se oculta.
-- `COUPON_QA_ENABLED=1`: activa el cupón de QA `0000` (pago con cupón). **Desactivado por defecto**: un cupón siempre activo permitiría renovaciones gratis sin límite. Con `COUPON_QA_DAILY_LIMIT` (default 3) se topea los canjes por comprador en 24 h. El canje es idempotente por `request_id` (`mp_orders.coupon_request_id`, índice único parcial).
+- `COUPON_QA_ENABLED=1`: activa el cupón de QA `0000` (pago con cupón). **Desactivado por defecto**: un cupón siempre activo permitiría renovaciones gratis sin límite. Con `COUPON_QA_DAILY_LIMIT` (default 3) se topea los canjes por comprador en 24 h y con `COUPON_QA_MONTHLY_LIMIT` (default 10) el acumulado en 30 días; ambos con override por usuario desde `/users` (icono de permisos → `users.coupon_daily_limit` / `users.coupon_monthly_limit`). El canje es idempotente por `request_id` (`mp_orders.coupon_request_id`, índice único parcial).
 - `FLUJO_API_KEY` (o la clave guardada en Configuración → API de licencias): clave del panel FlujoTV.
 - `LISTA_COMPRAS_MODEL`: opcional; modelo del intérprete de Lista de compras (`/api/lista-compras/interpretar`). Sin ella usa `ASISTENTE_MODEL` con la misma `OPENROUTER_API_KEY`.
 

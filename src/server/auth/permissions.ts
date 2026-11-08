@@ -54,11 +54,16 @@ export async function listDeniedSectionsByUser(): Promise<
 
 /**
  * Guarda la matriz completa de un usuario: una fila por sección con su
- * visibilidad. `visibleKeys` debe incluir al menos una sección.
+ * visibilidad. `visibleKeys` debe incluir al menos una sección. Los topes de
+ * cupón (`couponDailyLimit` diario y `couponMonthlyLimit` acumulado, null =
+ * valor global del servidor) se persisten en la misma transacción y con el
+ * mismo evento de refresco.
  */
 export async function setSectionPermissions(
   userId: string,
-  visibleKeys: string[]
+  visibleKeys: string[],
+  couponDailyLimit: number | null,
+  couponMonthlyLimit: number | null
 ): Promise<void> {
   const unique = [...new Set(visibleKeys)]
   if (unique.length === 0) {
@@ -79,6 +84,10 @@ export async function setSectionPermissions(
         [userId, key, unique.includes(key)]
       )
     }
+    await client.query(
+      "UPDATE users SET coupon_daily_limit = $2, coupon_monthly_limit = $3 WHERE id = $1",
+      [userId, couponDailyLimit, couponMonthlyLimit]
+    )
     // El propio usuario recibe el evento (SSE) y refresca su navegación.
     await publishRealtime(client, { kind: "users", entityId: userId })
   })

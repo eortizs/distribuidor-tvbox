@@ -76,6 +76,10 @@ export interface UserListItem {
   distribuidorName: string | null
   /** Claves de sección de la barra inferior que esta cuenta no ve. */
   deniedSections: string[]
+  /** Override de tope diario de cupones; null = usa el valor global. */
+  couponDailyLimit: number | null
+  /** Override de tope mensual (acumulado) de cupones; null = global. */
+  couponMonthlyLimit: number | null
   createdAt: string
   createdAtLabel: string
 }
@@ -89,9 +93,15 @@ const deleteState: DeleteUserState = { error: null, success: null }
 export function UsersManager({
   users,
   currentUserId,
+  couponDailyLimitDefault,
+  couponMonthlyLimitDefault,
 }: {
   users: UserListItem[]
   currentUserId: string
+  /** Tope diario global del servidor (`COUPON_QA_DAILY_LIMIT`, default 3). */
+  couponDailyLimitDefault: number
+  /** Tope mensual global del servidor (`COUPON_QA_MONTHLY_LIMIT`, default 10). */
+  couponMonthlyLimitDefault: number
 }) {
   const [search, setSearch] = useState("")
   const [roleFilter, setRoleFilter] = useState<RoleFilter>("all")
@@ -178,7 +188,11 @@ export function UsersManager({
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
           <div className="flex gap-1">
-            <PermissionsDialog user={row.original} />
+            <PermissionsDialog
+              user={row.original}
+              couponDailyLimitDefault={couponDailyLimitDefault}
+              couponMonthlyLimitDefault={couponMonthlyLimitDefault}
+            />
             <EditUserDialog user={row.original} />
             {row.original.id !== currentUserId ? (
               <DeleteUserDialog user={row.original} />
@@ -188,7 +202,7 @@ export function UsersManager({
         size: 130,
       },
     ],
-    [currentUserId]
+    [currentUserId, couponDailyLimitDefault, couponMonthlyLimitDefault]
   )
 
   const table = useTable({
@@ -497,7 +511,15 @@ function EditUserForm({
   )
 }
 
-function PermissionsDialog({ user }: { user: UserListItem }) {
+function PermissionsDialog({
+  user,
+  couponDailyLimitDefault,
+  couponMonthlyLimitDefault,
+}: {
+  user: UserListItem
+  couponDailyLimitDefault: number
+  couponMonthlyLimitDefault: number
+}) {
   const [open, setOpen] = useState(false)
 
   return (
@@ -506,7 +528,14 @@ function PermissionsDialog({ user }: { user: UserListItem }) {
         <ShieldCheckIcon />
         <span className="sr-only">Permisos de {user.username}</span>
       </DialogTrigger>
-      {open ? <PermissionsForm user={user} onDone={() => setOpen(false)} /> : null}
+      {open ? (
+        <PermissionsForm
+          user={user}
+          couponDailyLimitDefault={couponDailyLimitDefault}
+          couponMonthlyLimitDefault={couponMonthlyLimitDefault}
+          onDone={() => setOpen(false)}
+        />
+      ) : null}
     </Dialog>
   )
 }
@@ -524,9 +553,13 @@ const sectionHints: Record<string, string> = {
 
 function PermissionsForm({
   user,
+  couponDailyLimitDefault,
+  couponMonthlyLimitDefault,
   onDone,
 }: {
   user: UserListItem
+  couponDailyLimitDefault: number
+  couponMonthlyLimitDefault: number
   onDone: () => void
 }) {
   const router = useRouter()
@@ -602,6 +635,46 @@ function PermissionsForm({
               </div>
             )
           })}
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <Field>
+            <FieldLabel htmlFor={`coupon-limit-${user.id}`}>
+              Cupones por día
+            </FieldLabel>
+            <Input
+              id={`coupon-limit-${user.id}`}
+              name="couponDailyLimit"
+              type="number"
+              min={1}
+              max={1000}
+              step={1}
+              inputMode="numeric"
+              defaultValue={user.couponDailyLimit ?? ""}
+              placeholder={`${couponDailyLimitDefault} (global)`}
+            />
+            <FieldDescription>
+              Tope de canjes en 24 h. Vacío usa el global del servidor.
+            </FieldDescription>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`coupon-monthly-limit-${user.id}`}>
+              Cupones por mes
+            </FieldLabel>
+            <Input
+              id={`coupon-monthly-limit-${user.id}`}
+              name="couponMonthlyLimit"
+              type="number"
+              min={1}
+              max={1000}
+              step={1}
+              inputMode="numeric"
+              defaultValue={user.couponMonthlyLimit ?? ""}
+              placeholder={`${couponMonthlyLimitDefault} (global)`}
+            />
+            <FieldDescription>
+              Acumulado de 30 días. Vacío usa el global del servidor.
+            </FieldDescription>
+          </Field>
         </div>
         {visible.length === 0 ? (
           <p className="text-destructive text-sm" role="alert">

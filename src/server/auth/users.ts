@@ -44,10 +44,15 @@ export async function listUsers(): Promise<
     entityCount: number
     /** Reseller FlujoTV ligado a la cuenta (entidad Cuenta); null si no hay. */
     distribuidorName: string | null
+    /** Override de tope diario de cupones; null = valor global del servidor. */
+    couponDailyLimit: number | null
+    /** Override de tope mensual (acumulado) de cupones; null = global. */
+    couponMonthlyLimit: number | null
   })[]
 > {
   const result = await pool.query(
     `SELECT u.id, u.username, u.role, u.created_at,
+            u.coupon_daily_limit, u.coupon_monthly_limit,
             count(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) AS entity_count,
             max(acc.doc->'dynamicProperties'->>'distribuidorName') AS distribuidor_name
        FROM users u
@@ -62,6 +67,10 @@ export async function listUsers(): Promise<
       ORDER BY u.created_at`,
     [ACCOUNT_ENTITY_NAME]
   )
+  const positiveIntOrNull = (value: unknown): number | null =>
+    typeof value === "number" && Number.isInteger(value) && value > 0
+      ? value
+      : null
   return result.rows.map((row) => ({
     id: row.id as string,
     username: row.username as string,
@@ -72,6 +81,8 @@ export async function listUsers(): Promise<
       typeof row.distribuidor_name === "string" && row.distribuidor_name.length > 0
         ? row.distribuidor_name
         : null,
+    couponDailyLimit: positiveIntOrNull(row.coupon_daily_limit),
+    couponMonthlyLimit: positiveIntOrNull(row.coupon_monthly_limit),
   }))
 }
 

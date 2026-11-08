@@ -2,6 +2,7 @@ import { CreateUserButton, UsersManager } from "@/components/auth/users-list"
 import { requireRole } from "@/server/auth/guards"
 import { listDeniedSectionsByUser } from "@/server/auth/permissions"
 import { listUsers } from "@/server/auth/users"
+import { couponQaDailyLimit, couponQaMonthlyLimit } from "@/server/mercadopago/config"
 
 export const metadata = {
   title: "Usuarios",
@@ -37,10 +38,14 @@ export default async function UsersPage() {
           entityCount: user.entityCount,
           distribuidorName: user.distribuidorName,
           deniedSections: deniedByUser.get(user.id) ?? [],
+          couponDailyLimit: user.couponDailyLimit,
+          couponMonthlyLimit: user.couponMonthlyLimit,
           createdAt: user.createdAt.toISOString(),
           createdAtLabel: formatDate(user.createdAt),
         }))}
         currentUserId={session.id}
+        couponDailyLimitDefault={couponQaDailyLimit()}
+        couponMonthlyLimitDefault={couponQaMonthlyLimit()}
       />
     </div>
   )

@@ -6,7 +6,12 @@ import { renewFlujoLicense } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 
-import { resolveMercadoPagoConfig, isCouponQaEnabled, couponQaDailyLimit } from "./config"
+import {
+  resolveMercadoPagoConfig,
+  isCouponQaEnabled,
+  couponQaDailyLimit,
+  couponQaMonthlyLimit,
+} from "./config"
 import { mercadoPagoRequest, type MercadoPagoResponse } from "./client"
 import { MercadoPagoError } from "./errors"
 
@@ -919,6 +924,42 @@ export interface CreatedCouponOrder {
 }
 
 /**
+ * Tope diario de canjes de cupón efectivo para un comprador: el override por
+ * usuario (`users.coupon_daily_limit`, lo ajusta el admin desde /users) si
+ * existe; si no, el valor global del servidor (`COUPON_QA_DAILY_LIMIT`).
+ */
+export async function couponDailyLimitForBuyer(
+  buyerUserId: string
+): Promise<number> {
+  const result = await pool.query<{ coupon_daily_limit: number | null }>(
+    "SELECT coupon_daily_limit FROM users WHERE id = $1::uuid",
+    [buyerUserId]
+  )
+  const override = result.rows[0]?.coupon_daily_limit
+  return typeof override === "number" && Number.isInteger(override) && override > 0
+    ? override
+    : couponQaDailyLimit()
+}
+
+/**
+ * Tope mensual (acumulado, ventana rodante de 30 días) efectivo para un
+ * comprador: el override por usuario (`users.coupon_monthly_limit`) si
+ * existe; si no, el valor global del servidor (`COUPON_QA_MONTHLY_LIMIT`).
+ */
+export async function couponMonthlyLimitForBuyer(
+  buyerUserId: string
+): Promise<number> {
+  const result = await pool.query<{ coupon_monthly_limit: number | null }>(
+    "SELECT coupon_monthly_limit FROM users WHERE id = $1::uuid",
+    [buyerUserId]
+  )
+  const override = result.rows[0]?.coupon_monthly_limit
+  return typeof override === "number" && Number.isInteger(override) && override > 0
+    ? override
+    : couponQaMonthlyLimit()
+}
+
+/**
  * Renovación pagada con cupón: valida el código, crea la orden ya `paid`
  * (el cupón ES el pago) y ejecuta la renovación al instante con la clave
  * determinista `mp-<orderId>`. Sin checkout ni revisión: si la renovación
@@ -956,22 +997,34 @@ export async function createCouponOrder(params: {
     )
   }
 
-  // Tope de canjes por comprador en 24 h: un código de QA no debe permitir
-  // renovaciones ilimitadas aunque esté activado.
-  const redeemed = await pool.query(
-    `SELECT count(*)::int AS n
+  // Topes de canjes por comprador: diario (ventana de 24 h) y mensual
+  // acumulado (ventana rodante de 30 días). Un código de QA no debe permitir
+  // renovaciones ilimitadas aunque esté activado, y repartir canjes en días
+  // distintos no debe sortear el techo del mes. Cada tope es por usuario
+  // (override del admin desde /users) con fallback al global del servidor.
+  const redeemed = await pool.query<{ daily: number; monthly: number }>(
+    `SELECT count(*) FILTER (WHERE created_at >= now() - interval '24 hours')::int AS daily,
+            count(*)::int AS monthly
        FROM mp_orders
       WHERE method = 'cupon'
         AND buyer_user_id = $1::uuid
-        AND created_at >= now() - interval '24 hours'`,
+        AND created_at >= now() - interval '30 days'`,
     [params.buyerUserId]
   )
-  const limit = couponQaDailyLimit()
-  if ((redeemed.rows[0]?.n ?? 0) >= limit) {
+  const dailyLimit = await couponDailyLimitForBuyer(params.buyerUserId)
+  if ((redeemed.rows[0]?.daily ?? 0) >= dailyLimit) {
     throw new MercadoPagoError(
       429,
       "coupon_limit",
-      `Ya canjeaste el máximo de ${limit} cupones por día.`
+      `Ya canjeaste el máximo de ${dailyLimit} cupones por día.`
+    )
+  }
+  const monthlyLimit = await couponMonthlyLimitForBuyer(params.buyerUserId)
+  if ((redeemed.rows[0]?.monthly ?? 0) >= monthlyLimit) {
+    throw new MercadoPagoError(
+      429,
+      "coupon_monthly_limit",
+      `Ya canjeaste el máximo de ${monthlyLimit} cupones este mes.`
     )
   }
 

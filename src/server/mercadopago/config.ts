@@ -51,6 +51,17 @@ export function couponQaDailyLimit(): number {
 }
 
 /**
+ * Máximo de canjes de cupón por comprador en 30 días (acumulado mensual).
+ * Complementa el tope diario: repartir cupones en días distintos no sortea
+ * el techo del mes.
+ */
+export function couponQaMonthlyLimit(): number {
+  const raw = process.env.COUPON_QA_MONTHLY_LIMIT?.trim() ?? ""
+  const value = Number(raw)
+  return raw.length > 0 && Number.isInteger(value) && value > 0 ? value : 10
+}
+
+/**
  * Datos bancarios que la UI muestra para pagar por transferencia, desde
  * `.env` (`TRANSFER_BANK_NAME`, `TRANSFER_ACCOUNT`, `TRANSFER_HOLDER`).
  * `null` si falta alguno: la opción de transferencia no se muestra en el
