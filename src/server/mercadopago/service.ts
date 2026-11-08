@@ -7,7 +7,7 @@ import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 
 import { resolveMercadoPagoConfig, isCouponQaEnabled, couponQaDailyLimit } from "./config"
-import { mercadoPagoRequest } from "./client"
+import { mercadoPagoRequest, type MercadoPagoResponse } from "./client"
 import { MercadoPagoError } from "./errors"
 
 /* -------------------------------------------------------------------------- */
@@ -21,6 +21,8 @@ export type MpOrderStatus =
   | "renewal_failed"
   | "rejected"
   | "cancelled"
+  | "refunding"
+  | "refunded"
 
 export type MpOrderMethod = "mercadopago" | "transferencia" | "cupon"
 
@@ -37,12 +39,13 @@ export interface MpOrderRow {
   payment_id: number | null
   payment_status: string | null
   ticket_file_id: string | null
-  coupon_code: string | null
-  error: string | null
-  renewed_at: string | null
-  created_at: string
-  updated_at: string
-}
+   coupon_code: string | null
+   error: string | null
+   renewed_at: string | null
+   refunded_at: string | null
+   created_at: string
+   updated_at: string
+ }
 
 export interface MpOrderPublic {
   id: string
@@ -51,13 +54,14 @@ export interface MpOrderPublic {
   months: number
   amount: number
   currency: string
-  payment_id: number | null
-  payment_status: string | null
-  error: string | null
-  renewed_at: string | null
-  created_at: string
-  updated_at: string
-}
+   payment_id: number | null
+   payment_status: string | null
+   error: string | null
+   renewed_at: string | null
+   refunded_at: string | null
+   created_at: string
+   updated_at: string
+ }
 
 interface MpPaymentPayload {
   id?: unknown
@@ -145,6 +149,10 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
     error: row.error === null ? null : String(row.error),
     renewed_at:
       row.renewed_at === null ? null : new Date(row.renewed_at as string).toISOString(),
+    refunded_at:
+      row.refunded_at === null || row.refunded_at === undefined
+        ? null
+        : new Date(row.refunded_at as string).toISOString(),
     created_at: new Date(row.created_at as string).toISOString(),
     updated_at: new Date(row.updated_at as string).toISOString(),
   }
@@ -163,6 +171,7 @@ export function toMpOrderPublic(row: MpOrderRow): MpOrderPublic {
     payment_status: row.payment_status,
     error: row.error,
     renewed_at: row.renewed_at,
+    refunded_at: row.refunded_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
@@ -358,12 +367,24 @@ async function attemptOrderRenewal(
       idempotencyKey: `mp-${order.id}`,
       timeoutMs: renewalTimeoutMs,
     })
-    await pool.query(
+    // El guard de estado evita pisar un reembolso reclamado en paralelo:
+    // si otro flujo movió la orden a `refunding`/`refunded`, el resultado de
+    // la renovación no se escribe (el reembolso ya es dueño de la orden).
+    const renewalClaim = await pool.query(
       `UPDATE mp_orders
           SET status = 'renewed', renewed_at = now(), error = NULL, updated_at = now()
-        WHERE id = $1`,
+        WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
       [order.id]
     )
+    if (renewalClaim.rowCount === 0) {
+      log("mercadopago.payment", {
+        order_id: order.id,
+        payment_id: paymentId,
+        outcome: "ignored",
+        reason: "order_claimed_by_refund",
+      })
+      return "ignored"
+    }
     notifyOrderChange(order.id)
     log("mercadopago.payment", {
       order_id: order.id,
@@ -376,11 +397,32 @@ async function attemptOrderRenewal(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Renovación fallida."
+
+    // Mercado Pago reenvía sus notificaciones (entrega at-least-once): un
+    // segundo intento puede golpear al panel mientras el primero sigue en
+    // curso, y el panel responde «Idempotency-Key está en curso. No se
+    // ejecuta una segunda compra.» Eso NO es un fallo de renovación: el
+    // intento original sigue vivo y sellará el resultado. Degradar la orden
+    // a `renewal_failed` aquí mostraría al comprador un falso «la renovación
+    // falló» y quedaría corregido segundos después por el intento en curso.
+    // Se deja el estado tal cual (normalmente `paid`): si el intento en
+    // curso falla de verdad, él mismo marcará `renewal_failed`; si muere sin
+    // respuesta, la conciliación de `paid` varado reintenta a los 10 minutos.
+    if (/está en curso/i.test(message)) {
+      log("mercadopago.payment", {
+        order_id: order.id,
+        payment_id: paymentId,
+        outcome: "in_progress",
+        reason: message.slice(0, 300),
+      })
+      return "in_process"
+    }
+
     await pool
       .query(
         `UPDATE mp_orders
             SET status = 'renewal_failed', error = $2, updated_at = now()
-          WHERE id = $1`,
+          WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
         [order.id, message.slice(0, 500)]
       )
       .then(() => notifyOrderChange(order.id))
@@ -1009,8 +1051,401 @@ export async function createCouponOrder(params: {
     orderId: order.id,
     amount: order.amount,
     currency: order.currency,
-    status: outcome === "renewal_failed" ? "renewal_failed" : "renewed",
+    // Solo `renewed` se informa como éxito: `in_process` (Idempotency-Key en
+    // curso en el panel) o cualquier otro resultado no confirmado se informa
+    // como `renewal_failed` — la UI de cupón ofrece el reintento, que es
+    // seguro con la clave determinista; la orden queda `paid` en BD y el
+    // reintento la recupera.
+    status: outcome === "renewed" ? "renewed" : "renewal_failed",
   }
+}
+
+/* -------------------------------------------------------------------------- */
+/*                                 Reembolsos                                  */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Una orden `refunding` estancada (un crash o deploy cortó el proceso entre
+ * el reclamo y la respuesta de MP) se concilia contra la API de MP al
+ * pedirse el listado, igual que las `pending` viejas.
+ */
+const REFUND_RECONCILE_AFTER_MS = 90_000
+
+export interface RefundOrderView {
+  id: string
+  status: MpOrderStatus
+  user_name: string
+  months: number
+  amount: number
+  currency: string
+  payment_id: number | null
+  buyer_username: string | null
+  error: string | null
+  refunded_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface RefundJoinRow extends Record<string, unknown> {
+  buyer_username: string | null
+}
+
+function parseRefundRow(row: RefundJoinRow): RefundOrderView {
+  const order = parseRow(row)
+  return {
+    id: order.id,
+    status: order.status,
+    user_name: order.user_name,
+    months: order.months,
+    amount: order.amount,
+    currency: order.currency,
+    payment_id: order.payment_id,
+    buyer_username:
+      typeof row.buyer_username === "string" && row.buyer_username.length > 0
+        ? row.buyer_username
+        : null,
+    error: order.error,
+    refunded_at: order.refunded_at,
+    created_at: order.created_at,
+    updated_at: order.updated_at,
+  }
+}
+
+interface MpRefundPayload {
+  id?: unknown
+  payment_id?: unknown
+  amount?: unknown
+  status?: unknown
+}
+
+/**
+ * Lista de reembolsos de un pago (`GET /v1/payments/{id}/refunds`). La API
+ * ha devuelto un array directo o un objeto con `refunds`; se aceptan ambos.
+ */
+function parseRefundList(data: unknown): MpRefundPayload[] {
+  const list = Array.isArray(data)
+    ? data
+    : isRecord(data) && Array.isArray(data.refunds)
+      ? data.refunds
+      : []
+  return list.filter(isRecord) as MpRefundPayload[]
+}
+
+function refundedTotalFrom(refunds: MpRefundPayload[]): number {
+  return refunds.reduce((sum, refund) => {
+    const amount = Number(refund.amount)
+    const status = typeof refund.status === "string" ? refund.status : ""
+    if (!Number.isFinite(amount) || status === "rejected") return sum
+    return sum + amount
+  }, 0)
+}
+
+/**
+ * Extrae el reembolso relevante de una respuesta de MP: el reembolso directo,
+ * un array de reembolsos o el pago con su lista `refunds` (en los dos últimos
+ * casos importa el último, el que acabamos de crear). Un objeto que envuelve
+ * una lista —p. ej. un pago con `refunds` vacía— no es un reembolso.
+ */
+function lastRefundFrom(data: unknown): MpRefundPayload | null {
+  const list = parseRefundList(data)
+  if (list.length > 0) return list[list.length - 1]
+  if (isRecord(data) && !Array.isArray(data.refunds)) {
+    return data as MpRefundPayload
+  }
+  return null
+}
+
+async function fetchPaymentRefunds(paymentId: number): Promise<MpRefundPayload[]> {
+  // payment_id es bigint: en la URL viaja como entero sin decimales.
+  const response = await mercadoPagoRequest<unknown>(
+    `/v1/payments/${paymentId.toString()}/refunds`
+  )
+  return parseRefundList(response.data)
+}
+
+/**
+ * Resuelve una orden varada en `refunding` consultando los reembolsos reales
+ * del pago en MP: con devolución registrada por el total → `refunded` (con
+ * fila de auditoría, idempotente por `mp_refund_id`); sin ningún reembolso
+ * vigente (ninguno registrado o todos rechazados) → `renewal_failed` para que
+ * el admin reintente. Reembolsos parciales no deberían existir con el flujo
+ * de reembolso total, así que ese caso queda en `refunding` para la próxima
+ * conciliación.
+ */
+async function settleStuckRefundingOrder(order: MpOrderRow): Promise<void> {
+  if (order.payment_id === null) {
+    // No debería ocurrir: solo órdenes con pago de MP entran a `refunding`.
+    await pool.query(
+      `UPDATE mp_orders
+          SET status = 'renewal_failed',
+              error = 'Reembolso interrumpido: la orden no tiene pago asociado',
+              updated_at = now()
+        WHERE id = $1 AND status = 'refunding'`,
+      [order.id]
+    )
+    notifyOrderChange(order.id)
+    return
+  }
+
+  const refunds = await fetchPaymentRefunds(order.payment_id)
+  const refundedTotal = refundedTotalFrom(refunds)
+  if (refundedTotal >= order.amount - 0.009) {
+    // MP ejecutó el reembolso aunque la respuesta original se perdiera.
+    const refund = refunds[refunds.length - 1]
+    const refundId = typeof refund.id === "number" ? refund.id : null
+    const refundStatus =
+      typeof refund.status === "string" ? refund.status : "pending"
+    await pool.query(
+      `INSERT INTO mp_refunds
+         (id, order_id, payment_id, amount, currency, mp_refund_id, status, reason)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, 'Conciliación automática del reembolso')
+       ON CONFLICT (mp_refund_id) DO NOTHING`,
+      [
+        randomUUID(),
+        order.id,
+        order.payment_id,
+        order.amount,
+        order.currency,
+        refundId,
+        refundStatus,
+      ]
+    )
+    await pool.query(
+      `UPDATE mp_orders
+          SET status = 'refunded', refunded_at = now(), error = NULL, updated_at = now()
+        WHERE id = $1 AND status = 'refunding'`,
+      [order.id]
+    )
+    notifyOrderChange(order.id)
+    log("mercadopago.refund", {
+      order_id: order.id,
+      payment_id: order.payment_id,
+      outcome: "refunded",
+      via: "reconcile",
+    })
+    return
+  }
+
+  if (refundedTotal <= 0.009) {
+    // MP no devolvió dinero: ningún reembolso registrado o todos rechazados.
+    // Volver a `renewal_failed` para que el admin reintente el reembolso.
+    await pool.query(
+      `UPDATE mp_orders
+          SET status = 'renewal_failed',
+              error = 'Reembolso interrumpido: Mercado Pago no registró la devolución',
+              updated_at = now()
+        WHERE id = $1 AND status = 'refunding'`,
+      [order.id]
+    )
+    notifyOrderChange(order.id)
+    log("mercadopago.refund", {
+      order_id: order.id,
+      payment_id: order.payment_id,
+      outcome: "rolled_back",
+      via: "reconcile",
+    })
+    return
+  }
+
+  log("mercadopago.refund", {
+    order_id: order.id,
+    payment_id: order.payment_id,
+    outcome: "still_refunding",
+    via: "reconcile",
+  })
+}
+
+/**
+ * Listado de la sección admin de reembolsos: órdenes de Mercado Pago con
+ * renovación fallida (reembolsables), en reembolso o ya reembolsadas, las
+ * más recientes primero. Las `refunding` estancadas se concilian FUERA del
+ * camino de la petición (fire-and-forget, lote acotado): el GET responde de
+ * inmediato con el estado actual de BD y, al cerrar cada conciliación, el
+ * evento realtime `mp_order` hace que la sección se recargue sola.
+ */
+export async function listRefundOrders(): Promise<RefundOrderView[]> {
+  const stuck = await pool.query<Record<string, unknown>>(
+    `SELECT * FROM mp_orders
+      WHERE method = 'mercadopago' AND status = 'refunding'
+        AND updated_at < now() - ($1::bigint * interval '1 millisecond')
+      ORDER BY updated_at ASC
+      LIMIT 3`,
+    [REFUND_RECONCILE_AFTER_MS]
+  )
+  for (const row of stuck.rows) {
+    // Detached como el resto del módulo (webhook): un fallo se registra y no
+    // bloquea la respuesta; las escrituras de la conciliación son idempotentes
+    // (guardadas por `WHERE status = 'refunding'` y `ON CONFLICT`).
+    settleStuckRefundingOrder(parseRow(row)).catch((error: unknown) =>
+      logError(`reconcile_refunding_${String(row.id)}`, error)
+    )
+  }
+
+  const result = await pool.query<RefundJoinRow>(
+    `SELECT o.*, u.username AS buyer_username
+       FROM mp_orders o
+       LEFT JOIN users u ON u.id = o.buyer_user_id
+      WHERE o.method = 'mercadopago'
+        AND o.status IN ('renewal_failed', 'refunding', 'refunded')
+      ORDER BY o.updated_at DESC
+      LIMIT 20`
+  )
+  return result.rows.map(parseRefundRow)
+}
+
+/**
+ * Reembolsa el cobro de una orden con renovación fallida: reclama la orden
+ * hacia `refunding` (atómico: bloquea reintentos de renovación y dobles
+ * clics), ejecuta el reembolso TOTAL en MP
+ * (`POST /v1/payments/{payment_id}/refunds` con body vacío), registra la
+ * auditoría en `mp_refunds` y cierra la orden como `refunded` (terminal: sin
+ * reintento de renovación ni conciliación posterior).
+ *
+ * Con rechazo explícito de MP (4xx: saldo insuficiente, fuera de la ventana
+ * de 180 días, etc.) la orden vuelve a `renewal_failed` conservando su error
+ * original y el rechazo viaja al admin traducido. Con resultado desconocido
+ * (timeout o error del upstream) la orden queda `refunding` y la
+ * conciliación decide contra la API de MP si la devolución realmente se
+ * ejecutó. Si el reembolso ya se ejecutó y falla la persistencia local, la
+ * orden también queda `refunding`: la conciliación la cierra como `refunded`
+ * nunca se revierte a `renewal_failed` con dinero en devolución.
+ */
+export async function refundOrder(params: {
+  orderId: string
+  adminUserId: string
+  adminUsername: string
+  reason: string | null
+}): Promise<MpOrderRow> {
+  const order = await getMpOrder(params.orderId)
+  if (!order) {
+    throw new MercadoPagoError(404, "not_found", "La orden no existe.")
+  }
+  if (order.method !== "mercadopago") {
+    throw new MercadoPagoError(
+      409,
+      "invalid_order_method",
+      "Solo se reembolsan cobros de Mercado Pago: las transferencias se rechazan antes de mover dinero y los cupones no cobran."
+    )
+  }
+  if (order.payment_id === null) {
+    throw new MercadoPagoError(
+      409,
+      "order_not_refundable",
+      "La orden no tiene un pago de Mercado Pago asociado."
+    )
+  }
+  if (order.status !== "renewal_failed") {
+    throw new MercadoPagoError(
+      409,
+      "order_not_refundable",
+      order.status === "refunded"
+        ? "La orden ya fue reembolsada."
+        : order.status === "refunding"
+          ? "La orden ya tiene un reembolso en curso."
+          : `Solo se reembolsan órdenes con renovación fallida (estado actual: ${order.status}).`
+    )
+  }
+
+  const claim = await pool.query(
+    `UPDATE mp_orders SET status = 'refunding', updated_at = now()
+      WHERE id = $1 AND status = 'renewal_failed'`,
+    [order.id]
+  )
+  if (claim.rowCount === 0) {
+    throw new MercadoPagoError(
+      409,
+      "order_not_refundable",
+      "La orden ya no está en renovación fallida."
+    )
+  }
+
+  // Fase 1: llamada a MP. Aquí el resultado sí es clasificable: un rechazo
+  // explícito (4xx) revierte a `renewal_failed`; timeout/red/5xx deja la
+  // orden en `refunding` para que la conciliación resuelva el estado real.
+  let refundResponse: MercadoPagoResponse<unknown>
+  try {
+    refundResponse = await mercadoPagoRequest<unknown>(
+      `/v1/payments/${order.payment_id.toString()}/refunds`,
+      { method: "POST" }
+    )
+  } catch (error) {
+    const unknownOutcome =
+      error instanceof MercadoPagoError &&
+      (error.code === "timeout" ||
+        error.code === "network_error" ||
+        error.status >= 500)
+    if (!unknownOutcome) {
+      // Rechazo explícito de MP: volver a `renewal_failed` conservando el
+      // error original de la renovación; el motivo del rechazo viaja al
+      // admin en la respuesta y queda en el log.
+      await pool.query(
+        `UPDATE mp_orders SET status = 'renewal_failed', updated_at = now()
+          WHERE id = $1 AND status = 'refunding'`,
+        [order.id]
+      )
+      notifyOrderChange(order.id)
+    }
+    log("mercadopago.refund", {
+      order_id: order.id,
+      payment_id: order.payment_id,
+      actor: `user:${params.adminUsername}`,
+      outcome: unknownOutcome ? "unknown_refunding" : "rolled_back",
+      reason:
+        error instanceof Error
+          ? error.message.slice(0, 300)
+          : String(error).slice(0, 300),
+    })
+    throw error
+  }
+
+  // Fase 2: MP ya ejecutó el reembolso. Un fallo de base de datos aquí NO
+  // revierte la orden (el dinero ya está en devolución): queda en `refunding`
+  // y la conciliación la cierra como `refunded` con su fila de auditoría.
+  try {
+    const last = lastRefundFrom(refundResponse.data)
+    const refundId = last && typeof last.id === "number" ? last.id : null
+    const refundStatus =
+      last && typeof last.status === "string" ? last.status : "pending"
+
+    await pool.query(
+      `INSERT INTO mp_refunds
+         (id, order_id, payment_id, amount, currency, mp_refund_id, status, reason, created_by)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8, $9::uuid)
+       ON CONFLICT (mp_refund_id) DO NOTHING`,
+      [
+        randomUUID(),
+        order.id,
+        order.payment_id,
+        order.amount,
+        order.currency,
+        refundId,
+        refundStatus,
+        params.reason,
+        params.adminUserId,
+      ]
+    )
+    await pool.query(
+      `UPDATE mp_orders
+          SET status = 'refunded', refunded_at = now(), error = NULL, updated_at = now()
+        WHERE id = $1 AND status = 'refunding'`,
+      [order.id]
+    )
+    notifyOrderChange(order.id)
+    log("mercadopago.refund", {
+      order_id: order.id,
+      payment_id: order.payment_id,
+      mp_refund_id: refundId,
+      amount: order.amount,
+      actor: `user:${params.adminUsername}`,
+      outcome: "refunded",
+    })
+  } catch (error) {
+    logError(`refund_persist_${order.id}`, error)
+    throw error
+  }
+
+  const fresh = await getMpOrder(order.id)
+  return fresh ?? order
 }
 
 /* -------------------------------------------------------------------------- */

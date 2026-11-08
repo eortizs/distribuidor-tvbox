@@ -14,8 +14,8 @@ export const metadata = {
 /**
  * La lista se filtra en el servidor según el perfil: el distribuidor solo
  * recibe los clientes de su reseller ligado (`distribuidorName` de su
- * entidad Cuenta); el admin ve el panel completo y además la sección de
- * transferencias por revisar (`canReviewTransfers`).
+ * entidad Cuenta); el admin ve el panel completo y además las secciones de
+ * revisión de transferencias y de reembolsos (`canReviewTransfers`).
  *
  * `searchParams` trae el retorno del checkout de Mercado Pago (back_urls):
  * `orden` = id de la orden de pago y `estado` = aprobado|rechazado|pendiente;

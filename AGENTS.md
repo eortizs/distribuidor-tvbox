@@ -21,7 +21,7 @@ Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbo
 ### Procedimiento de despliegue (obligatorio tras cada cambio)
 
 ```bash
-node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs && node db/apply-shopping-list.mjs
+node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs && node db/apply-mp-refunds.mjs && node db/apply-shopping-list.mjs
 npm run build && pm2 reload distribuidor-tvbox
 ```
 

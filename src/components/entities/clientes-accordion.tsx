@@ -265,6 +265,7 @@ import {
   type PaymentOrder,
 } from "./pago-api"
 import { TransferenciasReview } from "./transferencias-review"
+import { RefundsReview } from "./refunds-review"
 import {
   applyFilterQuery,
   matchesFilterRule,
@@ -1343,12 +1344,14 @@ export function ClientesAccordion({
       ) : null}
 
       {/*
-       * Revisión de transferencias (solo admin): la sección se monta sola
-       * cuando hay órdenes pendientes y desaparece al vaciarse.
+       * Revisión de transferencias y reembolsos (solo admin): las secciones
+       * se montan solas cuando hay órdenes que revisar y desaparecen al
+       * vaciarse.
        */}
       {canReviewTransfers ? (
         <TransferenciasReview onApproved={refreshRow} />
       ) : null}
+      {canReviewTransfers ? <RefundsReview /> : null}
 
       {fetchState === "success" && clients.length > 0 ? (
         <Filters

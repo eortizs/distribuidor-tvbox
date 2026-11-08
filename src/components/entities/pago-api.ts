@@ -13,6 +13,8 @@ export type PaymentOrderStatus =
   | "renewal_failed"
   | "rejected"
   | "cancelled"
+  | "refunding"
+  | "refunded"
 
 export interface PaymentOrder {
   id: string
@@ -25,6 +27,7 @@ export interface PaymentOrder {
   payment_status: string | null
   error: string | null
   renewed_at: string | null
+  refunded_at: string | null
   created_at: string
   updated_at: string
 }
@@ -249,5 +252,50 @@ export async function retryOrderRenewal(
   return requestJson<{ order: { id: string; status: string } }>(
     `/api/mercadopago/orders/${encodeURIComponent(orderId)}/retry`,
     { method: "POST" }
+  ).then((data) => ({ orderId: data.order.id, status: data.order.status }))
+}
+
+/* ------------------------------- Reembolsos -------------------------------- */
+
+/** Orden de Mercado Pago reembolsable o reembolsada (vista solo admin). */
+export interface RefundOrder {
+  id: string
+  status: PaymentOrderStatus
+  user_name: string
+  months: number
+  amount: number
+  currency: string
+  payment_id: number | null
+  buyer_username: string | null
+  error: string | null
+  refunded_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** Órdenes cobradas por Mercado Pago con renovación fallida (más reembolsadas recientes). */
+export async function fetchRefundOrders(): Promise<RefundOrder[]> {
+  return requestJson<{ orders: RefundOrder[] }>("/api/reembolsos/orders", {
+    cache: "no-store",
+  }).then((data) => data.orders)
+}
+
+/**
+ * Reembolsa el cobro total de una orden con renovación fallida: la orden
+ * queda `refunded` (terminal, sin renovación) y el dinero vuelve a la cuenta
+ * de Mercado Pago del pagador. `reason` es una nota opcional de auditoría.
+ */
+export async function refundOrder(
+  orderId: string,
+  reason?: string
+): Promise<{ orderId: string; status: string }> {
+  const note = reason?.trim()
+  return requestJson<{ order: { id: string; status: string } }>(
+    `/api/reembolsos/orders/${encodeURIComponent(orderId)}/refund`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(note ? { reason: note } : {}),
+    }
   ).then((data) => ({ orderId: data.order.id, status: data.order.status }))
 }
