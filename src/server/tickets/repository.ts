@@ -190,11 +190,11 @@ export async function listarTickets(
   }
   const result = await withTransaction((client) =>
     client.query(
-      `${SELECT_TICKET},
-       count(*) OVER () AS total_count
-      WHERE t.user_id = $1 AND e.deleted_at IS NULL${filtroEstado}
-      ORDER BY e.created_at DESC
-      LIMIT ${limit} OFFSET ${offset}`,
+      `SELECT sub.*, count(*) OVER () AS total_count
+        FROM (${SELECT_TICKET}
+        WHERE t.user_id = $1 AND e.deleted_at IS NULL${filtroEstado}
+        ORDER BY e.created_at DESC
+        LIMIT ${limit} OFFSET ${offset}) sub`,
       values
     )
   )
