@@ -34,7 +34,13 @@ export async function POST(
     const order = await approveTransferOrder(id)
     return Response.json({
       ok: true,
-      data: { order_id: order.id, status: order.status },
+      data: {
+        order_id: order.id,
+        status: order.status,
+        // Vencimiento nuevo verificado en el panel: la confirmación del
+        // admin lo muestra como evidencia de que la renovación aplicó.
+        verified_expires_at: order.renewal_verified_expires_at,
+      },
     })
   } catch (error) {
     if (error instanceof FlujoApiError) return flujoErrorResponse(error)

@@ -753,6 +753,28 @@ export async function getFlujoClient(
   return null
 }
 
+/**
+ * Lee la fecha de vencimiento vigente de una licencia según el panel.
+ *
+ * La usa la verificación anti-falsos-positivos de las renovaciones: el
+ * vencimiento antes de renovar (línea base) y la relectura posterior deben
+ * diferir para dar la renovación por aplicada. Devuelve el valor crudo que
+ * reporta el panel y su timestamp (`ts` null si no reporta vencimiento o este
+ * no se puede interpretar). Lanza `FlujoApiError` si la lectura no llega.
+ */
+export async function readFlujoLicenseExpiration(
+  userName: string,
+  options: { timeoutMs?: number } = {}
+): Promise<{ raw: string | null; ts: number | null }> {
+  const client = await getFlujoClient(userName, {
+    timeoutMs: options.timeoutMs,
+  })
+  const raw = client?.expiresAt ?? null
+  if (raw === null) return { raw: null, ts: null }
+  const parsed = Date.parse(raw)
+  return { raw, ts: Number.isNaN(parsed) ? null : parsed }
+}
+
 export async function getFlujoLicenses(): Promise<{
   licenses: FlujoLicenseRecord[]
   endpoint: string

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import { pool } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
-import { renewFlujoLicense } from "@/server/flujotv/service"
+import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 
@@ -44,8 +44,11 @@ export interface MpOrderRow {
   payment_id: number | null
   payment_status: string | null
   ticket_file_id: string | null
-   coupon_code: string | null
-   error: string | null
+    coupon_code: string | null
+    renewal_baseline_expires_at: string | null
+    /** Vencimiento nuevo verificado en el panel al marcar `renewed`. */
+    renewal_verified_expires_at: string | null
+    error: string | null
    renewed_at: string | null
    refunded_at: string | null
    created_at: string
@@ -59,11 +62,17 @@ export interface MpOrderPublic {
   months: number
   amount: number
   currency: string
-   payment_id: number | null
-   payment_status: string | null
-   error: string | null
-   renewed_at: string | null
-   refunded_at: string | null
+  payment_id: number | null
+  payment_status: string | null
+  error: string | null
+  renewed_at: string | null
+  /**
+   * Vencimiento nuevo verificado en el panel FlujoTV al confirmar la
+   * renovación (la lectura que demostró el cambio): null si la orden no está
+   * `renewed` o se renovó antes de la verificación.
+   */
+  renewal_verified_expires_at: string | null
+  refunded_at: string | null
    created_at: string
    updated_at: string
  }
@@ -90,6 +99,27 @@ const RECONCILE_AFTER_MS = 90_000
  * de idempotencia determinista evita duplicar meses.
  */
 const STUCK_PAID_AFTER_MS = 10 * 60_000
+
+/**
+ * Verificación anti-falsos-positivos: el panel de licencias puede responder
+ * éxito a la renovación sin aplicarla de verdad. Tras renovar se relee el
+ * vencimiento y la orden solo se marca `renewed` si cambió respecto al
+ * original. Lecturas por intento (el panel puede tardar en reflejar el
+ * cambio) con pausa entre ellas.
+ */
+const RENEWAL_VERIFY_ATTEMPTS = 3
+const RENEWAL_VERIFY_RETRY_DELAY_MS = 1_500
+/**
+ * Presupuesto por lectura de verificación. `/find_user` consulta el panel
+ * real de FlujoTV (scrapeo en vivo) y tarda ~20 s por lectura en producción:
+ * el timeout debe cubrir eso con margen, sin llegar al presupuesto de las
+ * compras.
+ */
+const RENEWAL_VERIFY_READ_TIMEOUT_MS = 45_000
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 function log(event: string, fields: Record<string, unknown>): void {
   console.info(
@@ -151,6 +181,16 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
       row.coupon_code === null || row.coupon_code === undefined
         ? null
         : String(row.coupon_code),
+    renewal_baseline_expires_at:
+      row.renewal_baseline_expires_at === null ||
+      row.renewal_baseline_expires_at === undefined
+        ? null
+        : String(row.renewal_baseline_expires_at),
+    renewal_verified_expires_at:
+      row.renewal_verified_expires_at === null ||
+      row.renewal_verified_expires_at === undefined
+        ? null
+        : String(row.renewal_verified_expires_at),
     error: row.error === null ? null : String(row.error),
     renewed_at:
       row.renewed_at === null ? null : new Date(row.renewed_at as string).toISOString(),
@@ -176,6 +216,7 @@ export function toMpOrderPublic(row: MpOrderRow): MpOrderPublic {
     payment_status: row.payment_status,
     error: row.error,
     renewed_at: row.renewed_at,
+    renewal_verified_expires_at: row.renewal_verified_expires_at,
     refunded_at: row.refunded_at,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -347,11 +388,103 @@ export type PaymentOutcome =
   | "ignored"
 
 /**
+ * Vencimiento original de la licencia para verificar la renovación: se lee
+ * del panel en el primer intento y se congela en la orden
+ * (`renewal_baseline_expires_at`) para que los reintentos comparen contra el
+ * original aunque un intento anterior ya hubiera movido el vencimiento (sin
+ * esto, un reintento tras una renovación aplicada pero no verificada sería
+ * imposible de confirmar).
+ *
+ * Sin línea base no hay forma de demostrar que el panel aplicó el cambio,
+ * así que la renovación no se ejecuta: la orden queda `renewal_failed` y el
+ * reintento (idempotente) la recupera.
+ */
+async function resolveRenewalBaseline(order: MpOrderRow): Promise<{
+  raw: string
+  ts: number
+}> {
+  if (order.renewal_baseline_expires_at !== null) {
+    const storedTs = Date.parse(order.renewal_baseline_expires_at)
+    if (!Number.isNaN(storedTs)) {
+      return {
+        raw: order.renewal_baseline_expires_at,
+        ts: storedTs,
+      }
+    }
+  }
+
+  const read = await readFlujoLicenseExpiration(order.user_name, {
+    timeoutMs: RENEWAL_VERIFY_READ_TIMEOUT_MS,
+  })
+  if (read.raw === null || read.ts === null) {
+    throw new MercadoPagoError(
+      503,
+      "renewal_unverifiable",
+      read.raw === null
+        ? `No se pudo leer el vencimiento actual de '${order.user_name}' en el panel de licencias; sin esa lectura no se puede confirmar la renovación, así que no se ejecutó.`
+        : `El panel de licencias reportó un vencimiento no interpretable ('${read.raw}'); la renovación no se ejecutó.`
+    )
+  }
+
+  await pool
+    .query(
+      `UPDATE mp_orders
+          SET renewal_baseline_expires_at = $2, updated_at = now()
+        WHERE id = $1 AND renewal_baseline_expires_at IS NULL`,
+      [order.id, read.raw]
+    )
+    .catch((error: unknown) => logError("store_renewal_baseline", error))
+
+  return { raw: read.raw, ts: read.ts }
+}
+
+/**
+ * Comprueba que el panel aplicó la renovación: relee el vencimiento y exige
+ * uno distinto (posterior) al original. Hasta `RENEWAL_VERIFY_ATTEMPTS`
+ * lecturas con pausa entre ellas porque el panel puede tardar en reflejar el
+ * cambio; una lectura que no llega cuenta como intento y se reintenta.
+ *
+ * Con éxito devuelve el vencimiento nuevo que leyó del panel: es la fecha
+ * verificada que se persiste en la orden y muestran los mensajes de éxito.
+ */
+async function verifyRenewalApplied(
+  userName: string,
+  baselineTs: number
+): Promise<
+  | { ok: true; verifiedAt: string }
+  | { ok: false; lastRaw: string | null }
+> {
+  let lastRaw: string | null = null
+  for (let attempt = 1; attempt <= RENEWAL_VERIFY_ATTEMPTS; attempt += 1) {
+    if (attempt > 1) await delay(RENEWAL_VERIFY_RETRY_DELAY_MS)
+    try {
+      const read = await readFlujoLicenseExpiration(userName, {
+        timeoutMs: RENEWAL_VERIFY_READ_TIMEOUT_MS,
+      })
+      if (read.ts !== null && read.ts > baselineTs) {
+        return { ok: true, verifiedAt: read.raw as string }
+      }
+      if (read.raw !== null) lastRaw = read.raw
+    } catch {
+      // Lectura fallida: se reintenta con la siguiente; si agota, el error
+      // final reporta la última lectura conocida.
+    }
+  }
+  return { ok: false, lastRaw }
+}
+
+/**
  * Ejecuta la renovación de una orden con cobro confirmado. La clave de
  * idempotencia determinista `mp-<orderId>` hace que repetir la llamada
  * (reintento del webhook, conciliación, reintento admin) devuelva la misma
  * renovación en lugar de sumar meses dos veces, así que es seguro invocarla
  * también sobre órdenes `paid` varadas o `renewal_failed`.
+ *
+ * Éxito verificado, no declarado: antes de renovar se congela el vencimiento
+ * original de la licencia como línea base y, tras el OK del panel, se relee
+ * el vencimiento hasta verlo cambiar. Un panel que responde 200 sin aplicar
+ * la renovación deja la orden en `renewal_failed` en lugar de un falso
+ * «renovación exitosa».
  */
 async function attemptOrderRenewal(
   order: MpOrderRow,
@@ -366,20 +499,39 @@ async function attemptOrderRenewal(
         `La orden ${order.id} tiene meses fuera de rango (${order.months}).`
       )
     }
+    const baseline = await resolveRenewalBaseline(order)
     await renewFlujoLicense({
       userName: order.user_name,
       months: order.months as RenewalMonths,
       idempotencyKey: `mp-${order.id}`,
       timeoutMs: renewalTimeoutMs,
     })
+    // Comprobación: releer el vencimiento y exigir que sea distinto al
+    // original. Sin esto, un 200 del panel sin renovación real se reportaba
+    // como éxito (falso positivo).
+    const verification = await verifyRenewalApplied(
+      order.user_name,
+      baseline.ts
+    )
+    if (!verification.ok) {
+      throw new MercadoPagoError(
+        502,
+        "renewal_not_applied",
+        `El panel de licencias respondió éxito pero el vencimiento de '${order.user_name}' no cambió (original ${baseline.raw}; última lectura ${verification.lastRaw ?? "sin fecha"}). La renovación no se dio por aplicada: reintenta, la clave de idempotencia evita meses extra.`
+      )
+    }
     // El guard de estado evita pisar un reembolso reclamado en paralelo:
     // si otro flujo movió la orden a `refunding`/`refunded`, el resultado de
     // la renovación no se escribe (el reembolso ya es dueño de la orden).
+    // La fecha verificada queda en la orden: los mensajes de éxito la
+    // muestran como evidencia de que el panel realmente movió el vencimiento.
     const renewalClaim = await pool.query(
       `UPDATE mp_orders
-          SET status = 'renewed', renewed_at = now(), error = NULL, updated_at = now()
+          SET status = 'renewed', renewed_at = now(),
+              renewal_verified_expires_at = $2,
+              error = NULL, updated_at = now()
         WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
-      [order.id]
+      [order.id, verification.verifiedAt]
     )
     if (renewalClaim.rowCount === 0) {
       log("mercadopago.payment", {
@@ -397,6 +549,7 @@ async function attemptOrderRenewal(
       user_name: order.user_name,
       months: order.months,
       outcome: "renewed",
+      verified_expires_at: verification.verifiedAt,
     })
     return "renewed"
   } catch (error) {
@@ -921,6 +1074,13 @@ export interface CreatedCouponOrder {
   amount: number
   currency: string
   status: MpOrderStatus
+  /** Razón del fallo de renovación tal como quedó en la orden; null si éxitó. */
+  error: string | null
+  /**
+   * Vencimiento nuevo verificado en el panel (solo con `renewed`): la
+   * confirmación lo muestra para que el comprador vea la fecha real.
+   */
+  verifiedExpiresAt: string | null
 }
 
 /**
@@ -1100,6 +1260,11 @@ export async function createCouponOrder(params: {
     outcome,
   })
 
+  // Orden fresca tras el intento: lleva el `error` guardado cuando falló y
+  // el vencimiento verificado (`renewal_verified_expires_at`) cuando se
+  // confirmó — la confirmación al comprador muestra esa fecha como evidencia.
+  const fresh = await getMpOrder(order.id)
+
   return {
     orderId: order.id,
     amount: order.amount,
@@ -1110,6 +1275,9 @@ export async function createCouponOrder(params: {
     // seguro con la clave determinista; la orden queda `paid` en BD y el
     // reintento la recupera.
     status: outcome === "renewed" ? "renewed" : "renewal_failed",
+    error: fresh?.error ?? null,
+    verifiedExpiresAt:
+      outcome === "renewed" ? fresh?.renewal_verified_expires_at ?? null : null,
   }
 }
 

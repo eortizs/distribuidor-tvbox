@@ -283,6 +283,15 @@ const TICKET_MAX_BYTES = 10 * 1024 * 1024
 /** Longitud del código de cupón. */
 const COUPON_CODE_LENGTH = 4
 
+/**
+ * Segmento de confirmación con el vencimiento nuevo verificado en el panel:
+ * la evidencia de que la renovación aplicó de verdad (null = sin lectura
+ * verificada, p. ej. órdenes renovadas antes de la verificación).
+ */
+function verifiedExpiresSuffix(expiresAt: string | null): string {
+  return expiresAt ? ` · nuevo vencimiento: ${formatFlujoDate(expiresAt)}` : ""
+}
+
 /** Iniciales del avatar a partir del nombre de usuario. */
 function initials(userName: string): string {
   const parts = userName.trim().split(/[\s._-]+/).filter(Boolean)
@@ -901,17 +910,19 @@ export function ClientesAccordion({
         requestId,
       })
       if (result.status === "renewal_failed") {
-        // El canje quedó registrado pero la renovación no: el botón principal
-        // pasa a reintentar la renovación (misma orden, sin nuevo canje).
+        // El canje quedó registrado pero la renovación no se confirmó contra
+        // el panel (vencimiento sin cambio o lectura imposible): el botón
+        // principal pasa a reintentar la renovación (misma orden, sin nuevo
+        // canje).
         setCouponRetryOrderId(result.orderId)
         setPayError(
-          `El cupón se aceptó y quedó registrado (orden ${result.orderId.slice(0, 8)}…), pero la renovación falló, probablemente por lentitud del panel de licencias. Pulsa «Reintentar renovación»: no se vuelve a canjar ni suma meses extra.`
+          `El cupón se aceptó y quedó registrado (orden ${result.orderId.slice(0, 8)}…), pero la renovación no se confirmó en el panel de licencias.${result.error ? ` ${result.error}` : ""} Pulsa «Reintentar renovación»: no se vuelve a canjar ni suma meses extra.`
         )
         refreshRow(userName)
       } else {
         setPurchaseOpen(false)
         toast.success("Renovación aplicada", {
-          description: `${userName} · 1 mes · ${formatMxn(result.amount)}`,
+          description: `${userName} · 1 mes · ${formatMxn(result.amount)}${verifiedExpiresSuffix(result.verifiedExpiresAt)}`,
         })
         refreshRow(userName)
       }
@@ -954,12 +965,12 @@ export function ClientesAccordion({
       const result = await retryOrderRenewal(couponRetryOrderId)
       if (result.status === "renewal_failed") {
         setPayError(
-          `La renovación volvió a fallar (orden ${couponRetryOrderId.slice(0, 8)}…). Quedó registrada para revisión; inténtalo de nuevo en unos minutos.`
+          `La renovación volvió a fallar (orden ${couponRetryOrderId.slice(0, 8)}…).${result.error ? ` ${result.error}` : " Quedó registrada para revisión; inténtalo de nuevo en unos minutos."}`
         )
       } else {
         setPurchaseOpen(false)
         toast.success("Renovación aplicada", {
-          description: `${userName} · 1 mes`,
+          description: `${userName} · 1 mes${verifiedExpiresSuffix(result.verifiedExpiresAt)}`,
         })
         refreshRow(userName)
       }
@@ -1010,7 +1021,7 @@ export function ClientesAccordion({
           toast.success("Renovación aplicada", {
             description: `${order.user_name} · ${order.months} ${
               order.months === 1 ? "mes" : "meses"
-            } · ${formatMxn(order.amount)}`,
+            } · ${formatMxn(order.amount)}${verifiedExpiresSuffix(order.renewal_verified_expires_at)}`,
           })
           refreshRow(order.user_name)
           router.replace("/clientes")
@@ -1285,7 +1296,7 @@ export function ClientesAccordion({
               {pollResult?.order
                 ? `${pollResult.order.user_name} · ${pollResult.order.months} ${
                     pollResult.order.months === 1 ? "mes" : "meses"
-                  } · ${formatMxn(pollResult.order.amount)}`
+                  } · ${formatMxn(pollResult.order.amount)}${verifiedExpiresSuffix(pollResult.order.renewal_verified_expires_at)}`
                 : "La licencia quedó renovada y la fila ya muestra el vencimiento nuevo."}
             </p>
           </AlertDescription>

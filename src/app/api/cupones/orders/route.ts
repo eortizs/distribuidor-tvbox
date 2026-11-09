@@ -157,6 +157,8 @@ export async function POST(request: Request) {
         status: result.status,
         amount: result.amount,
         currency: result.currency,
+        error: result.error,
+        verified_expires_at: result.verifiedExpiresAt,
       },
     })
   } catch (error) {

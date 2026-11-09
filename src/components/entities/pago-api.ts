@@ -27,6 +27,11 @@ export interface PaymentOrder {
   payment_status: string | null
   error: string | null
   renewed_at: string | null
+  /**
+   * Vencimiento nuevo verificado en el panel al confirmar la renovación:
+   * evidencia del éxito real (null si no se verificó).
+   */
+  renewal_verified_expires_at: string | null
   refunded_at: string | null
   created_at: string
   updated_at: string
@@ -186,11 +191,22 @@ export async function fetchPendingTransferOrders(): Promise<TransferOrder[]> {
 /** Aprueba una transferencia: renueva la licencia del cliente. */
 export async function approveTransferOrder(
   orderId: string
-): Promise<{ orderId: string; status: string }> {
-  return requestJson<{ order_id: string; status: string }>(
-    `/api/transferencias/orders/${encodeURIComponent(orderId)}/approve`,
-    { method: "POST" }
-  ).then((data) => ({ orderId: data.order_id, status: data.status }))
+): Promise<{
+  orderId: string
+  status: string
+  verifiedExpiresAt: string | null
+}> {
+  return requestJson<{
+    order_id: string
+    status: string
+    verified_expires_at: string | null
+  }>(`/api/transferencias/orders/${encodeURIComponent(orderId)}/approve`, {
+    method: "POST"
+  }).then((data) => ({
+    orderId: data.order_id,
+    status: data.status,
+    verifiedExpiresAt: data.verified_expires_at ?? null,
+  }))
 }
 
 /** Rechaza una transferencia: no hubo pago ni renovación. */
@@ -220,11 +236,19 @@ export async function createCouponOrder(params: {
   code: string
   /** Id de la intención de canje: igual en reintentos, único por canje. */
   requestId: string
-}): Promise<{ orderId: string; status: string; amount: number }> {
+}): Promise<{
+  orderId: string
+  status: string
+  amount: number
+  error: string | null
+  verifiedExpiresAt: string | null
+}> {
   return requestJson<{
     order_id: string
     status: string
     amount: number
+    error: string | null
+    verified_expires_at: string | null
   }>("/api/cupones/orders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -238,6 +262,8 @@ export async function createCouponOrder(params: {
     orderId: data.order_id,
     status: data.status,
     amount: data.amount,
+    error: data.error ?? null,
+    verifiedExpiresAt: data.verified_expires_at ?? null,
   }))
 }
 
@@ -248,11 +274,27 @@ export async function createCouponOrder(params: {
  */
 export async function retryOrderRenewal(
   orderId: string
-): Promise<{ orderId: string; status: string }> {
-  return requestJson<{ order: { id: string; status: string } }>(
-    `/api/mercadopago/orders/${encodeURIComponent(orderId)}/retry`,
-    { method: "POST" }
-  ).then((data) => ({ orderId: data.order.id, status: data.order.status }))
+): Promise<{
+  orderId: string
+  status: string
+  error: string | null
+  verifiedExpiresAt: string | null
+}> {
+  return requestJson<{
+    order: {
+      id: string
+      status: string
+      error: string | null
+      renewal_verified_expires_at: string | null
+    }
+  }>(`/api/mercadopago/orders/${encodeURIComponent(orderId)}/retry`, {
+    method: "POST"
+  }).then((data) => ({
+    orderId: data.order.id,
+    status: data.order.status,
+    error: data.order.error ?? null,
+    verifiedExpiresAt: data.order.renewal_verified_expires_at ?? null,
+  }))
 }
 
 /* ------------------------------- Reembolsos -------------------------------- */

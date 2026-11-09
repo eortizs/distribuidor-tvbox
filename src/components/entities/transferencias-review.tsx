@@ -27,6 +27,7 @@ import { formatBytes } from "@/hooks/use-file-upload"
 import { Alert, AlertDescription, AlertTitle } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
 import { formatMxn } from "@/lib/finanzas"
+import { formatFlujoDate } from "@/lib/flujotv"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -107,7 +108,11 @@ export function TransferenciasReview({
         const monthsLabel = `${order.months} ${order.months === 1 ? "mes" : "meses"}`
         if (result.status === "renewed") {
           toast.success("Renovación aplicada", {
-            description: `${order.user_name} · ${monthsLabel} · ${formatMxn(order.amount)}`,
+            description: `${order.user_name} · ${monthsLabel} · ${formatMxn(order.amount)}${
+              result.verifiedExpiresAt
+                ? ` · nuevo vencimiento: ${formatFlujoDate(result.verifiedExpiresAt)}`
+                : ""
+            }`,
           })
           onApproved(order.user_name)
         } else if (result.status === "renewal_failed") {
