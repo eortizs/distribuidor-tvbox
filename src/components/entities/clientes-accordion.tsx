@@ -1794,7 +1794,7 @@ export function ClientesAccordion({
                       {client.userName}
                     </span>
                     {clientName(client, clientNames) ? (
-                      <span className="text-muted-foreground truncate text-xs">
+                      <span className="line-clamp-2 text-muted-foreground text-xs">
                         {clientName(client, clientNames)}
                       </span>
                     ) : null}
