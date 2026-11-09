@@ -244,40 +244,44 @@ export function AppNotifications() {
           ) : null}
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-80" align="end" sideOffset={8}>
-          <DropdownMenuLabel className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-2">
-              Notificaciones
-              {unread > 0 ? (
-                <Badge variant="secondary" size="sm">
-                  {unread}
-                </Badge>
-              ) : null}
-            </span>
-            <span className="flex items-center gap-1">
-              {unread > 0 ? (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() => void markRead()}
-                  disabled={busy}
-                >
-                  <CheckCheckIcon data-icon="inline-start" />
-                  Marcar leídas
-                </Button>
-              ) : null}
-              {items.length > 0 ? (
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  onClick={() => setConfirmClear(true)}
-                  aria-label="Borrar todas las notificaciones"
-                >
-                  <Trash2Icon aria-hidden="true" />
-                </Button>
-              ) : null}
-            </span>
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
+          {/* GroupLabel (DropdownMenuLabel) exige el contexto de Menu.Group:
+              sin este grupo Base UI lanza el error #31 al abrir el menú. */}
+          <DropdownMenuGroup>
+            <DropdownMenuLabel className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                Notificaciones
+                {unread > 0 ? (
+                  <Badge variant="secondary" size="sm">
+                    {unread}
+                  </Badge>
+                ) : null}
+              </span>
+              <span className="flex items-center gap-1">
+                {unread > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => void markRead()}
+                    disabled={busy}
+                  >
+                    <CheckCheckIcon data-icon="inline-start" />
+                    Marcar leídas
+                  </Button>
+                ) : null}
+                {items.length > 0 ? (
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    onClick={() => setConfirmClear(true)}
+                    aria-label="Borrar todas las notificaciones"
+                  >
+                    <Trash2Icon aria-hidden="true" />
+                  </Button>
+                ) : null}
+              </span>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+          </DropdownMenuGroup>
           {busy ? (
             <div className="flex flex-col gap-1 px-1 pb-2">
               {Array.from({ length: SKELETON_ROWS }, (_, index) => (
