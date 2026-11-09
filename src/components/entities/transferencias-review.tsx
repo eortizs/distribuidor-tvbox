@@ -53,6 +53,16 @@ function TicketIcon({ mimeType }: { mimeType: string }) {
   return <Icon aria-hidden="true" className="size-4 shrink-0 opacity-60" />
 }
 
+/**
+ * Plazo de la orden con los meses gratis de un paquete visibles: «6 meses +
+ * 1 gratis»; las individuales quedan como «1 mes».
+ */
+function transferOrderLabel(order: TransferOrder): string {
+  const base = `${order.months} ${order.months === 1 ? "mes" : "meses"}`
+  const bonus = order.bonus_months ?? 0
+  return bonus > 0 ? `${base} + ${bonus} gratis` : base
+}
+
 /** Momento legible de la orden: «7 nov, 11:32». */
 function formatWhen(iso: string): string {
   return new Intl.DateTimeFormat("es", {
@@ -105,7 +115,7 @@ export function TransferenciasReview({
       setActingId(order.id)
       try {
         const result = await approveTransferOrder(order.id)
-        const monthsLabel = `${order.months} ${order.months === 1 ? "mes" : "meses"}`
+        const monthsLabel = transferOrderLabel(order)
         if (result.status === "renewed") {
           toast.success("Renovación aplicada", {
             description: `${order.user_name} · ${monthsLabel} · ${formatMxn(order.amount)}${
@@ -208,7 +218,7 @@ export function TransferenciasReview({
                       {order.user_name}
                     </p>
                     <p className="text-muted-foreground truncate text-xs">
-                      {order.months} {order.months === 1 ? "mes" : "meses"} ·{" "}
+                      {transferOrderLabel(order)} ·{" "}
                       {formatMxn(order.amount)} ·{" "}
                       {order.buyer_username ?? "sin comprador"} ·{" "}
                       {formatWhen(order.created_at)}

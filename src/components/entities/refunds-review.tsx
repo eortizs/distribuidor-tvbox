@@ -173,8 +173,11 @@ export function RefundsReview() {
                       {order.user_name}
                     </p>
                     <p className="text-muted-foreground truncate text-xs">
-                      {order.months} {order.months === 1 ? "mes" : "meses"} ·{" "}
-                      {formatMxn(order.amount)} ·{" "}
+                      {order.months} {order.months === 1 ? "mes" : "meses"}
+                      {(order.bonus_months ?? 0) > 0
+                        ? ` + ${order.bonus_months} gratis`
+                        : ""}{" "}
+                      · {formatMxn(order.amount)} ·{" "}
                       {order.buyer_username ?? "sin comprador"} ·{" "}
                       {formatWhen(order.created_at)}
                       {order.payment_id !== null

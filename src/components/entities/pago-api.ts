@@ -21,6 +21,8 @@ export interface PaymentOrder {
   status: PaymentOrderStatus
   user_name: string
   months: number
+  /** Meses gratis del paquete (0 en renovaciones individuales). */
+  bonus_months: number
   amount: number
   currency: string
   payment_id: number | null
@@ -86,8 +88,10 @@ async function parse<T>(response: Response): Promise<T> {
 /**
  * Envuelve `fetch`: un corte de red antes de respuesta (TypeError) no es una
  * "respuesta ilegible", es un fallo de conectividad con mensaje propio.
+ * Exportada para los clientes de API que comparten el envoltorio (p. ej.
+ * `/api/paquetes/*`).
  */
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+export async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
     response = await fetch(url, init)
@@ -148,6 +152,8 @@ export interface TransferOrder {
   status: PaymentOrderStatus
   user_name: string
   months: number
+  /** Meses gratis del paquete (0 en renovaciones individuales). */
+  bonus_months: number
   amount: number
   currency: string
   buyer_username: string | null
@@ -277,6 +283,10 @@ export async function retryOrderRenewal(
 ): Promise<{
   orderId: string
   status: string
+  /** Meses pagados de la orden (para etiquetas fieles en el cliente). */
+  months: number
+  /** Meses gratis de la orden (para etiquetas fieles en el cliente). */
+  bonusMonths: number
   error: string | null
   verifiedExpiresAt: string | null
 }> {
@@ -284,6 +294,8 @@ export async function retryOrderRenewal(
     order: {
       id: string
       status: string
+      months: number
+      bonus_months: number
       error: string | null
       renewal_verified_expires_at: string | null
     }
@@ -292,6 +304,8 @@ export async function retryOrderRenewal(
   }).then((data) => ({
     orderId: data.order.id,
     status: data.order.status,
+    months: data.order.months,
+    bonusMonths: data.order.bonus_months,
     error: data.order.error ?? null,
     verifiedExpiresAt: data.order.renewal_verified_expires_at ?? null,
   }))
@@ -305,6 +319,8 @@ export interface RefundOrder {
   status: PaymentOrderStatus
   user_name: string
   months: number
+  /** Meses gratis del paquete (0 en renovaciones individuales). */
+  bonus_months: number
   amount: number
   currency: string
   payment_id: number | null

@@ -5,6 +5,7 @@ import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
+import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
 
 import {
   resolveMercadoPagoConfig,
@@ -37,6 +38,8 @@ export interface MpOrderRow {
   method: MpOrderMethod
   user_name: string
   months: number
+  /** Meses gratis del paquete (0 en renovaciones individuales). */
+  bonus_months: number
   amount: number
   currency: string
   buyer_user_id: string | null
@@ -60,6 +63,8 @@ export interface MpOrderPublic {
   status: MpOrderStatus
   user_name: string
   months: number
+  /** Meses gratis del paquete (0 en renovaciones individuales). */
+  bonus_months: number
   amount: number
   currency: string
   payment_id: number | null
@@ -167,6 +172,7 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
           : "mercadopago",
     user_name: String(row.user_name),
     months: Number(row.months),
+    bonus_months: Number(row.bonus_months ?? 0),
     amount: Number(row.amount),
     currency: String(row.currency),
     buyer_user_id: row.buyer_user_id === null ? null : String(row.buyer_user_id),
@@ -210,6 +216,7 @@ export function toMpOrderPublic(row: MpOrderRow): MpOrderPublic {
     status: row.status,
     user_name: row.user_name,
     months: row.months,
+    bonus_months: row.bonus_months,
     amount: row.amount,
     currency: row.currency,
     payment_id: row.payment_id,
@@ -248,27 +255,40 @@ export interface CreatePaymentOrderResult {
  * `purpose: wallet_purchase` (solo usuarios con cuenta de Mercado Pago, pago
  * wallet a wallet). El importe queda congelado en la orden: el webhook
  * verifica contra ella, nunca contra datos del navegador.
+ *
+ * `bonusMonths` > 0 marca un paquete del módulo «Paquetes FlujoTV»: paga sus
+ * `months` y la renovación añadirá los meses gratis; el precio no cambia.
+ * `returnPath` fija la ruta de los back_urls del checkout (default
+ * `/clientes`, la del módulo de paquetes pasa la suya).
  */
 export async function createPaymentOrder(params: {
   userName: string
   months: RenewalMonths
   buyerUserId: string
   buyerUsername: string
+  bonusMonths?: number
+  returnPath?: string
 }): Promise<CreatePaymentOrderResult> {
   const config = resolveMercadoPagoConfig()
   const orderId = randomUUID()
+  const bonusMonths = params.bonusMonths ?? 0
   const amount = Math.round(config.licensePriceMxn * params.months * 100) / 100
-  const title = `Renovación ${params.months} ${
-    params.months === 1 ? "mes" : "meses"
-  } FlujoTV — ${params.userName}`
+  const title =
+    bonusMonths > 0
+      ? `Paquete ${params.months} meses + ${bonusMonths} ${
+          bonusMonths === 1 ? "mes gratis" : "meses gratis"
+        } FlujoTV — ${params.userName}`
+      : `Renovación ${params.months} ${
+          params.months === 1 ? "mes" : "meses"
+        } FlujoTV — ${params.userName}`
 
-  const returnBase = `${config.siteUrl}/clientes?orden=${orderId}&estado=`
+  const returnBase = `${config.siteUrl}${params.returnPath ?? "/clientes"}?orden=${orderId}&estado=`
 
   await pool.query(
     `INSERT INTO mp_orders
-       (id, status, user_name, months, amount, currency, buyer_user_id, external_reference)
-     VALUES ($1::uuid, 'pending', $2, $3, $4, 'MXN', $5, $1::text)`,
-    [orderId, params.userName, params.months, amount, params.buyerUserId]
+       (id, status, user_name, months, bonus_months, amount, currency, buyer_user_id, external_reference)
+     VALUES ($1::uuid, 'pending', $2, $3, $4, $5, 'MXN', $6, $1::text)`,
+    [orderId, params.userName, params.months, bonusMonths, amount, params.buyerUserId]
   )
 
   try {
@@ -480,6 +500,12 @@ async function verifyRenewalApplied(
  * renovación en lugar de sumar meses dos veces, así que es seguro invocarla
  * también sobre órdenes `paid` varadas o `renewal_failed`.
  *
+ * Las órdenes de paquete añaden los meses gratis como renovaciones extra de
+ * 1 mes con claves derivadas (`mp-<orderId>-b1`, `-b2`, …): cada paso es
+ * idempotente por separado, así que una respuesta perdida a mitad del plan
+ * se recobra re-ejecutándolo — los pasos ya aplicados devuelven su renovación
+ * original y solo los pendientes se ejecutan de verdad.
+ *
  * Éxito verificado, no declarado: antes de renovar se congela el vencimiento
  * original de la licencia como línea base y, tras el OK del panel, se relee
  * el vencimiento hasta verlo cambiar. Un panel que responde 200 sin aplicar
@@ -499,13 +525,26 @@ async function attemptOrderRenewal(
         `La orden ${order.id} tiene meses fuera de rango (${order.months}).`
       )
     }
+    const bonusMonths =
+      Number.isInteger(order.bonus_months) && order.bonus_months > 0
+        ? order.bonus_months
+        : 0
+    const renewalSteps: { months: RenewalMonths; idempotencyKey: string }[] = [
+      { months: order.months as RenewalMonths, idempotencyKey: `mp-${order.id}` },
+      ...Array.from({ length: bonusMonths }, (_, index) => ({
+        months: 1 as RenewalMonths,
+        idempotencyKey: `mp-${order.id}-b${index + 1}`,
+      })),
+    ]
     const baseline = await resolveRenewalBaseline(order)
-    await renewFlujoLicense({
-      userName: order.user_name,
-      months: order.months as RenewalMonths,
-      idempotencyKey: `mp-${order.id}`,
-      timeoutMs: renewalTimeoutMs,
-    })
+    for (const step of renewalSteps) {
+      await renewFlujoLicense({
+        userName: order.user_name,
+        months: step.months,
+        idempotencyKey: step.idempotencyKey,
+        timeoutMs: renewalTimeoutMs,
+      })
+    }
     // Comprobación: releer el vencimiento y exigir que sea distinto al
     // original. Sin esto, un 200 del panel sin renovación real se reportaba
     // como éxito (falso positivo).
@@ -548,6 +587,7 @@ async function attemptOrderRenewal(
       payment_id: paymentId,
       user_name: order.user_name,
       months: order.months,
+      bonus_months: bonusMonths,
       outcome: "renewed",
       verified_expires_at: verification.verifiedAt,
     })
@@ -857,25 +897,28 @@ export interface CreatedTransferOrder {
  * está guardado (`ticket_file_id`) y la renovación ocurre solo cuando el
  * admin aprueba la revisión (`approveTransferOrder`), nunca al subirlo.
  * El importe queda congelado en la orden, igual que en Mercado Pago.
+ * `bonusMonths` > 0 marca un paquete del módulo «Paquetes FlujoTV».
  */
 export async function createTransferOrder(params: {
   userName: string
   months: RenewalMonths
   buyerUserId: string
   ticketFileId: string
+  bonusMonths?: number
 }): Promise<CreatedTransferOrder> {
   const orderId = randomUUID()
+  const bonusMonths = params.bonusMonths ?? 0
   const amount =
     Math.round(resolveMercadoPagoConfig().licensePriceMxn * params.months * 100) /
     100
 
   await pool.query(
     `INSERT INTO mp_orders
-       (id, status, method, user_name, months, amount, currency, buyer_user_id,
+       (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
         external_reference, ticket_file_id)
-     VALUES ($1::uuid, 'pending', 'transferencia', $2, $3, $4, 'MXN', $5,
-             $1::text, $6::uuid)`,
-    [orderId, params.userName, params.months, amount, params.buyerUserId, params.ticketFileId]
+     VALUES ($1::uuid, 'pending', 'transferencia', $2, $3, $4, $5, 'MXN', $6,
+             $1::text, $7::uuid)`,
+    [orderId, params.userName, params.months, bonusMonths, amount, params.buyerUserId, params.ticketFileId]
   )
 
   notifyOrderChange(orderId)
@@ -888,6 +931,8 @@ export interface TransferOrderPublic {
   status: MpOrderStatus
   user_name: string
   months: number
+  /** Meses gratis del paquete (0 en renovaciones individuales). */
+  bonus_months: number
   amount: number
   currency: string
   buyer_username: string | null
@@ -913,6 +958,7 @@ function parseTransferRow(row: TransferJoinRow): TransferOrderPublic {
     status: order.status,
     user_name: order.user_name,
     months: order.months,
+    bonus_months: order.bonus_months,
     amount: order.amount,
     currency: order.currency,
     buyer_username:
@@ -1069,10 +1115,27 @@ export async function rejectTransferOrder(
  */
 const ACTIVE_COUPON_CODES = new Set(["0000"])
 
+/**
+ * Cupón asignado a los paquetes del módulo «Paquetes FlujoTV»: la forma de
+ * pago «Cupón» de ese módulo lo usa para cualquiera de los paquetes (3, 6 o
+ * 12 meses). No depende de `COUPON_QA_ENABLED` — el módulo lo ofrece siempre
+ * — pero comparte los topes de canjes por comprador del resto de cupones.
+ * El código vive en `@/lib/paquetes` (isomórfico) para que la UI muestre
+ * exactamente el código que el servidor valida.
+ */
+const PACKAGE_COUPON_CODE = PAQUETE_COUPON_CODE
+
 export interface CreatedCouponOrder {
   orderId: string
   amount: number
   currency: string
+  /**
+   * `renewed` = renovación confirmada; `renewal_failed` = canje registrado
+   * pero renovación no confirmada (reintento seguro); `pending` = canje
+   * registrado y renovación EN CURSO en el servidor (solo paquetes: el
+   * cliente debe sondear el estado de la orden en lugar de esperar la
+   * respuesta HTTP).
+   */
   status: MpOrderStatus
   /** Razón del fallo de renovación tal como quedó en la orden; null si éxitó. */
   error: string | null
@@ -1081,6 +1144,10 @@ export interface CreatedCouponOrder {
    * confirmación lo muestra para que el comprador vea la fecha real.
    */
   verifiedExpiresAt: string | null
+  /** Meses pagados de la orden (para etiquetas fieles en el cliente). */
+  months: number
+  /** Meses gratis de la orden (para etiquetas fieles en el cliente). */
+  bonusMonths: number
 }
 
 /**
@@ -1121,17 +1188,22 @@ export async function couponMonthlyLimitForBuyer(
 
 /**
  * Renovación pagada con cupón: valida el código, crea la orden ya `paid`
- * (el cupón ES el pago) y ejecuta la renovación al instante con la clave
- * determinista `mp-<orderId>`. Sin checkout ni revisión: si la renovación
- * contra el panel falla la orden queda `renewal_failed` para el reintento,
- * igual que en los otros métodos.
+ * (el cupón ES el pago) y ejecuta la renovación con la clave determinista
+ * `mp-<orderId>`. Sin checkout ni revisión: si la renovación contra el panel
+ * falla la orden queda `renewal_failed` para el reintento, igual que en los
+ * otros métodos.
  *
  * Idempotente por `requestId`: el cliente genera un id por intención de
  * canje y lo conserva entre reintentos (respuesta perdida, doble clic), así
  * que repetir la solicitud devuelve la orden original en lugar de sumar
- * otro mes. La renovación usa el presupuesto de compras (60 s), no el
- * timeout largo: la respuesta no debe colgar más de lo que Cloudflare
- * está dispuesto a esperar.
+ * otro mes.
+ *
+ * Canjes individuales (0000, 1 mes): renovación SINCRÓNICA con el presupuesto
+ * de compras (60 s) — cabe en la paciencia de Cloudflare y su UI depende de
+ * la respuesta. Canjes de paquete (bonusMonths > 0): el plan completo no
+ * cabe, así que la renovación se dispara desacoplada y la respuesta devuelve
+ * `pending` para que el cliente sondee la orden; el resultado se sella igual
+ * (verified / renewal_failed) en la orden.
  */
 export async function createCouponOrder(params: {
   userName: string
@@ -1139,22 +1211,37 @@ export async function createCouponOrder(params: {
   buyerUserId: string
   code: string
   requestId: string
+  /** Meses gratis del paquete (> 0 marca un canje del módulo de paquetes). */
+  bonusMonths?: number
 }): Promise<CreatedCouponOrder> {
-  if (!isCouponQaEnabled()) {
-    throw new MercadoPagoError(
-      503,
-      "coupon_disabled",
-      "El pago con cupón está desactivado en el servidor."
-    )
-  }
-
+  const bonusMonths = params.bonusMonths ?? 0
   const code = params.code.trim()
-  if (!ACTIVE_COUPON_CODES.has(code)) {
-    throw new MercadoPagoError(
-      422,
-      "invalid_coupon",
-      "El código de cupón no es válido."
-    )
+  if (bonusMonths > 0) {
+    // Canje de paquete: el cupón asignado es 1010 y el módulo lo ofrece
+    // siempre; el cliente no elige código, el servidor lo valida aquí.
+    if (code !== PACKAGE_COUPON_CODE) {
+      throw new MercadoPagoError(
+        422,
+        "invalid_coupon",
+        "El código de cupón no es válido para paquetes."
+      )
+    }
+  } else {
+    if (!isCouponQaEnabled()) {
+      throw new MercadoPagoError(
+        503,
+        "coupon_disabled",
+        "El pago con cupón está desactivado en el servidor."
+      )
+    }
+
+    if (!ACTIVE_COUPON_CODES.has(code)) {
+      throw new MercadoPagoError(
+        422,
+        "invalid_coupon",
+        "El código de cupón no es válido."
+      )
+    }
   }
 
   // Topes de canjes por comprador: diario (ventana de 24 h) y mensual
@@ -1162,60 +1249,84 @@ export async function createCouponOrder(params: {
   // renovaciones ilimitadas aunque esté activado, y repartir canjes en días
   // distintos no debe sortear el techo del mes. Cada tope es por usuario
   // (override del admin desde /users) con fallback al global del servidor.
-  const redeemed = await pool.query<{ daily: number; monthly: number }>(
-    `SELECT count(*) FILTER (WHERE created_at >= now() - interval '24 hours')::int AS daily,
-            count(*)::int AS monthly
-       FROM mp_orders
-      WHERE method = 'cupon'
-        AND buyer_user_id = $1::uuid
-        AND created_at >= now() - interval '30 days'`,
-    [params.buyerUserId]
-  )
-  const dailyLimit = await couponDailyLimitForBuyer(params.buyerUserId)
-  if ((redeemed.rows[0]?.daily ?? 0) >= dailyLimit) {
-    throw new MercadoPagoError(
-      429,
-      "coupon_limit",
-      `Ya canjeaste el máximo de ${dailyLimit} cupones por día.`
-    )
-  }
-  const monthlyLimit = await couponMonthlyLimitForBuyer(params.buyerUserId)
-  if ((redeemed.rows[0]?.monthly ?? 0) >= monthlyLimit) {
-    throw new MercadoPagoError(
-      429,
-      "coupon_monthly_limit",
-      `Ya canjeaste el máximo de ${monthlyLimit} cupones este mes.`
-    )
-  }
-
+  //
+  // El conteo y el INSERT van en UNA transacción con advisory lock del
+  // comprador: sin ella, dos solicitudes concurrentes con distinto
+  // request_id pasan ambas el conteo y crean dos órdenes pagadas (cada canje
+  // de paquete regala 7-14 meses, así que la carrera cuesta meses, no pesos).
   const amount =
     Math.round(resolveMercadoPagoConfig().licensePriceMxn * params.months * 100) /
     100
 
-  // INSERT con claim por request_id: un reintento con el mismo id no crea
-  // una segunda orden (índice único parcial), recupera la existente.
-  const inserted = await pool.query<{ id: string }>(
-    `INSERT INTO mp_orders
-       (id, status, method, user_name, months, amount, currency, buyer_user_id,
-        external_reference, coupon_code, coupon_request_id)
-     VALUES ($1::uuid, 'paid', 'cupon', $2, $3, $4, 'MXN', $5, $1::text, $6, $7)
-     ON CONFLICT (coupon_request_id) WHERE method = 'cupon' AND coupon_request_id IS NOT NULL
-     DO NOTHING
-     RETURNING id`,
-    [
-      randomUUID(),
-      params.userName,
-      params.months,
-      amount,
+  const tx = await pool.connect()
+  let insertedId: string | null = null
+  try {
+    await tx.query("BEGIN")
+    // Llave de 32 bits derivada del uuid del comprador; solo serializa el
+    // canje de cupones de un mismo comprador.
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
       params.buyerUserId,
-      code,
-      params.requestId,
-    ]
-  )
+    ])
+
+    const redeemed = await tx.query<{ daily: number; monthly: number }>(
+      `SELECT count(*) FILTER (WHERE created_at >= now() - interval '24 hours')::int AS daily,
+              count(*)::int AS monthly
+         FROM mp_orders
+        WHERE method = 'cupon'
+          AND buyer_user_id = $1::uuid
+          AND created_at >= now() - interval '30 days'`,
+      [params.buyerUserId]
+    )
+    const dailyLimit = await couponDailyLimitForBuyer(params.buyerUserId)
+    if ((redeemed.rows[0]?.daily ?? 0) >= dailyLimit) {
+      throw new MercadoPagoError(
+        429,
+        "coupon_limit",
+        `Ya canjeaste el máximo de ${dailyLimit} cupones por día.`
+      )
+    }
+    const monthlyLimit = await couponMonthlyLimitForBuyer(params.buyerUserId)
+    if ((redeemed.rows[0]?.monthly ?? 0) >= monthlyLimit) {
+      throw new MercadoPagoError(
+        429,
+        "coupon_monthly_limit",
+        `Ya canjeaste el máximo de ${monthlyLimit} cupones este mes.`
+      )
+    }
+
+    // INSERT con claim por request_id: un reintento con el mismo id no crea
+    // una segunda orden (índice único parcial), recupera la existente.
+    const inserted = await tx.query<{ id: string }>(
+      `INSERT INTO mp_orders
+         (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
+          external_reference, coupon_code, coupon_request_id)
+       VALUES ($1::uuid, 'paid', 'cupon', $2, $3, $4, $5, 'MXN', $6, $1::text, $7, $8)
+       ON CONFLICT (coupon_request_id) WHERE method = 'cupon' AND coupon_request_id IS NOT NULL
+       DO NOTHING
+       RETURNING id`,
+      [
+        randomUUID(),
+        params.userName,
+        params.months,
+        bonusMonths,
+        amount,
+        params.buyerUserId,
+        code,
+        params.requestId,
+      ]
+    )
+    insertedId = inserted.rows[0]?.id ?? null
+    await tx.query("COMMIT")
+  } catch (error) {
+    await tx.query("ROLLBACK").catch(() => {})
+    throw error
+  } finally {
+    tx.release()
+  }
 
   let order: MpOrderRow | null
-  if (inserted.rows.length > 0) {
-    order = await getMpOrder(inserted.rows[0].id)
+  if (insertedId) {
+    order = await getMpOrder(insertedId)
   } else {
     // Reintento con el mismo request_id: localiza la orden original del
     // mismo comprador (el índice es global; un id ajeno no filtra nada).
@@ -1243,6 +1354,45 @@ export async function createCouponOrder(params: {
     )
   }
 
+  // Renovación de paquetes DESACOPLADA de la respuesta: el plan de un paquete
+  // (línea base + hasta 3 renovaciones + verificación) excede de largo el
+  // presupuesto ~100 s de Cloudflare cuando el panel está lento, así que
+  // sostener la respuesta haría perderla SIEMPRE en el caso típico. La orden
+  // queda `paid` y el cliente sondea `GET /api/mercadopago/orders/{id}`; la
+  // conciliación de `paid` varado (10 min) y el reintento cubren un proceso
+  // cortado a mitad del plan. Los canjes individuales (0000, 1 mes) siguen
+  // sincrónicos: caben en el presupuesto y su UI depende de la respuesta.
+  if (bonusMonths > 0 && order.status !== "renewed") {
+    if (order.status === "paid" || order.status === "renewal_failed") {
+      const target = order
+      void attemptOrderRenewal(target, null, FLUJO_PURCHASE_TIMEOUT_MS)
+        .then((outcome) => {
+          log("mercadopago.coupon_order", {
+            order_id: target.id,
+            user_name: target.user_name,
+            months: target.months,
+            bonus_months: bonusMonths,
+            coupon: code,
+            outcome,
+            via: "detached",
+          })
+        })
+        .catch((error: unknown) => logError("coupon_detached_renewal", error))
+    }
+    return {
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      // Dentro de esta rama la orden NO está renovada (guard de arriba): el
+      // cliente sondea hasta el resultado final.
+      status: "pending",
+      error: order.status === "renewal_failed" ? order.error : null,
+      verifiedExpiresAt: null,
+      months: order.months,
+      bonusMonths: order.bonus_months,
+    }
+  }
+
   // Una orden reintento ya renovada no vuelve al panel: renovar de nuevo con
   // la misma clave determinista sería un no-op costoso.
   let outcome: PaymentOutcome
@@ -1256,6 +1406,7 @@ export async function createCouponOrder(params: {
     order_id: order.id,
     user_name: params.userName,
     months: params.months,
+    bonus_months: bonusMonths,
     coupon: code,
     outcome,
   })
@@ -1278,6 +1429,8 @@ export async function createCouponOrder(params: {
     error: fresh?.error ?? null,
     verifiedExpiresAt:
       outcome === "renewed" ? fresh?.renewal_verified_expires_at ?? null : null,
+    months: order.months,
+    bonusMonths: order.bonus_months,
   }
 }
 
@@ -1297,6 +1450,8 @@ export interface RefundOrderView {
   status: MpOrderStatus
   user_name: string
   months: number
+  /** Meses gratis del paquete (0 en renovaciones individuales). */
+  bonus_months: number
   amount: number
   currency: string
   payment_id: number | null
@@ -1318,6 +1473,7 @@ function parseRefundRow(row: RefundJoinRow): RefundOrderView {
     status: order.status,
     user_name: order.user_name,
     months: order.months,
+    bonus_months: order.bonus_months,
     amount: order.amount,
     currency: order.currency,
     payment_id: order.payment_id,

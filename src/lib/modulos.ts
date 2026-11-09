@@ -2,6 +2,7 @@ import {
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
+  PackageIcon,
   ReceiptTextIcon,
   ShoppingBasketIcon,
   type LucideIcon,
@@ -62,6 +63,13 @@ export const MODULOS: Modulo[] = [
       "Dicta o escribe tu lista con IA: productos por categoría, cantidades y casillas de comprado.",
     href: "/modulos/lista-de-compras",
     icon: ShoppingBasketIcon,
+  },
+  {
+    title: "Paquetes FlujoTV",
+    description:
+      "Renueva licencias en paquetes de 3, 6 y 12 meses con meses de regalo y los mismos métodos de pago.",
+    href: "/modulos/paquetes-flujotv",
+    icon: PackageIcon,
   },
   {
     title: "Alta de tickets",
