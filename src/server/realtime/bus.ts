@@ -28,6 +28,15 @@ export interface RealtimeEvent {
   kind: RealtimeKind
   /** Id del recurso tocado (entidad, orden de MP o usuario destino). */
   entityId?: string
+  /**
+   * Cliente FlujoTV renovado (solo `mp_order`): permite a las pantallas de
+   * clientes refrescar SOLO esa fila en vivo en vez de recargar el listado
+   * completo (lento y, con el snapshot cacheado, devolvería el vencimiento
+   * viejo pisando la fila ya actualizada).
+   */
+  userName?: string
+  /** Estado nuevo de la orden tras la mutación (solo `mp_order`). */
+  status?: string
   /** Usuario propietario del dato (dynamicProperties.distribuidorId / user_id). */
   distribuidorId?: string | null
   /** Reseller FlujoTV ligado al dato, cuando aplica (entidad Cuenta). */

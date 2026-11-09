@@ -486,7 +486,7 @@ El endpoint SSE autentica por la cookie de sesión y **filtra cada evento por el
 | `kind` | Lo emite | Quién lo recibe |
 |---|---|---|
 | `entity` | `src/server/umejson/repository.ts` (create/properties/state/delete) | admin: todo; distribuidor: su propia entidad Cuenta (`distribuidorId`) o lo ligado a su reseller (`distribuidorName`) |
-| `mp_order` | `src/server/mercadopago/service.ts` (renovada, fallida, rechazada —incluye el webhook externo de MP) | todos (el refetch llega ya filtrado por alcance) |
+| `mp_order` | `src/server/mercadopago/service.ts` (renovada, fallida, rechazada —incluye el webhook externo de MP—; también el escaneo de comprobante en `src/server/transferencias/scan.ts`) | todos (el refetch llega ya filtrado por alcance). El evento viaja con el **usuario renovado** (`userName`) y el **estado nuevo** (`status`): `/clientes` y *Paquetes FlujoTV* lo usan para refrescar **solo la fila** del cliente renovado (ver [Refresco dirigido de la fila renovada](#refresco-dirigido-de-la-fila-renovada-mp_order)) |
 | `expenses` | `src/server/finanzas/gastos.ts` (alta/edición/borrado, incluidos los espejos del tarificador) | solo el propietario (incluso un admin ignora los ajenos) |
 | `users` | `src/server/auth/users.ts` y `permissions.ts` (alta/edición/baja y matriz de secciones) | admin: todo; el usuario afectado recibe los que lo tocan (p. ej. permisos de navegación) |
 | `prefs` | `src/server/modulos/preferences.ts` (guardado de preferencias de Módulos) | **solo el propietario**, sea cual sea el rol: ni un admin recibe los de otras cuentas |
@@ -495,8 +495,16 @@ El endpoint SSE autentica por la cookie de sesión y **filtra cada evento por el
 ### Cliente
 
 - **`RealtimeProvider`** (`src/components/realtime/realtime-provider.tsx`, montado una vez en el layout del dashboard): una **sola conexión SSE por pestaña**. Al recibir eventos ejecuta `router.refresh()` **coalescido** (debounce de 300 ms) para que una ráfaga (p. ej. orden + entidad de una renovación) produzca un único refresco; con la pestaña oculta no refresca, y al volver (`visibilitychange`) refresca de una vez. Si la conexión cae, al reabrir pide un **catch-up** (el refresh cubre lo perdido durante el hueco) y la cabecera muestra el badge *Reconectando…* / *Sin conexión* (`RealtimeIndicator`, oculto mientras está en vivo).
-- **`useRealtimeEvent(kinds, callback)`** (`src/hooks/use-realtime.ts`): para las vistas que se alimentan de API routes (un `router.refresh()` no refetchea sus datos): *Gastos* recarga lista + resumen (sin resetear paginación), el acordeón de *Clientes* refetcha el listado FlujoTV, y el hub *Módulos* adopta las preferencias que llegan refrescadas.
+- **`useRealtimeEvent(kinds, callback)`** (`src/hooks/use-realtime.ts`): para las vistas que se alimentan de API routes (un `router.refresh()` no refetchea sus datos). El callback recibe el mensaje completo (`kind` + ids y, en `mp_order`, el usuario renovado y su estado nuevo) para que la vista decida entre refrescar una sola fila o el listado: *Gastos* recarga lista + resumen (sin resetear paginación), *Clientes* y *Paquetes FlujoTV* refetchan el listado FlujoTV solo en los eventos `entity`, y un `mp_order` con renovación aplicada refresca **solo la fila** del renovado (ver [Refresco dirigido de la fila renovada](#refresco-dirigido-de-la-fila-renovada-mp_order)); el hub *Módulos* adopta las preferencias que llegan refrescadas.
 - El propio autor del cambio también recibe el eco de su evento; el snapshot confirmado por el servidor hace que ese refresco sea un no-op.
+
+#### Refresco dirigido de la fila renovada (`mp_order`)
+
+Al completarse una renovación (webhook de MP, aprobación de transferencia, cupón, reintento o conciliación —todos comparten `attemptOrderRenewal`—), el evento `mp_order` sale con el **usuario renovado** (`userName`, de `mp_orders.user_name`) y el **estado nuevo** (`status`). Las pantallas de clientes (`clientes-accordion.tsx` en `/clientes` y `paquetes-view.tsx` en `/modulos/paquetes-flujotv`) **no recargan el listado** con ese evento:
+
+- Recargarlo es lento (todo el listado del panel) y, peor, el listado viene del **snapshot cacheado** del panel: presentaría el vencimiento **viejo** pisando la fecha nueva que la fila ya mostraba — la incoherencia visual donde la notificación anunciaba el vencimiento nuevo y la lista conservaba el viejo.
+- Con `status === "renewed"` la vista refresca **solo esa fila** con la lectura en vivo del panel (`GET /api/flujotv/clients/{usuario}` → `/find_user` sin caché, el mismo `refreshRow` que ya usaban los flujos de compra de la propia pestaña): barra de días, punto de estado y «vence …» quedan coherentes al instante, y el resto del listado no se toca.
+- Los demás estados de la orden (`pending`, `paid` en curso, rechazos, reembolsos, guardado del escaneo del comprobante) **no mueven el vencimiento de nadie**: no tocan filas. Los eventos `entity` siguen refetchando el listado en silencio, y la sincronización real (~90 s) sigue siendo la única recarga completa deliberada (botón de recargar).
 
 ### Preferencias del hub de Módulos (`/modulos`)
 

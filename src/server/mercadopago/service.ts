@@ -151,10 +151,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Señal de invalidación para las sesiones conectadas (SSE): un cambio de
  * estado de orden puede reflejar una licencia renovada en la pantalla de
- * clientes de otro dispositivo. Mejor esfuerzo, nunca bloquea la respuesta.
+ * clientes de otro dispositivo. El evento viaja con el usuario renovado y el
+ * estado nuevo para que esas pantallas refresquen SOLO la fila afectada
+ * (lectura en vivo del panel) en vez de recargar todo el listado. Mejor
+ * esfuerzo, nunca bloquea la respuesta.
  */
-function notifyOrderChange(orderId: string): void {
-  publishRealtimeDetached({ kind: "mp_order", entityId: orderId })
+function notifyOrderChange(
+  order: Pick<MpOrderRow, "id" | "user_name">,
+  status: MpOrderStatus
+): void {
+  publishRealtimeDetached({
+    kind: "mp_order",
+    entityId: order.id,
+    userName: order.user_name,
+    status,
+  })
 }
 
 /* -------------------------------------------------------------------------- */
@@ -582,7 +593,7 @@ async function attemptOrderRenewal(
       })
       return "ignored"
     }
-    notifyOrderChange(order.id)
+    notifyOrderChange(order, "renewed")
     // Aviso persistente al comprador: la campana de la cabecera muestra el
     // resultado con el usuario renovado y el vencimiento nuevo verificado.
     createRenewalNotification({
@@ -641,7 +652,7 @@ async function attemptOrderRenewal(
         return null
       })
     if (failedClaim !== null && failedClaim.rowCount !== null) {
-      notifyOrderChange(order.id)
+      notifyOrderChange(order, "renewal_failed")
       // Aviso persistente solo en el PRIMER fallo (la orden venía de `paid`):
       // los reintentos que re-fallan sobre `renewal_failed` (conciliación,
       // reintento admin o de la UI) no duplican la notificación.
@@ -738,7 +749,7 @@ export async function processPaymentNotification(params: {
             WHERE id = $1 AND status = 'pending'`,
           [order.id, next, params.paymentId, paymentStatus]
         )
-        .then(() => notifyOrderChange(order.id))
+        .then(() => notifyOrderChange(order, next))
         .catch((error: unknown) => logError("update_rejected_order", error))
       log("mercadopago.payment", {
         order_id: order.id,
@@ -950,7 +961,7 @@ export async function createTransferOrder(params: {
     [orderId, params.userName, params.months, bonusMonths, amount, params.buyerUserId, params.ticketFileId]
   )
 
-  notifyOrderChange(orderId)
+  notifyOrderChange({ id: orderId, user_name: params.userName }, "pending")
 
   return { orderId, amount, currency: "MXN" }
 }
@@ -1151,7 +1162,7 @@ export async function rejectTransferOrder(
     )
   }
 
-  notifyOrderChange(order.id)
+  notifyOrderChange(order, "rejected")
   // Aviso persistente al comprador: su renovación por transferencia no
   // ocurrió y necesita saberlo sin estar mirando la pantalla.
   createRenewalNotification({
@@ -1631,7 +1642,7 @@ async function settleStuckRefundingOrder(order: MpOrderRow): Promise<void> {
         WHERE id = $1 AND status = 'refunding'`,
       [order.id]
     )
-    notifyOrderChange(order.id)
+    notifyOrderChange(order, "renewal_failed")
     return
   }
 
@@ -1664,7 +1675,7 @@ async function settleStuckRefundingOrder(order: MpOrderRow): Promise<void> {
         WHERE id = $1 AND status = 'refunding'`,
       [order.id]
     )
-    notifyOrderChange(order.id)
+    notifyOrderChange(order, "refunded")
     log("mercadopago.refund", {
       order_id: order.id,
       payment_id: order.payment_id,
@@ -1685,7 +1696,7 @@ async function settleStuckRefundingOrder(order: MpOrderRow): Promise<void> {
         WHERE id = $1 AND status = 'refunding'`,
       [order.id]
     )
-    notifyOrderChange(order.id)
+    notifyOrderChange(order, "renewal_failed")
     log("mercadopago.refund", {
       order_id: order.id,
       payment_id: order.payment_id,
@@ -1831,7 +1842,7 @@ export async function refundOrder(params: {
           WHERE id = $1 AND status = 'refunding'`,
         [order.id]
       )
-      notifyOrderChange(order.id)
+      notifyOrderChange(order, "renewal_failed")
     }
     log("mercadopago.refund", {
       order_id: order.id,
@@ -1878,7 +1889,7 @@ export async function refundOrder(params: {
         WHERE id = $1 AND status = 'refunding'`,
       [order.id]
     )
-    notifyOrderChange(order.id)
+    notifyOrderChange(order, "refunded")
     log("mercadopago.refund", {
       order_id: order.id,
       payment_id: order.payment_id,

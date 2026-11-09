@@ -72,7 +72,9 @@
  *     liberan al instante: el sheet muestra los motivos y la orden queda
  *     `pending` para la revisión del admin (`TransferenciasReview`, sección
  *     solo admin sobre el listado). El evento en tiempo real `mp_order`
- *     refresca todo.
+ *     refresca solo la fila del usuario renovado (el evento viaja con el
+ *     usuario y el estado nuevo): sin recargar el listado completo, que es
+ *     lento y traería el snapshot cacheado con el vencimiento viejo.
  *   - **Cupón**: código de 4 dígitos con InputOTP (ejemplo `c-input-otp-2`
  *     de ReUI); «Aplicar cupón» llama `POST /api/cupones/orders`, que valida
  *     el código contra los cupones activos (por ahora solo `0000`, compra
@@ -175,6 +177,7 @@ import {
 import { toast } from "sonner"
 
 import { useRealtimeEvent } from "@/hooks/use-realtime"
+import type { RealtimeMessage } from "@/components/realtime/realtime-provider"
 import { formatBytes, useFileUpload } from "@/hooks/use-file-upload"
 import { Alert, AlertDescription, AlertTitle } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
@@ -904,18 +907,6 @@ export function ClientesAccordion({
   }, [])
 
   /**
-   * Tiempo real: cambios de entidades o de órdenes de Mercado Pago hechos en
-   * otro dispositivo (incluida la renovación aplicada por el webhook de MP)
-   * refrescan el listado en silencio, sin el spinner de recarga manual.
-   */
-  useRealtimeEvent(
-    ["entity", "mp_order"],
-    useCallback(() => {
-      setReloadCount((token) => token + 1)
-    }, [])
-  )
-
-  /**
    * Sincronización real con el panel de FlujoTV: el servidor hace login en el
    * sitio (`GET /list_clients` con `skip_cache=true`) y extrae los clientes
    * actualizados; tarda alrededor de 90 segundos. Al terminar recarga el
@@ -1080,6 +1071,37 @@ export function ClientesAccordion({
       })
       .catch(() => {})
   }, [])
+
+  /**
+   * Tiempo real: los cambios de entidades hechos en otro dispositivo
+   * refrescan el listado en silencio, sin el spinner de recarga manual.
+   *
+   * Las órdenes de Mercado Pago NO recargan el listado: recargarlo es lento
+   * y, peor, el listado viene del snapshot cacheado del panel — presentaría
+   * el vencimiento VIEJO pisando la fecha nueva que la fila ya mostraba. La
+   * fila de un cliente solo cambia cuando la renovación se APLICÓ
+   * (`renewed`), y ese evento viaja con el usuario renovado: se refresca
+   * SOLO su fila con la lectura en vivo del panel (el mismo mecanismo de
+   * `refreshRow` que usan los flujos de compra de esta pestaña), dejando el
+   * resto del listado intacto. Eventos sin renovación aplicada (`pending`,
+   * `paid` en curso, rechazos, reembolsos, escaneo de comprobante) no
+   * mueven el vencimiento de nadie: no tocan filas.
+   */
+  useRealtimeEvent(
+    ["entity", "mp_order"],
+    useCallback(
+      (message: RealtimeMessage) => {
+        if (message.kind === "mp_order") {
+          if (message.status === "renewed" && message.userName) {
+            refreshRow(message.userName)
+          }
+          return
+        }
+        setReloadCount((token) => token + 1)
+      },
+      [refreshRow]
+    )
+  )
 
   /**
    * Sondeo del bloqueo: mientras la renovación corre (etapa renovando),

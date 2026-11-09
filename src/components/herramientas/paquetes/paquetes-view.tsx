@@ -35,7 +35,10 @@
  *   vivo del panel (`GET /api/flujotv/clients/{usuario}`), como en
  *   `/clientes`. El dato del listado viene de `GET /api/flujotv/clients`
  *   (con alcance de distribuidor ya filtrado en el servidor) y el evento en
- *   tiempo real `mp_order` refresca en silencio.
+ *   tiempo real `mp_order` refresca solo la fila del usuario renovado (el
+ *   evento viaja con el usuario y el estado nuevo): sin recargar el listado
+ *   completo, que es lento y traería el snapshot cacheado con el vencimiento
+ *   viejo.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
@@ -61,6 +64,7 @@ import {
 import { toast } from "sonner"
 
 import { useRealtimeEvent } from "@/hooks/use-realtime"
+import type { RealtimeMessage } from "@/components/realtime/realtime-provider"
 import { formatBytes, useFileUpload } from "@/hooks/use-file-upload"
 import { Alert, AlertDescription, AlertTitle } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
@@ -369,18 +373,6 @@ export function PaquetesView({
     setReloadCount((token) => token + 1)
   }, [])
 
-  /**
-   * Tiempo real: cambios de entidades o de órdenes (incluida la renovación
-   * aplicada por el webhook de MP en otro dispositivo) refrescan el listado
-   * en silencio, sin el spinner de recarga manual.
-   */
-  useRealtimeEvent(
-    ["entity", "mp_order"],
-    useCallback(() => {
-      setReloadCount((token) => token + 1)
-    }, [])
-  )
-
   /** Sincronización real con el panel (~90 s), igual que en `/clientes`. */
   const runSync = useCallback(async () => {
     setSyncing(true)
@@ -506,6 +498,37 @@ export function PaquetesView({
       })
       .catch(() => {})
   }, [])
+
+  /**
+   * Tiempo real: los cambios de entidades hechos en otro dispositivo
+   * refrescan el listado en silencio, sin el spinner de recarga manual.
+   *
+   * Las órdenes (incluidos los paquetes) NO recargan el listado: recargarlo
+   * es lento y, peor, el listado viene del snapshot cacheado del panel —
+   * presentaría el vencimiento VIEJO pisando la fecha nueva que la fila ya
+   * mostraba. La fila de un cliente solo cambia cuando la renovación del
+   * paquete se APLICÓ (`renewed`), y ese evento viaja con el usuario
+   * renovado: se refresca SOLO su fila con la lectura en vivo del panel
+   * (mismo mecanismo de `refreshRow` que usan los flujos de compra de esta
+   * pestaña). Eventos sin renovación aplicada (`pending`, `paid` en curso,
+   * rechazos, reembolsos, escaneo de comprobante) no mueven el vencimiento
+   * de nadie: no tocan filas.
+   */
+  useRealtimeEvent(
+    ["entity", "mp_order"],
+    useCallback(
+      (message: RealtimeMessage) => {
+        if (message.kind === "mp_order") {
+          if (message.status === "renewed" && message.userName) {
+            refreshRow(message.userName)
+          }
+          return
+        }
+        setReloadCount((token) => token + 1)
+      },
+      [refreshRow]
+    )
+  )
 
   /**
    * Canjea el cupón asignado (1010): el servidor valida el código contra el

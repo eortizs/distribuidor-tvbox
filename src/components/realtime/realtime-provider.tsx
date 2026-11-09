@@ -23,6 +23,10 @@ export type RealtimeStatus = "connecting" | "live" | "offline"
 export interface RealtimeMessage {
   kind: RealtimeKind
   entityId?: string
+  /** Cliente FlujoTV renovado (solo `mp_order`): para refrescar solo su fila. */
+  userName?: string
+  /** Estado nuevo de la orden tras la mutación (solo `mp_order`). */
+  status?: string
   distribuidorId?: string | null
   distribuidor?: string | null
   at: string
