@@ -56,10 +56,23 @@
  *   - **Transferencia bancaria**: muestra los datos bancarios del servidor
  *     (banco, titular y cuenta con botón de copiar; env `TRANSFER_*`) y la
  *     subida del ticket (foto o PDF, `useFileUpload`); «Enviar comprobante»
- *     crea la orden `pending` con el ticket vía
- *     `POST /api/transferencias/orders`. La renovación llega solo cuando el
- *     admin aprueba la revisión (`TransferenciasReview`, sección solo admin
- *     sobre el listado), y el evento en tiempo real `mp_order` refresca todo.
+ *     crea la orden con el ticket vía `POST /api/transferencias/orders` y el
+ *     servidor lo verifica con el LLM (`RECEIPT_SCAN_MODEL`): fecha dentro
+ *     del mes actual, concepto con el usuario de FlujoTV, importe de la
+ *     orden y beneficiario receptor (tolerante). Al enviar, la app se
+ *     BLOQUEA con un overlay por etapas hasta el 100% del proceso: 1)
+ *     validación del comprobante, 2) renovación en el panel de FlujoTV
+ *     (sondeo de la orden cada 3 s; la lectura además concilia órdenes
+ *     varadas) y 3) resultado final — exitosa con vencimiento verificado o
+ *     fallida con aviso de contactar al admin. Solo el panel final libera la
+ *     app; el bloqueo se restaura desde localStorage si el usuario recarga o
+ *     vuelve más tarde, mostrando el resultado aunque el proceso haya
+ *     terminado fuera de la pestaña. Comprobante no autorizado o revisión
+ *     manual (sin escaneo configurado, cupón agotado, escaneo caído)
+ *     liberan al instante: el sheet muestra los motivos y la orden queda
+ *     `pending` para la revisión del admin (`TransferenciasReview`, sección
+ *     solo admin sobre el listado). El evento en tiempo real `mp_order`
+ *     refresca todo.
  *   - **Cupón**: código de 4 dígitos con InputOTP (ejemplo `c-input-otp-2`
  *     de ReUI); «Aplicar cupón» llama `POST /api/cupones/orders`, que valida
  *     el código contra los cupones activos (por ahora solo `0000`, compra
@@ -223,6 +236,7 @@ import {
 } from "@/components/ui/accordion"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   ToggleGroup,
   ToggleGroupItem,
@@ -230,6 +244,15 @@ import {
 import { Filters } from "@/components/reui/filters/filters"
 import { FilterChip } from "@/components/reui/filters/filters-chip"
 import { FiltersBuilder } from "@/components/reui/filters/filters-builder"
+import {
+  Timeline,
+  TimelineContent,
+  TimelineHeader,
+  TimelineIndicator,
+  TimelineItem,
+  TimelineSeparator,
+  TimelineTitle,
+} from "@/components/reui/timeline"
 import {
   clearFilterQuery,
   createFilterQuery,
@@ -282,6 +305,61 @@ const TICKET_MAX_BYTES = 10 * 1024 * 1024
 
 /** Longitud del código de cupón. */
 const COUPON_CODE_LENGTH = 4
+
+/**
+ * Bloqueo de renovación por transferencia: la renovación depende del panel
+ * de FlujoTV y puede tardar varios minutos, así que la app queda bloqueada
+ * con el estado por etapa (validación → renovación → resultado) hasta que el
+ * proceso termina al 100%; solo entonces se libera. La orden en curso se
+ * recuerda en localStorage para restaurar el bloqueo si el usuario recarga
+ * o vuelve más tarde: el sondeo muestra el resultado final aunque el proceso
+ * haya terminado con la pestaña cerrada.
+ */
+const RENEWAL_STORAGE_KEY = "clientes.renovacion.v1"
+
+/** Etapas visibles del bloqueo. */
+type RenewalStage = "validando" | "renovando" | "exito" | "fallo"
+
+interface RenewalBlock {
+  orderId: string
+  userName: string
+  stage: RenewalStage
+  /** Vencimiento nuevo verificado (solo etapa exito). */
+  verifiedExpiresAt: string | null
+  /** Momento de inicio (ms) para el aviso de demora. */
+  startedAt: number
+}
+
+/**
+ * Aviso de demora: si la renovación (etapa renovando) supera esto, la UI
+ * aclara que sigue activa pero tardando más de lo normal. Nunca libera: el
+ * servidor concilia órdenes varadas al sondearlas y terminará en un estado
+ * final (renewed / renewal_failed).
+ */
+const RENEWAL_SLOW_AFTER_MS = 90_000
+
+function persistRenewalBlock(block: RenewalBlock): void {
+  try {
+    window.localStorage.setItem(
+      RENEWAL_STORAGE_KEY,
+      JSON.stringify({
+        orderId: block.orderId,
+        userName: block.userName,
+        startedAt: block.startedAt,
+      })
+    )
+  } catch {
+    // Cuota agotada o almacenamiento bloqueado: el bloqueo vive en memoria.
+  }
+}
+
+function clearRenewalStorage(): void {
+  try {
+    window.localStorage.removeItem(RENEWAL_STORAGE_KEY)
+  } catch {
+    // Sin almacenamiento: nada que limpiar.
+  }
+}
 
 /**
  * Segmento de confirmación con el vencimiento nuevo verificado en el panel:
@@ -612,6 +690,23 @@ export function ClientesAccordion({
   /** Método elegido en el sheet: Mercado Pago por defecto. */
   const [payMethod, setPayMethod] = useState<PayMethod>("mercadopago")
   const [submittingTransfer, setSubmittingTransfer] = useState(false)
+  /**
+   * Resultado de la verificación automática del comprobante: con
+   * `auto_rejected` el sheet permanece abierto con los motivos y el aviso de
+   * contactar al administrador (la orden quedó `pending` para su revisión
+   * manual y el comprador puede subir otro comprobante).
+   */
+  const [transferRejected, setTransferRejected] = useState<{
+    reasons: string[]
+  } | null>(null)
+  /**
+   * Bloqueo de la app durante la renovación por transferencia: cubre la
+   * validación del comprobante, la renovación en el panel y el resultado
+   * final (exito/fallo); solo el botón del panel final libera la app.
+   */
+  const [renewalBlock, setRenewalBlock] = useState<RenewalBlock | null>(null)
+  /** Reloj para el aviso de demora dentro del bloqueo (5 s). */
+  const [nowTick, setNowTick] = useState(() => Date.now())
   const [submittingCoupon, setSubmittingCoupon] = useState(false)
   const [couponCode, setCouponCode] = useState("")
   /**
@@ -701,6 +796,56 @@ export function ClientesAccordion({
     }
   }, [query])
 
+  /**
+   * Restauración del bloqueo de renovación: si la pestaña se recargó o se
+   * cerró con una renovación en curso, el bloqueo reaparece y el sondeo
+   * lleva la orden a su estado final — el usuario ve el resultado aunque el
+   * proceso haya terminado fuera de la pestaña. La lectura corre en un
+   * microtask (mismo patrón que la restauración de filtros): el primer
+   * pintado no espera al almacenamiento.
+   */
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      let raw: string | null = null
+      try {
+        raw = window.localStorage.getItem(RENEWAL_STORAGE_KEY)
+      } catch {
+        return
+      }
+      if (!raw) return
+      let saved: {
+        orderId?: unknown
+        userName?: unknown
+        startedAt?: unknown
+      }
+      try {
+        saved = JSON.parse(raw) as typeof saved
+      } catch {
+        return
+      }
+      if (
+        typeof saved.orderId !== "string" ||
+        typeof saved.userName !== "string"
+      ) {
+        return
+      }
+      setRenewalBlock({
+        orderId: saved.orderId,
+        userName: saved.userName,
+        stage: "renovando",
+        verifiedExpiresAt: null,
+        startedAt:
+          typeof saved.startedAt === "number" ? saved.startedAt : Date.now(),
+      })
+    })
+  }, [])
+
+  /** Reloj del aviso de demora, activo solo mientras la app está bloqueada. */
+  useEffect(() => {
+    if (!renewalBlock) return
+    const timer = window.setInterval(() => setNowTick(Date.now()), 5000)
+    return () => window.clearInterval(timer)
+  }, [renewalBlock])
   useEffect(() => {
     const requestId = ++requestCounter.current
     fetchFlujoClients({})
@@ -801,6 +946,7 @@ export function ClientesAccordion({
       setPurchaseTarget(client)
       setPayMethod("mercadopago")
       setPayError(null)
+      setTransferRejected(null)
       setCouponCode("")
       setCouponRetryOrderId(null)
       couponRequestIdRef.current =
@@ -833,9 +979,13 @@ export function ClientesAccordion({
   }, [purchaseTarget])
 
   /**
-   * Envía la renovación por transferencia bancaria: crea la orden `pending`
-   * con el ticket adjunto y cierra el sheet. La renovación llega cuando el
-   * admin aprueba la revisión; el evento en tiempo real refresca la fila.
+   * Envía la renovación por transferencia bancaria y BLOQUEA la app hasta el
+   * 100% del proceso: etapa 1 validación del comprobante (durante la
+   * petición), etapa 2 renovación en el panel (sondeo de la orden cada 3 s)
+   * y etapa 3 resultado final (exito con vencimiento verificado / fallo con
+   * aviso de contactar al admin). Solo el panel final libera la app. Un
+   * comprobante no autorizado o una revisión manual liberan al instante
+   * (sheet con el veredicto / flujo legacy de revisión admin).
    */
   const submitTransfer = useCallback(async () => {
     if (!purchaseTarget) return
@@ -844,13 +994,56 @@ export function ClientesAccordion({
     const userName = purchaseTarget.userName.trim()
     setSubmittingTransfer(true)
     setPayError(null)
+    setTransferRejected(null)
+    // Etapa 1: la app queda bloqueada mientras el servidor valida.
+    setRenewalBlock({
+      orderId: "",
+      userName,
+      stage: "validando",
+      verifiedExpiresAt: null,
+      startedAt: Date.now(),
+    })
     try {
-      await createTransferOrder({ userName, months: 1, file: ticket })
-      setPurchaseOpen(false)
-      toast.success("Comprobante enviado", {
-        description: `La renovación de ${userName} se aplicará en cuanto se confirme el pago.`,
-      })
+      const result = await createTransferOrder({ userName, months: 1, file: ticket })
+      if (result.review === "auto_approved") {
+        // Etapa 2: renovación en el panel; el sondeo del bloqueo lleva la
+        // orden hasta su estado final antes de liberar.
+        const block: RenewalBlock = {
+          orderId: result.orderId,
+          userName,
+          stage: "renovando",
+          verifiedExpiresAt: null,
+          startedAt: Date.now(),
+        }
+        setRenewalBlock(block)
+        persistRenewalBlock(block)
+      } else if (result.review === "auto_rejected") {
+        // Se suelta el archivo rechazado: reenviar el mismo comprobante da
+        // el mismo veredicto y cada envío crea otra orden pendiente (riesgo
+        // de duplicados que el admin apruebe dos veces).
+        clearRenewalStorage()
+        setRenewalBlock(null)
+        ticketActions.clearFiles()
+        setTransferRejected({ reasons: result.reasons ?? [] })
+        toast.error("Comprobante no autorizado", {
+          description:
+            "Contacta al administrador para una revisión manual de tu pago.",
+        })
+      } else {
+        // Revisión manual (sin escaneo configurado, cupón agotado o error
+        // del escaneo): el veredicto no llega solo, así que la app se
+        // libera con el aviso del flujo legacy.
+        clearRenewalStorage()
+        setRenewalBlock(null)
+        ticketActions.clearFiles()
+        setPurchaseOpen(false)
+        toast.success("Comprobante enviado", {
+          description: `La renovación de ${userName} se aplicará en cuanto se confirme el pago.`,
+        })
+      }
     } catch (error) {
+      clearRenewalStorage()
+      setRenewalBlock(null)
       setPayError(
         error instanceof Error
           ? error.message
@@ -859,7 +1052,7 @@ export function ClientesAccordion({
     } finally {
       setSubmittingTransfer(false)
     }
-  }, [purchaseTarget, ticketFiles])
+  }, [purchaseTarget, ticketActions, ticketFiles])
 
   /** Copia la cuenta bancaria al portapapeles con feedback breve. */
   const copyAccount = useCallback(() => {
@@ -887,6 +1080,54 @@ export function ClientesAccordion({
       })
       .catch(() => {})
   }, [])
+
+  /**
+   * Sondeo del bloqueo: mientras la renovación corre (etapa renovando),
+   * consulta la orden cada 3 s. La lectura además concilia estados varados
+   * en el servidor (pagado sin renovar se reintenta a los 10 min), así que
+   * el sondeo siempre acaba en un estado final: renewed o renewal_failed.
+   */
+  useEffect(() => {
+    if (renewalBlock?.stage !== "renovando" || !renewalBlock.orderId) return
+    const block = renewalBlock
+    let alive = true
+    const tick = async () => {
+      try {
+        const order = await fetchPaymentOrder(block.orderId)
+        if (!alive) return
+        if (order.status === "renewed") {
+          clearRenewalStorage()
+          setRenewalBlock({
+            ...block,
+            stage: "exito",
+            verifiedExpiresAt: order.renewal_verified_expires_at,
+          })
+          refreshRow(block.userName)
+        } else if (order.status === "renewal_failed") {
+          clearRenewalStorage()
+          setRenewalBlock({ ...block, stage: "fallo" })
+        }
+        // Estados intermedios (pending/paid): se sigue sondeando.
+      } catch {
+        // Error puntual de red: el siguiente tick reintenta.
+      }
+    }
+    void tick()
+    const timer = window.setInterval(() => void tick(), 3000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [renewalBlock, refreshRow])
+
+  /** Libera el bloqueo al terminar: cierra el sheet y limpia el estado. */
+  const releaseRenewalBlock = useCallback(() => {
+    clearRenewalStorage()
+    setRenewalBlock(null)
+    setPurchaseOpen(false)
+    setTransferRejected(null)
+    ticketActions.clearFiles()
+  }, [ticketActions])
 
   /**
    * Canjea el cupón: el servidor valida el código contra los cupones activos
@@ -1661,6 +1902,15 @@ export function ClientesAccordion({
         onOpenChange={(open) => {
           if (!open && (purchasing || submittingTransfer || submittingCoupon))
             return
+          // Renovación en curso (etapas no finales): el sheet no se cierra
+          // detrás del bloqueo hasta terminar.
+          if (
+            !open &&
+            renewalBlock &&
+            renewalBlock.stage !== "exito" &&
+            renewalBlock.stage !== "fallo"
+          )
+            return
           setPurchaseOpen(open)
         }}
         showSwipeHandle
@@ -1703,6 +1953,7 @@ export function ClientesAccordion({
               onValueChange={(value) => {
                 setPayMethod(value as PayMethod)
                 setPayError(null)
+                setTransferRejected(null)
               }}
               aria-label="Método de pago"
             >
@@ -1737,7 +1988,7 @@ export function ClientesAccordion({
                           <FieldContent className="min-w-0">
                             <FieldTitle>Transferencia</FieldTitle>
                             <FieldDescription className="text-xs">
-                              Sube tu comprobante · activación al confirmar
+                              Sube tu comprobante · verificación automática
                             </FieldDescription>
                           </FieldContent>
                         </span>
@@ -1876,6 +2127,37 @@ export function ClientesAccordion({
                   <p className="text-destructive text-xs" role="alert">
                     {ticketFiles.errors[0]}
                   </p>
+                ) : null}
+                {/*
+                 * Veredicto del escaneo automático: el comprobante se guardó
+                 * y quedó `pending`, pero no pasó alguna condición (mes,
+                 * concepto, importe o beneficiario). El sheet permanece
+                 * abierto para permitir subir otro comprobante y el aviso
+                 * manda con el administrador la revisión manual.
+                 */}
+                {transferRejected ? (
+                  <Alert variant="warning">
+                    <TriangleAlertIcon aria-hidden="true" />
+                    <AlertTitle>Comprobante no autorizado</AlertTitle>
+                    <AlertDescription>
+                      <p>
+                        Tu comprobante no pasó la verificación automática y la
+                        renovación no se aplicó. Contacta al administrador
+                        para hacer una revisión manual de tu pago.
+                      </p>
+                      {transferRejected.reasons.length > 0 ? (
+                        <ul className="mt-1.5 list-inside list-disc flex flex-col gap-0.5">
+                          {transferRejected.reasons.map((reason) => (
+                            <li key={reason}>{reason}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+                      <p className="mt-1.5">
+                        Si el archivo era poco legible, puedes subir otro
+                        comprobante.
+                      </p>
+                    </AlertDescription>
+                  </Alert>
                 ) : null}
               </div>
             ) : null}
@@ -2034,6 +2316,172 @@ export function ClientesAccordion({
           </DrawerFooter>
         </DrawerContent>
       </Drawer>
+
+      {/*
+       * Bloqueo de renovación (transferencia): cubre toda la app hasta el
+       * 100% del proceso, con las etapas visibles (comprobante → renovación
+       * → resultado). Solo el botón del panel final libera; si el usuario
+       * recarga o cierra la pestaña, el bloqueo se restaura desde
+       * localStorage y el sondeo lo conduce al mismo resultado final.
+       */}
+      {renewalBlock ? (
+        <div
+          className="bg-background/95 fixed inset-0 z-[100] flex items-center justify-center p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Renovación de licencia en proceso"
+        >
+          <Card className="w-full max-w-sm gap-5 p-6">
+            <div className="flex flex-col gap-1">
+              <h2 className="text-base font-semibold tracking-tight">
+                Renovación de licencia
+              </h2>
+              <p className="text-muted-foreground truncate text-xs">
+                {renewalBlock.userName} · la app se libera sola al terminar
+              </p>
+            </div>
+            <Timeline
+              value={
+                renewalBlock.stage === "validando"
+                  ? 1
+                  : renewalBlock.stage === "renovando"
+                    ? 2
+                    : 3
+              }
+              className="w-full"
+            >
+              {(
+                [
+                  {
+                    id: 1,
+                    title: "Comprobante",
+                    description:
+                      "Verificación automática: fecha del mes, concepto con el usuario, importe y beneficiario.",
+                  },
+                  {
+                    id: 2,
+                    title: "Renovación",
+                    description:
+                      "La licencia se renueva en el panel de FlujoTV; puede tardar varios minutos.",
+                  },
+                  {
+                    id: 3,
+                    title: "Resultado",
+                    description:
+                      "Confirmación final con el nuevo vencimiento verificado.",
+                  },
+                ] as const
+              ).map((paso) => {
+                const terminal =
+                  renewalBlock.stage === "exito" || renewalBlock.stage === "fallo"
+                const stageValue =
+                  renewalBlock.stage === "validando"
+                    ? 1
+                    : renewalBlock.stage === "renovando"
+                      ? 2
+                      : 3
+                const completado = terminal || paso.id < stageValue
+                const enCurso =
+                  !completado &&
+                  paso.id === stageValue &&
+                  !terminal
+                return (
+                  <TimelineItem
+                    key={paso.id}
+                    step={paso.id}
+                    className="group-data-[orientation=vertical]/timeline:ms-10"
+                  >
+                    <TimelineHeader>
+                      <TimelineSeparator className="group-data-[orientation=vertical]/timeline:-left-7 group-data-[orientation=vertical]/timeline:h-[calc(100%-1.5rem-0.25rem)] group-data-[orientation=vertical]/timeline:translate-y-6.5" />
+                      <TimelineTitle>{paso.title}</TimelineTitle>
+                      <TimelineIndicator
+                        className={`flex size-6 items-center justify-center group-data-[orientation=vertical]/timeline:-left-7${
+                          completado
+                            ? " bg-primary text-primary-foreground border-none"
+                            : ""
+                        }`}
+                      >
+                        {completado ? (
+                          <CheckIcon className="size-4" />
+                        ) : enCurso ? (
+                          <LoaderCircleIcon
+                            aria-hidden="true"
+                            className="size-4 animate-spin"
+                          />
+                        ) : null}
+                      </TimelineIndicator>
+                    </TimelineHeader>
+                    <TimelineContent className="text-muted-foreground text-xs">
+                      {paso.description}
+                    </TimelineContent>
+                  </TimelineItem>
+                )
+              })}
+            </Timeline>
+            {renewalBlock.stage === "validando" ? (
+              <p className="text-muted-foreground text-xs">
+                La verificación automática está en curso; en unos segundos
+                continúa con la renovación.
+              </p>
+            ) : null}
+            {renewalBlock.stage === "renovando" ? (
+              <div className="flex flex-col gap-2">
+                <p className="text-muted-foreground text-xs">
+                  No cierres ni recargues: la pantalla se libera sola al
+                  terminar.
+                </p>
+                {nowTick - renewalBlock.startedAt > RENEWAL_SLOW_AFTER_MS ? (
+                  <p className="text-muted-foreground text-xs">
+                    Sigue en proceso: el panel está tardando más de lo normal.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            {renewalBlock.stage === "exito" ? (
+              <Alert variant="success">
+                <CircleCheckIcon aria-hidden="true" />
+                <AlertTitle>Renovación exitosa</AlertTitle>
+                <AlertDescription>
+                  <p>
+                    La licencia de {renewalBlock.userName} quedó renovada
+                    {renewalBlock.verifiedExpiresAt
+                      ? ` hasta el ${formatFlujoDate(renewalBlock.verifiedExpiresAt)}`
+                      : ""}
+                    .
+                  </p>
+                  <Button
+                    size="sm"
+                    className="mt-3"
+                    onClick={releaseRenewalBlock}
+                  >
+                    Listo
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {renewalBlock.stage === "fallo" ? (
+              <Alert variant="destructive">
+                <TriangleAlertIcon aria-hidden="true" />
+                <AlertTitle>La renovación falló</AlertTitle>
+                <AlertDescription>
+                  <p>
+                    El pago quedó registrado, pero la renovación no se pudo
+                    aplicar. Contacta al administrador para reintentarla.
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={releaseRenewalBlock}
+                  >
+                    Cerrar
+                  </Button>
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </Card>
+        </div>
+      ) : null}
     </div>
   )
 }

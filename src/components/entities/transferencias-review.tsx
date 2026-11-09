@@ -10,6 +10,12 @@
  * renovación, con confirmación previa por ser destructivo. La sección se
  * recarga con los eventos en tiempo real de órdenes y desaparece sola cuando
  * no queda nada pendiente.
+ *
+ * Las órdenes ya pasan por el escaneo automático del comprobante
+ * (`RECEIPT_SCAN_MODEL`): las rechazadas por el LLM llegan aquí con `scan`
+ * que explica qué condición falló (mes, concepto, importe, beneficiario) —
+ * contexto para decidir sin abrir el ticket; las aprobadas por el escaneo
+ * jamás aparecen (su renovación se lanza sola).
  */
 
 import { useCallback, useEffect, useState } from "react"
@@ -18,6 +24,7 @@ import {
   ImageIcon,
   LoaderCircleIcon,
   RefreshCwIcon,
+  ScanSearchIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 import { toast } from "sonner"
@@ -71,6 +78,37 @@ function formatWhen(iso: string): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(iso))
+}
+
+/**
+ * Badge del escaneo automático junto al ticket: «Verificado» (aprobado por
+ * el LLM pero pendiente por otra causa), «No autorizado» (rechazado, con los
+ * motivos debajo) y «Escaneo falló» (infraestructura; revisar a mano).
+ */
+function ScanBadge({ scan }: { scan: TransferOrder["scan"] }) {
+  if (!scan) return null
+  if (scan.status === "approved") {
+    return (
+      <Badge variant="success-light" size="xs">
+        <ScanSearchIcon aria-hidden="true" className="size-3" />
+        Comprobante verificado
+      </Badge>
+    )
+  }
+  if (scan.status === "rejected") {
+    return (
+      <Badge variant="destructive-light" size="xs">
+        <ScanSearchIcon aria-hidden="true" className="size-3" />
+        No autorizado por escaneo
+      </Badge>
+    )
+  }
+  return (
+    <Badge variant="warning-light" size="xs">
+      <ScanSearchIcon aria-hidden="true" className="size-3" />
+      Escaneo falló
+    </Badge>
+  )
 }
 
 export function TransferenciasReview({
@@ -241,6 +279,19 @@ export function TransferenciasReview({
                     </Badge>
                   )}
                 </div>
+                {order.scan ? (
+                  <div className="flex flex-col gap-1">
+                    <ScanBadge scan={order.scan} />
+                    {order.scan.status === "rejected" &&
+                    order.scan.reasons.length > 0 ? (
+                      <ul className="text-muted-foreground list-inside list-disc text-xs">
+                        {order.scan.reasons.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="flex items-center justify-between gap-2">
                   {order.ticket ? (
                     <Button

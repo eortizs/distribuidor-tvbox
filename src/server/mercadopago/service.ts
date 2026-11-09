@@ -926,6 +926,15 @@ export async function createTransferOrder(params: {
   return { orderId, amount, currency: "MXN" }
 }
 
+export interface TransferScanSummary {
+  /** approved | rejected | error (resultado del escaneo LLM del ticket). */
+  status: string
+  /** Motivos legibles del rechazo automático (vacío si approved/error). */
+  reasons: string[]
+  model: string | null
+  at: string | null
+}
+
 export interface TransferOrderPublic {
   id: string
   status: MpOrderStatus
@@ -939,6 +948,8 @@ export interface TransferOrderPublic {
   ticket:
     | { id: string; fileName: string; mimeType: string; sizeBytes: number }
     | null
+  /** Resultado del escaneo automático del comprobante (null si no hubo). */
+  scan: TransferScanSummary | null
   error: string | null
   created_at: string
 }
@@ -948,6 +959,26 @@ interface TransferJoinRow extends Record<string, unknown> {
   ticket_file_name: string | null
   ticket_mime_type: string | null
   ticket_size_bytes: number | null
+}
+
+function parseScanSummary(row: TransferJoinRow): TransferScanSummary | null {
+  const status = row.scan_status
+  if (typeof status !== "string" || status.length === 0) return null
+  let reasons: string[] = []
+  if (isRecord(row.scan_result) && Array.isArray(row.scan_result.reasons)) {
+    reasons = row.scan_result.reasons
+      .filter((item): item is string => typeof item === "string")
+      .slice(0, 6)
+  }
+  return {
+    status,
+    reasons,
+    model: typeof row.scan_model === "string" ? row.scan_model : null,
+    at:
+      row.scan_at === null || row.scan_at === undefined
+        ? null
+        : new Date(row.scan_at as string).toISOString(),
+  }
 }
 
 function parseTransferRow(row: TransferJoinRow): TransferOrderPublic {
@@ -976,6 +1007,7 @@ function parseTransferRow(row: TransferJoinRow): TransferOrderPublic {
             sizeBytes: Number(row.ticket_size_bytes ?? 0),
           }
         : null,
+    scan: parseScanSummary(row),
     error: order.error,
     created_at: order.created_at,
   }

@@ -158,19 +158,38 @@ export interface TransferOrder {
   currency: string
   buyer_username: string | null
   ticket: TransferTicket | null
+  /** Resultado del escaneo automático del comprobante (null si no hubo). */
+  scan: {
+    status: string
+    reasons: string[]
+    model: string | null
+    at: string | null
+  } | null
   error: string | null
   created_at: string
 }
 
+/** Resultado de la revisión automática del comprobante al crear la orden. */
+export type TransferReview = "auto_approved" | "auto_rejected" | "manual"
+
 /**
- * Crea la orden de transferencia bancaria con el ticket adjunto: la orden
- * queda `pending` hasta que el admin aprueba la revisión.
+ * Crea la orden de transferencia bancaria con el ticket adjunto: el servidor
+ * lo escanea con el LLM configurado (RECEIPT_SCAN_MODEL) y verifica fecha del
+ * mes, concepto con el usuario, importe y beneficiario. `auto_approved` lanza
+ * la renovación sola; `auto_rejected` deja la orden `pending` para revisión
+ * manual del admin y devuelve los motivos; `manual` es el flujo de siempre.
  */
 export async function createTransferOrder(params: {
   userName: string
   months: number
   file: File
-}): Promise<{ orderId: string; amount: number; currency: string }> {
+}): Promise<{
+  orderId: string
+  amount: number
+  currency: string
+  review?: TransferReview
+  reasons?: string[]
+}> {
   const body = new FormData()
   body.set("user_name", params.userName)
   body.set("months", String(params.months))
@@ -179,11 +198,16 @@ export async function createTransferOrder(params: {
     order_id: string
     amount: number
     currency: string
+    review?: TransferReview
+    status?: string
+    reasons?: string[]
   }>("/api/transferencias/orders", { method: "POST", body })
   return {
     orderId: data.order_id,
     amount: data.amount,
     currency: data.currency,
+    review: data.review,
+    reasons: data.reasons ?? [],
   }
 }
 

@@ -19,6 +19,7 @@ import {
 } from "@/server/storage/user-files"
 import { AppError } from "@/server/umejson/types"
 import { errorResponse } from "@/server/http"
+import { reviewTransferReceipt, checkRateLimitReceiptScan } from "@/server/transferencias/scan"
 import { isRenewalMonths } from "@/lib/flujotv"
 
 /** Tipos de comprobante admitidos: foto o PDF del ticket de transferencia. */
@@ -34,9 +35,16 @@ function isTicketMime(mimeType: string): boolean {
 
 /**
  * Crea una orden de renovación pagada por transferencia bancaria: guarda el
- * ticket (multipart/form-data con `user_name`, `months` y `file`) y deja la
- * orden `pending` para la revisión del admin. La renovación NO ocurre aquí:
- * solo cuando el admin aprueba (`POST /api/transferencias/orders/[id]/approve`).
+ * ticket (multipart/form-data con `user_name`, `months` y `file`) y la
+ * revisa automáticamente con el LLM configurado (`RECEIPT_SCAN_MODEL`):
+ * fecha dentro del mes actual, concepto con el usuario de FlujoTV, importe
+ * de la orden y beneficiario receptor. Si todo pasa, la orden se aprueba y
+ * la renovación se lanza sola (respuesta `review: "auto_approved"`); si algo
+ * no coincide, la orden queda `pending` para la revisión manual del admin y
+ * el comprador recibe el aviso de contactarlo (`review: "auto_rejected"`);
+ * sin modelo configurado o con el escaneo caído, queda el flujo de siempre
+ * (`review: "manual"`). La renovación NUNCA ocurre por subir el ticket sin
+ * verificación previa.
  *
  * El guard de alcance es idéntico al de Mercado Pago: el distribuidor solo
  * puede comprar renovaciones de clientes de su reseller ligado.
@@ -136,12 +144,13 @@ export async function POST(request: Request) {
       )
     }
 
+    const ticketBytes = new Uint8Array(await file.arrayBuffer())
     const saved = await saveUserFile({
       userId: user.id,
       kind: "attachment",
       fileName: file.name,
       mimeType: file.type,
-      bytes: new Uint8Array(await file.arrayBuffer()),
+      bytes: ticketBytes,
     })
     savedFileId = saved.id
 
@@ -151,6 +160,32 @@ export async function POST(request: Request) {
       buyerUserId: user.id,
       ticketFileId: saved.id,
     })
+
+    // Revisión automática del comprobante (LLM + condiciones de la orden):
+    // nunca lanza; `manual` significa revisión admin como siempre. El cupón
+    // de escaneos por comprador agotado también degrada a manual (sin error
+    // para el comprador y sin llamadas de visión ilimitadas).
+    let review
+    if (checkRateLimitReceiptScan(user.id)) {
+      review = await reviewTransferReceipt({
+        orderId: result.orderId,
+        buyerUserId: user.id,
+        bytes: ticketBytes,
+        mimeType: file.type,
+        userName,
+        amountMxn: result.amount,
+      })
+    } else {
+      review = { review: "manual" as const, status: "pending" as const, scan: null }
+      console.info(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          event: "mercadopago.transfer_scan_rate_limited",
+          actor: `user:${user.username}`,
+          order_id: result.orderId,
+        })
+      )
+    }
 
     console.info(
       JSON.stringify({
@@ -162,6 +197,7 @@ export async function POST(request: Request) {
         months,
         amount: result.amount,
         ticket_file_id: saved.id,
+        review: review.review,
       })
     )
 
@@ -172,6 +208,11 @@ export async function POST(request: Request) {
           order_id: result.orderId,
           amount: result.amount,
           currency: result.currency,
+          review: review.review,
+          status: review.status,
+          // Motivos del rechazo automático (vacío salvo `auto_rejected`):
+          // el comprador los muestra junto al aviso de contactar al admin.
+          reasons: review.scan?.reasons ?? [],
         },
       },
       { status: 201 }
