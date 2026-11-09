@@ -7,6 +7,7 @@ import { gateway } from "@ai-sdk/gateway"
 
 import { pool } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
+import { createAdminTransferRejectedNotification } from "@/server/notifications/service"
 import { extraerJson } from "@/server/tickets/llm"
 import { getUserFile, userFilePath } from "@/server/storage/user-files"
 import { transferBankDataOrNull } from "@/server/mercadopago/config"
@@ -44,7 +45,8 @@ import {
  *   - Alguna falla o el comprobante ya fue usado por el mismo comprador
  *     (dedup por sha256 de los bytes) → la orden queda `pending` para la
  *     revisión manual del admin; el comprador recibe los motivos y el aviso
- *     de contactarlo.
+ *     de contactarlo, y la campana de cada administrador recibe la copia del
+ *     rechazo (`createAdminTransferRejectedNotification`).
  *   - El escaneo no puede ejecutarse (sin config, modelo fuera, salida
  *     rota) → revisión manual como hoy; jamás se rechaza un pago por un
  *     fallo de infraestructura.
@@ -266,6 +268,37 @@ function logScan(
   )
 }
 
+/**
+ * Motivos del rechazo en versión admin: cada condición fallida con su
+ * detalle (esperado vs leído) para contextualizar la revisión manual; los
+ * motivos sin check asociado (comprobante ilegible, duplicado) pasan tal
+ * cual. El texto para el comprador (`scan.reasons`) no trae el detalle.
+ */
+function motivosParaAdmin(scan: ScanResult): string[] {
+  const fallidos = scan.checks.filter((check) => !check.passed)
+  const labelsFallidos = new Set(fallidos.map((check) => check.label))
+  return [
+    ...fallidos.map((check) => `${check.label} (${check.detail})`),
+    ...scan.reasons.filter((reason) => !labelsFallidos.has(reason)),
+  ]
+}
+
+/**
+ * Aviso a los administradores de un rechazo automático: la orden quedó
+ * `pending` en «Transferencias por revisar» y la campana del admin lo
+ * refleja (dedup por orden vía índice único parcial; mejor esfuerzo).
+ */
+function avisarAdminsDeRechazo(
+  input: { orderId: string; userName: string },
+  scan: ScanResult
+): void {
+  createAdminTransferRejectedNotification({
+    orderId: input.orderId,
+    userName: input.userName,
+    reasons: motivosParaAdmin(scan),
+  })
+}
+
 async function guardarScan(
   orderId: string,
   status: ScanStatus,
@@ -369,6 +402,7 @@ export async function reviewTransferReceipt(input: {
       })
     )
     logScan(input.orderId, { outcome: "rejected", reason: "no_comprobante" })
+    avisarAdminsDeRechazo(input, scan)
     return { review: "auto_rejected", status: "pending", scan }
   }
 
@@ -431,6 +465,7 @@ export async function reviewTransferReceipt(input: {
       reasons,
       duplicate,
     })
+    avisarAdminsDeRechazo(input, scan)
     return { review: "auto_rejected", status: "pending", scan }
   }
 

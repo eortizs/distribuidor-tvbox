@@ -1,6 +1,9 @@
 -- Notificaciones persistentes del panel: resultados de renovaciones de
 -- licencias (Mercado Pago, transferencia aprobada/rechazada, cupón y
 -- paquetes) dirigidas al comprador de la orden (`mp_orders.buyer_user_id`).
+-- Cuando la validación automática rechaza un comprobante de transferencia,
+-- además se inserta una copia en la cuenta de cada administrador para que
+-- la campana le avise de la orden pendiente de revisión.
 --
 -- Una fila por evento; el comprador las consulta en cualquier momento desde
 -- la campana de la cabecera. `kind` distingue el resultado para el icono y el
@@ -29,9 +32,15 @@ CREATE INDEX IF NOT EXISTS notifications_user_created_idx
 CREATE INDEX IF NOT EXISTS notifications_user_unread_idx
   ON notifications (user_id) WHERE read_at IS NULL;
 
--- Una sola «Renovación fallida» por orden y comprador: los intentos
--- solapados de renovación (webhooks at-least-once, reintento + conciliación)
--- insertan con ON CONFLICT DO NOTHING contra este índice.
+-- Una sola notificación de fallo/rechazo por orden y destinatario: los
+-- intentos solapados de renovación (webhooks at-least-once, reintento +
+-- conciliación) y los re-escaneos de la misma orden insertan con
+-- ON CONFLICT DO NOTHING contra este índice. Cubre tanto las notificaciones
+-- del comprador (`renewal_failed`, `transfer_rejected`) como la copia de
+-- revisión que llega a los administradores (`transfer_rejected` en su
+-- cuenta cuando la validación automática rechaza un comprobante).
+DROP INDEX IF EXISTS notifications_user_order_failed_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS notifications_user_order_failed_idx
   ON notifications (user_id, order_id)
-  WHERE order_id IS NOT NULL AND kind = 'renewal_failed';
+  WHERE order_id IS NOT NULL
+    AND kind IN ('renewal_failed', 'transfer_rejected');

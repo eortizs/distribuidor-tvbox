@@ -5,9 +5,13 @@ import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
 
 /**
- * Notificaciones persistentes del comprador: resultados de renovaciones de
- * licencias (Mercado Pago, transferencia, cupón y paquetes de
- * `/modulos/paquetes-flujotv`). La creación es mejor esfuerzo — una
+ * Notificaciones persistentes del comprador y de los administradores:
+ * resultados de renovaciones de licencias (Mercado Pago, transferencia,
+ * cupón y paquetes de `/modulos/paquetes-flujotv`). Cuando la validación
+ * automática rechaza un comprobante de transferencia, además del aviso al
+ * comprador se inserta una copia en la cuenta de cada admin (función
+ * `createAdminTransferRejectedNotification`) para que la campana le avise
+ * de la orden pendiente de revisión. La creación es mejor esfuerzo — una
  * notificación que falla nunca revierte ni retrasa la renovación que la
  * originó; el resto de operaciones (listar, leer, borrar) sí son exigentes
  * porque las pide directamente la UI de la campana.
@@ -181,41 +185,124 @@ export function createRenewalNotification(
       " Revisa tus datos o contacta al administrador."
   }
 
-  // Deduplicación atómica de fallos: los intentos solapados de una misma
-  // orden (webhooks at-least-once, reintento + conciliación en vuelo) pueden
-  // pasar el guard de primer fallo por carreras; el índice único parcial
-  // garantiza una sola «Renovación fallida» por orden y comprador.
+  void insertNotification({
+    userId: buyerUserId,
+    kind,
+    title,
+    body,
+    userName,
+    expiresAt,
+    orderId,
+  }).catch((error: unknown) => logError("create", error))
+}
+
+export interface AdminTransferRejectedNotificationInput {
+  /** Orden de transferencia que quedó `pending` para revisión manual. */
+  orderId: string
+  /** Cliente FlujoTV que se quería renovar. */
+  userName: string
+  /** Motivos del rechazo automático del comprobante (ya legibles). */
+  reasons: string[]
+}
+
+/**
+ * Copia del rechazo automático de un comprobante en la campana de cada
+ * administrador: la orden quedó `pending` en «Transferencias por revisar» y
+ * el admin se entera sin depender de abrir el listado. Los motivos llegan
+ * con el detalle de cada condición (esperado vs leído) para contextualizar
+ * la revisión. Nunca lanza: mismo contrato de mejor esfuerzo que
+ * `createRenewalNotification`.
+ */
+export function createAdminTransferRejectedNotification(
+  input: AdminTransferRejectedNotificationInput
+): void {
+  const userName = input.userName.trim()
+  if (!userName || !input.orderId) return
+
+  const reasons = input.reasons
+    .map((reason) => reason.trim())
+    .filter((reason) => reason.length > 0)
+    .slice(0, 6)
+  const detail = reasons.join("; ").slice(0, 400)
+
+  const title = "Transferencia por revisar"
+  const body =
+    `El comprobante para renovar a ${userName} no pasó la validación automática.` +
+    (detail
+      ? ` Motivo${reasons.length === 1 ? "" : "s"}: ${detail}.`
+      : "") +
+    " Revísala en Transferencias por revisar."
+
   void pool
+    .query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin'`)
+    .then((result) =>
+      Promise.all(
+        result.rows.map((row) =>
+          insertNotification({
+            userId: String(row.id),
+            kind: "transfer_rejected",
+            title,
+            body,
+            userName,
+            expiresAt: null,
+            orderId: input.orderId,
+          })
+        )
+      )
+    )
+    .catch((error: unknown) => logError("create_admin_transfer", error))
+}
+
+interface NotificationInsert {
+  userId: string
+  kind: NotificationKind
+  title: string
+  body: string
+  userName: string
+  expiresAt: string | null
+  orderId: string | null
+}
+
+/**
+ * Inserta la fila y avisa por SSE al destinatario solo cuando realmente se
+ * escribió (un fallo deduplicado no debe refrescar la campana de nuevo). El
+ * índice único parcial sobre (user_id, order_id) para fallos y rechazos
+ * garantiza una sola notificación por orden y destinatario aunque los
+ * intentos se solapen (webhooks at-least-once, reintento + conciliación,
+ * re-escaneo de la misma orden).
+ */
+function insertNotification(insert: NotificationInsert): Promise<boolean> {
+  return pool
     .query(
       `INSERT INTO notifications
          (id, user_id, kind, title, body, user_name, expires_at, order_id)
        VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (user_id, order_id)
-         WHERE order_id IS NOT NULL AND kind = 'renewal_failed'
+         WHERE order_id IS NOT NULL
+           AND kind IN ('renewal_failed', 'transfer_rejected')
        DO NOTHING`,
       [
         randomUUID(),
-        buyerUserId,
-        kind,
-        title,
-        body,
-        userName,
-        expiresAt,
-        orderId,
+        insert.userId,
+        insert.kind,
+        insert.title,
+        insert.body,
+        insert.userName,
+        insert.expiresAt,
+        insert.orderId,
       ]
     )
     .then((result) => {
-      // Solo avisa por SSE cuando la fila realmente se insertó: un fallo
-      // deduplicado no debe refrescar la campana de nuevo.
       if ((result.rowCount ?? 0) > 0) {
         publishRealtimeDetached({
           kind: "notifications",
-          entityId: orderId ?? undefined,
-          distribuidorId: buyerUserId,
+          entityId: insert.orderId ?? undefined,
+          distribuidorId: insert.userId,
         })
+        return true
       }
+      return false
     })
-    .catch((error: unknown) => logError("create", error))
 }
 
 const FEED_LIMIT = 30
