@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import { pool } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
+import { createRenewalNotification } from "@/server/notifications/service"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
@@ -582,6 +583,17 @@ async function attemptOrderRenewal(
       return "ignored"
     }
     notifyOrderChange(order.id)
+    // Aviso persistente al comprador: la campana de la cabecera muestra el
+    // resultado con el usuario renovado y el vencimiento nuevo verificado.
+    createRenewalNotification({
+      buyerUserId: order.buyer_user_id,
+      kind: "renewal_success",
+      userName: order.user_name,
+      months: order.months,
+      bonusMonths: bonusMonths,
+      verifiedExpiresAt: verification.verifiedAt,
+      orderId: order.id,
+    })
     log("mercadopago.payment", {
       order_id: order.id,
       payment_id: paymentId,
@@ -616,17 +628,34 @@ async function attemptOrderRenewal(
       return "in_process"
     }
 
-    await pool
+    const failedClaim = await pool
       .query(
         `UPDATE mp_orders
             SET status = 'renewal_failed', error = $2, updated_at = now()
           WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
         [order.id, message.slice(0, 500)]
       )
-      .then(() => notifyOrderChange(order.id))
-      .catch((updateError: unknown) =>
+      .then((result) => result)
+      .catch((updateError: unknown) => {
         logError("update_renewal_failed", updateError)
-      )
+        return null
+      })
+    if (failedClaim !== null && failedClaim.rowCount !== null) {
+      notifyOrderChange(order.id)
+      // Aviso persistente solo en el PRIMER fallo (la orden venía de `paid`):
+      // los reintentos que re-fallan sobre `renewal_failed` (conciliación,
+      // reintento admin o de la UI) no duplican la notificación.
+      if (failedClaim.rowCount > 0 && order.status === "paid") {
+        createRenewalNotification({
+          buyerUserId: order.buyer_user_id,
+          kind: "renewal_failed",
+          userName: order.user_name,
+          months: order.months,
+          error: message,
+          orderId: order.id,
+        })
+      }
+    }
     log("mercadopago.payment", {
       order_id: order.id,
       payment_id: paymentId,
@@ -1123,6 +1152,16 @@ export async function rejectTransferOrder(
   }
 
   notifyOrderChange(order.id)
+  // Aviso persistente al comprador: su renovación por transferencia no
+  // ocurrió y necesita saberlo sin estar mirando la pantalla.
+  createRenewalNotification({
+    buyerUserId: order.buyer_user_id,
+    kind: "transfer_rejected",
+    userName: order.user_name,
+    months: order.months,
+    error: reason,
+    orderId: order.id,
+  })
   log("mercadopago.transfer_review", {
     order_id: order.id,
     user_name: order.user_name,

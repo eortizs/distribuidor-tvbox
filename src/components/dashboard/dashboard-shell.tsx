@@ -7,6 +7,7 @@ import { ChevronLeftIcon } from "lucide-react"
 
 import { AppHeaderDate } from "@/components/app-header-date"
 import { AppBottomNav } from "@/components/dashboard/app-bottom-nav"
+import { AppNotifications } from "@/components/dashboard/app-notifications"
 import { AppUserMenu } from "@/components/dashboard/app-user-menu"
 import { findNavBack, findNavHeaderTitle } from "@/components/dashboard/nav-config"
 import { shellLayout } from "@/components/dashboard/nav-layout"
@@ -131,6 +132,7 @@ export function DashboardShell({
         <div className="ml-auto flex items-center gap-1 md:gap-2">
           <RealtimeIndicator />
           <AppHeaderDate initialDate={initialDate} />
+          <AppNotifications />
           <AppUserMenu user={user} />
         </div>
       </header>

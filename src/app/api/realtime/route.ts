@@ -34,9 +34,9 @@ interface SessionScope {
 }
 
 function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
-  // Preferencias de módulos: solo las del propio usuario, sea cual sea el
-  // rol — ni siquiera un admin recibe las de otras cuentas.
-  if (event.kind === "prefs") {
+  // Preferencias y notificaciones: solo las del propio usuario, sea cual sea
+  // el rol — ni siquiera un admin recibe las de otras cuentas.
+  if (event.kind === "prefs" || event.kind === "notifications") {
     return event.distribuidorId === scope.userId
   }
   if (scope.isAdmin) return true
