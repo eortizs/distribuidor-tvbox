@@ -62,9 +62,13 @@ function TicketIcon({ mimeType }: { mimeType: string }) {
 
 /**
  * Plazo de la orden con los meses gratis de un paquete visibles: «6 meses +
- * 1 gratis»; las individuales quedan como «1 mes».
+ * 1 gratis»; las individuales quedan como «1 mes». Las órdenes de abono de
+ * saldo (`months = 0`, módulo «Abonar saldo») se rotulan como abono.
  */
 function transferOrderLabel(order: TransferOrder): string {
+  if (order.months === 0) {
+    return "Abono de saldo"
+  }
   const base = `${order.months} ${order.months === 1 ? "mes" : "meses"}`
   const bonus = order.bonus_months ?? 0
   return bonus > 0 ? `${base} + ${bonus} gratis` : base
@@ -163,6 +167,10 @@ export function TransferenciasReview({
             }`,
           })
           onApproved(order.user_name)
+        } else if (result.status === "applied") {
+          toast.success("Abono aplicado", {
+            description: `${order.user_name} · ${formatMxn(order.amount)} acreditados en su saldo.`,
+          })
         } else if (result.status === "renewal_failed") {
           toast.error("El pago se aprobó pero la renovación falló", {
             description: `Reintenta la renovación de la orden ${order.id}.`,
@@ -367,8 +375,11 @@ export function TransferenciasReview({
               ¿Rechazar la transferencia de {rejectTarget?.user_name}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              El pago no se registrará y la licencia no se renovará; el
-              distribuidor deberá subir otro comprobante.
+              El pago no se registrará
+              {rejectTarget?.months === 0
+                ? " y el abono no se acreditará"
+                : " y la licencia no se renovará"}
+              ; el distribuidor deberá subir otro comprobante.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -173,8 +173,10 @@ export function RefundsReview() {
                       {order.user_name}
                     </p>
                     <p className="text-muted-foreground truncate text-xs">
-                      {order.months} {order.months === 1 ? "mes" : "meses"}
-                      {(order.bonus_months ?? 0) > 0
+                      {order.months === 0
+                        ? "Abono de saldo"
+                        : `${order.months} ${order.months === 1 ? "mes" : "meses"}`}
+                      {order.months !== 0 && (order.bonus_months ?? 0) > 0
                         ? ` + ${order.bonus_months} gratis`
                         : ""}{" "}
                       · {formatMxn(order.amount)} ·{" "}

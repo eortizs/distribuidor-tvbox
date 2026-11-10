@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto"
 import { pool } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
+import { formatMxn } from "@/lib/finanzas"
 
 /**
  * Notificaciones persistentes del comprador y de los administradores:
@@ -129,9 +130,15 @@ export interface RenewalNotificationInput {
   /** Destinatario: comprador de la orden (`mp_orders.buyer_user_id`). */
   buyerUserId: string | null
   kind: NotificationKind
-  /** Cliente FlujoTV renovado. */
+  /** Cliente FlujoTV renovado (o username del comprador en un abono). */
   userName: string
+  /**
+   * Meses de la renovación; `0` marca un abono de saldo
+   * (`/modulos/abonar-saldo`): los textos de abajo usan la rama de abono.
+   */
   months: number
+  /** Monto del abono (solo con `months = 0`), para el cuerpo del aviso. */
+  amountMxn?: number
   /** Meses gratis del paquete (0 en renovaciones individuales). */
   bonusMonths?: number
   /** Vencimiento nuevo verificado en el panel (solo éxito). */
@@ -151,6 +158,41 @@ export function createRenewalNotification(
 ): void {
   const { buyerUserId, kind, userName, months, orderId } = input
   if (!buyerUserId) return
+
+  // Abono de saldo (months = 0): el aviso habla del saldo acreditado, no de
+  // una renovación de licencia. Mismos kinds para reutilizar el feed, los
+  // badges de la campana y la deduplicación por orden.
+  if (months === 0) {
+    const amount =
+      typeof input.amountMxn === "number" && input.amountMxn > 0
+        ? formatMxn(input.amountMxn)
+        : ""
+    let title: string
+    let body: string
+    if (kind === "renewal_success") {
+      title = "Abono aplicado"
+      body = amount
+        ? `Tu abono de ${amount} quedó acreditado en tu saldo.`
+        : "Tu abono quedó acreditado en tu saldo."
+    } else {
+      title = "Abono no acreditado"
+      const reason = (input.error ?? "").trim()
+      body =
+        "El pago quedó registrado pero el abono no se pudo acreditar en tu saldo." +
+        (reason ? ` Motivo: ${reason.slice(0, 200)}` : "") +
+        " Se reintentará solo; si persiste, contacta al administrador."
+    }
+    void insertNotification({
+      userId: buyerUserId,
+      kind,
+      title,
+      body,
+      userName,
+      expiresAt: null,
+      orderId,
+    }).catch((error: unknown) => logError("create", error))
+    return
+  }
 
   const bonusMonths =
     Number.isInteger(input.bonusMonths) && (input.bonusMonths as number) > 0

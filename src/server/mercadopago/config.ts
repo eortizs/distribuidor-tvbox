@@ -78,13 +78,14 @@ export function transferBankDataOrNull(): TransferBankConfig | null {
 }
 
 /**
- * Configuración del motor de pagos: credencial del vendedor, precio de la
- * renovación mensual y URL pública para las URLs de retorno y de notificación
- * del webhook. Todo vive en `.env` (`MERCADOPAGO_ACCESS_TOKEN`,
- * `LICENSE_PRICE_MXN`, `SITE_URL`); sin token o sin precio válido no hay
- * checkout y el error lo dice claro antes de crear ninguna orden.
+ * Credencial y URL pública sin el precio de licencia: la usan los flujos de
+ * pago que no cobran renovaciones (p. ej. el abono de saldo de
+ * `/modulos/abonar-saldo`), donde `LICENSE_PRICE_MXN` es irrelevante.
  */
-export function resolveMercadoPagoConfig(): MercadoPagoConfig {
+export function resolveMercadoPagoGateway(): {
+  accessToken: string
+  siteUrl: string
+} {
   const accessToken = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() ?? ""
   if (accessToken.length === 0) {
     throw new MercadoPagoError(
@@ -94,6 +95,24 @@ export function resolveMercadoPagoConfig(): MercadoPagoConfig {
     )
   }
 
+  const siteUrl = (
+    process.env.SITE_URL?.trim() ||
+    "https://distribuidor-tvbox.people-ia.com"
+  ).replace(/\/+$/, "")
+
+  return { accessToken, siteUrl }
+}
+
+/**
+ * Configuración del motor de pagos: credencial del vendedor, precio de la
+ * renovación mensual y URL pública para las URLs de retorno y de notificación
+ * del webhook. Todo vive en `.env` (`MERCADOPAGO_ACCESS_TOKEN`,
+ * `LICENSE_PRICE_MXN`, `SITE_URL`); sin token o sin precio válido no hay
+ * checkout y el error lo dice claro antes de crear ninguna orden.
+ */
+export function resolveMercadoPagoConfig(): MercadoPagoConfig {
+  const { accessToken, siteUrl } = resolveMercadoPagoGateway()
+
   const licensePriceMxn = licensePriceMxnOrNull()
   if (licensePriceMxn === null) {
     throw new MercadoPagoError(
@@ -102,11 +121,6 @@ export function resolveMercadoPagoConfig(): MercadoPagoConfig {
       "El precio de la licencia no está configurado. Define LICENSE_PRICE_MXN (MXN, mayor que 0) en el servidor."
     )
   }
-
-  const siteUrl = (
-    process.env.SITE_URL?.trim() ||
-    "https://distribuidor-tvbox.people-ia.com"
-  ).replace(/\/+$/, "")
 
   return { accessToken, licensePriceMxn, siteUrl }
 }

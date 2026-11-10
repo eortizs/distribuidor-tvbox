@@ -3,6 +3,7 @@ import {
   ClapperboardIcon,
   ImageIcon,
   PackageIcon,
+  PiggyBankIcon,
   ReceiptTextIcon,
   ShoppingBasketIcon,
   type LucideIcon,
@@ -77,6 +78,13 @@ export const MODULOS: Modulo[] = [
       "Toma una foto del ticket o elige un archivo y la IA extrae sus datos para revisarlos y confirmarlos.",
     href: "/modulos/alta-de-tickets",
     icon: ReceiptTextIcon,
+  },
+  {
+    title: "Abonar saldo",
+    description:
+      "Define el monto y abona a tu cuenta con Mercado Pago, transferencia o cupón, el mismo checkout de siempre.",
+    href: "/modulos/abonar-saldo",
+    icon: PiggyBankIcon,
   },
 ]
 

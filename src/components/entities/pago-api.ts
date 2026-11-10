@@ -10,6 +10,8 @@ export type PaymentOrderStatus =
   | "pending"
   | "paid"
   | "renewed"
+  /** Abono de saldo aplicado a la cuenta (módulo «Abonar saldo»). */
+  | "applied"
   | "renewal_failed"
   | "rejected"
   | "cancelled"

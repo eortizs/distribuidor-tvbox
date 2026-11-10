@@ -9,6 +9,7 @@ import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
 import { mpTotalMxn } from "@/lib/mp-pricing"
+import { applySaldoCredit } from "@/server/saldo/service"
 
 import {
   resolveMercadoPagoConfig,
@@ -27,6 +28,8 @@ export type MpOrderStatus =
   | "pending"
   | "paid"
   | "renewed"
+  /** Abono de saldo aplicado a la cuenta (módulo «Abonar saldo»). */
+  | "applied"
   | "renewal_failed"
   | "rejected"
   | "cancelled"
@@ -432,6 +435,8 @@ async function searchPaymentsByExternalReference(
 
 export type PaymentOutcome =
   | "renewed"
+  /** Crédito de abono aplicado al saldo del comprador. */
+  | "applied"
   | "renewal_failed"
   | "rejected"
   | "cancelled"
@@ -550,6 +555,24 @@ async function attemptOrderRenewal(
   renewalTimeoutMs?: number
 ): Promise<PaymentOutcome> {
   try {
+    // Abono de saldo (months = 0): el cumplimiento NO renueva una licencia,
+    // acredita el monto en el saldo de la cuenta del comprador
+    // (`/modulos/abonar-saldo`). La marca `months = 0` no colisiona con las
+    // órdenes de renovación (validan 1/3/6/12) y el abono es idempotente por
+    // orden (`saldo_movimientos.order_id` único), así que reintentos del
+    // webhook, conciliación y revisión admin nunca acreditan dos veces.
+    if (order.months === 0) {
+      const saldo = await applySaldoCredit(order, paymentId)
+      log("mercadopago.payment", {
+        order_id: order.id,
+        payment_id: paymentId,
+        user_name: order.user_name,
+        months: 0,
+        amount: order.amount,
+        outcome: saldo.outcome,
+      })
+      return saldo.outcome
+    }
     if (!isRenewalMonths(order.months)) {
       throw new MercadoPagoError(
         500,
