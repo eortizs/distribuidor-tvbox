@@ -20,11 +20,15 @@ import {
 import { AppError } from "@/server/umejson/types"
 import { errorResponse } from "@/server/http"
 import { reviewTransferReceipt, checkRateLimitReceiptScan } from "@/server/transferencias/scan"
+import { getActiveTransferConcept } from "@/server/transferencias/concepto"
 import { isRenewalMonths } from "@/lib/flujotv"
 
 /** Tipos de comprobante admitidos: foto o PDF del ticket de transferencia. */
 const TICKET_MIME_PREFIXES = ["image/"]
 const TICKET_MIME_EXACT = ["application/pdf"]
+
+/** Código de 4 caracteres alfanuméricos (concepto de pago de la orden). */
+const CONCEPTO_RE = /^[A-Za-z0-9]{4}$/
 
 function isTicketMime(mimeType: string): boolean {
   return (
@@ -35,16 +39,17 @@ function isTicketMime(mimeType: string): boolean {
 
 /**
  * Crea una orden de renovación pagada por transferencia bancaria: guarda el
- * ticket (multipart/form-data con `user_name`, `months` y `file`) y la
- * revisa automáticamente con el LLM configurado (`RECEIPT_SCAN_MODEL`):
- * fecha dentro del mes actual, concepto con el usuario de FlujoTV, importe
- * de la orden y beneficiario receptor. Si todo pasa, la orden se aprueba y
- * la renovación se lanza sola (respuesta `review: "auto_approved"`); si algo
- * no coincide, la orden queda `pending` para la revisión manual del admin y
- * el comprador recibe el aviso de contactarlo (`review: "auto_rejected"`);
- * sin modelo configurado o con el escaneo caído, queda el flujo de siempre
- * (`review: "manual"`). La renovación NUNCA ocurre por subir el ticket sin
- * verificación previa.
+ * ticket (multipart/form-data con `user_name`, `months`, `concepto` y `file`)
+ * y la revisa automáticamente con el LLM configurado (`RECEIPT_SCAN_MODEL`):
+ * fecha dentro del mes actual, concepto impreso con el código de pago de 4
+ * caracteres entregado al comprador (paso 1 del flujo) y con el usuario de
+ * FlujoTV, importe de la orden y beneficiario receptor. Si todo pasa, la
+ * orden se aprueba y la renovación se lanza sola (respuesta
+ * `review: "auto_approved"`); si algo no coincide, la orden queda `pending`
+ * para la revisión manual del admin y el comprador recibe el aviso de
+ * contactarlo (`review: "auto_rejected"`); sin modelo configurado o con el
+ * escaneo caído, queda el flujo de siempre (`review: "manual"`). La
+ * renovación NUNCA ocurre por subir el ticket sin verificación previa.
  *
  * El guard de alcance es idéntico al de Mercado Pago: el distribuidor solo
  * puede comprar renovaciones de clientes de su reseller ligado.
@@ -90,6 +95,33 @@ export async function POST(request: Request) {
         422,
         "validation_error",
         "Los meses deben ser 1, 3, 6 o 12."
+      )
+    }
+
+    // Concepto de pago (paso 1 del flujo): el código entregado al comprador
+    // debe existir, estar activo, ser del mes actual y corresponder a su
+    // cuenta y al usuario renovado. Un código ajeno, vencido o ya anulado
+    // (transferencia aprobada o rechazada) se rechaza en la puerta.
+    const conceptoRaw = formData.get("concepto")
+    const concepto =
+      typeof conceptoRaw === "string" ? conceptoRaw.trim().toUpperCase() : ""
+    if (!CONCEPTO_RE.test(concepto)) {
+      throw new AppError(
+        422,
+        "validation_error",
+        "Falta el concepto de pago: primero obtén el código del paso 1 de la transferencia."
+      )
+    }
+    const concept = await getActiveTransferConcept({
+      buyerUserId: user.id,
+      userName,
+      code: concepto,
+    })
+    if (!concept) {
+      throw new AppError(
+        422,
+        "concepto_invalido",
+        "El concepto de pago no es válido, expiró o ya fue usado. Regresa al paso 1 para obtener el vigente."
       )
     }
 
@@ -159,6 +191,8 @@ export async function POST(request: Request) {
       months,
       buyerUserId: user.id,
       ticketFileId: saved.id,
+      conceptId: concept.id,
+      conceptCode: concept.code,
     })
 
     // Revisión automática del comprobante (LLM + condiciones de la orden):
@@ -174,6 +208,7 @@ export async function POST(request: Request) {
         mimeType: file.type,
         userName,
         amountMxn: result.amount,
+        conceptCode: concept.code,
       })
     } else {
       review = { review: "manual" as const, status: "pending" as const, scan: null }

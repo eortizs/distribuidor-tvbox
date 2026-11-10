@@ -53,12 +53,18 @@
  *     `POST /api/mercadopago/webhook` verifica el pago contra la API de MP
  *     (monto, moneda, external_reference) y recién entonces renueva la
  *     licencia en el panel FlujoTV.
- *   - **Transferencia bancaria**: muestra los datos bancarios del servidor
- *     (banco, titular y cuenta con botón de copiar; env `TRANSFER_*`) y la
- *     subida del ticket (foto o PDF, `useFileUpload`); «Enviar comprobante»
- *     crea la orden con el ticket vía `POST /api/transferencias/orders` y el
- *     servidor lo verifica con el LLM (`RECEIPT_SCAN_MODEL`): fecha dentro
- *     del mes actual, concepto con el usuario de FlujoTV, importe de la
+ *   - **Transferencia bancaria**: flujo de DOS pasos. Paso 1: muestra los
+ *     datos bancarios del servidor (banco, titular y cuenta con botón de
+ *     copiar; env `TRANSFER_*`) y el **concepto de pago** — código de 4
+ *     caracteres alfanuméricos que el servidor entrega ligado al comprador y
+ *     al usuario a renovar (`POST /api/transferencias/concepto`, idempotente
+ *     dentro del mes: cancelar y volver muestra el mismo código; TTL mensual,
+ *     y aprobarse o rechazarse la transferencia lo anula). Paso 2: tras
+ *     confirmar «Ya hice la transferencia», la subida del ticket (foto o
+ *     PDF, `useFileUpload`); «Enviar comprobante» crea la orden con el
+ *     concepto vía `POST /api/transferencias/orders` y el servidor lo
+ *     verifica con el LLM (`RECEIPT_SCAN_MODEL`): fecha dentro del mes
+ *     actual, concepto con el código de pago entregado, importe de la
  *     orden y beneficiario receptor (tolerante). Al enviar, la app se
  *     BLOQUEA con un overlay por etapas hasta el 100% del proceso: 1)
  *     validación del comprobante, 2) renovación en el panel de FlujoTV
@@ -160,6 +166,7 @@ import {
   CircleCheckIcon,
   CopyIcon,
   FileTextIcon,
+  HashIcon,
   ImageIcon,
   LandmarkIcon,
   LoaderCircleIcon,
@@ -284,11 +291,13 @@ import {
 import {
   createPaymentOrder,
   createCouponOrder,
+  createTransferConcept,
   createTransferOrder,
   fetchPaymentOrder,
   retryOrderRenewal,
   PagoRequestError,
   type PaymentOrder,
+  type TransferConcept,
 } from "./pago-api"
 import { TransferenciasReview } from "./transferencias-review"
 import { RefundsReview } from "./refunds-review"
@@ -302,6 +311,14 @@ type FetchState = "loading" | "success" | "error"
 
 /** Métodos de pago del bottom sheet de renovación. */
 type PayMethod = "mercadopago" | "transferencia" | "cupon"
+
+/**
+ * Pasos del flujo de transferencia bancaria: primero el concepto de pago
+ * (código de 4 caracteres que el comprador escribe en su transferencia) y
+ * después la subida del comprobante, que el servidor valida contra ese
+ * código.
+ */
+type TransferStep = "concepto" | "comprobante"
 
 /** Tamaño máximo del ticket de transferencia (igual que el servidor). */
 const TICKET_MAX_BYTES = 10 * 1024 * 1024
@@ -379,6 +396,15 @@ function initials(userName: string): string {
   const first = parts[0]?.charAt(0) ?? ""
   const second = parts[1]?.charAt(0) ?? parts[0]?.charAt(1) ?? ""
   return (first + second).toUpperCase()
+}
+
+/** Etiqueta del mes vigente del concepto de pago: «Noviembre 2026». */
+function formatCurrentMonth(): string {
+  const label = new Intl.DateTimeFormat("es", {
+    month: "long",
+    year: "numeric",
+  }).format(new Date())
+  return label.charAt(0).toUpperCase() + label.slice(1)
 }
 
 /** Ventana de urgencia: la barra se agota durante los 30 días previos al vencimiento. */
@@ -694,6 +720,22 @@ export function ClientesAccordion({
   const [payMethod, setPayMethod] = useState<PayMethod>("mercadopago")
   const [submittingTransfer, setSubmittingTransfer] = useState(false)
   /**
+   * Paso actual de la transferencia: el concepto de pago se entrega primero
+   * (paso 1) y el comprobante se sube después (paso 2).
+   */
+  const [transferStep, setTransferStep] = useState<TransferStep>("concepto")
+  /**
+   * Concepto de pago vigente para el cliente objetivo (código de 4
+   * caracteres + mes). Idempotente en el servidor: cancelar y volver
+   * entrega el mismo código mientras dure el mes.
+   */
+  const [transferConcept, setTransferConcept] = useState<TransferConcept | null>(
+    null
+  )
+  /** Fallo al generar el concepto (con botón de reintento en el panel). */
+  const [conceptError, setConceptError] = useState<string | null>(null)
+  const [conceptCopied, setConceptCopied] = useState(false)
+  /**
    * Resultado de la verificación automática del comprobante: con
    * `auto_rejected` el sheet permanece abierto con los motivos y el aviso de
    * contactar al administrador (la orden quedó `pending` para su revisión
@@ -745,6 +787,13 @@ export function ClientesAccordion({
 
   const requestCounter = useRef(0)
   const router = useRouter()
+
+  /**
+   * Llave del concepto de pago ya pedido (usuario + mes): evita repetir la
+   * petición al re-seleccionar el método y evita un bucle de reintentos
+   * tras un fallo (el reintento es explícito, con el botón del panel).
+   */
+  const conceptRequestedKey = useRef("")
 
   /**
    * Consulta con la que montó el componente: el efecto de persistencia la usa
@@ -938,6 +987,11 @@ export function ClientesAccordion({
       setPayMethod("mercadopago")
       setPayError(null)
       setTransferRejected(null)
+      setTransferStep("concepto")
+      setTransferConcept(null)
+      setConceptError(null)
+      setConceptCopied(false)
+      conceptRequestedKey.current = ""
       setCouponCode("")
       setCouponRetryOrderId(null)
       couponRequestIdRef.current =
@@ -947,6 +1001,73 @@ export function ClientesAccordion({
     },
     [ticketActions]
   )
+
+  /**
+   * Paso 1 de la transferencia: pide el concepto de pago vigente para el
+   * comprador + usuario. Una sola petición por usuario y mes: al volver a
+   * elegir el método en el mismo mes, el mismo código reaparece sin otra
+   * llamada (y tras un fallo no hay bucle: el reintento es el botón). Solo
+   * toca refs de forma síncrona; los setState ocurren al resolver la
+   * petición (el efecto no encadena renders).
+   */
+  const loadTransferConcept = useCallback(async (userName: string) => {
+    const now = new Date()
+    const monthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`
+    const expectedKey = `${userName}:${monthKey}`
+    if (conceptRequestedKey.current === expectedKey) return
+    conceptRequestedKey.current = expectedKey
+    try {
+      const concept = await createTransferConcept({ userName })
+      // Solo aplica si sigue siendo la petición dueña: el comprador pudo
+      // cambiar de cliente mientras volaba (la respuesta de A no pisa a B).
+      if (conceptRequestedKey.current !== expectedKey) return
+      setTransferConcept(concept)
+      setConceptError(null)
+    } catch (error) {
+      if (conceptRequestedKey.current !== expectedKey) return
+      conceptRequestedKey.current = ""
+      setConceptError(
+        error instanceof Error
+          ? error.message
+          : "No se pudo generar el concepto de pago."
+      )
+    }
+  }, [])
+
+  /**
+   * Carga del concepto derivada: mientras el método es transferencia, no hay
+   * código ni error de generación, la petición está en curso.
+   */
+  const loadingConcept =
+    purchaseOpen &&
+    payMethod === "transferencia" &&
+    transferConcept === null &&
+    conceptError === null
+
+  /** Al elegir transferencia se abre el paso 1 y se pide el concepto. */
+  useEffect(() => {
+    if (!purchaseOpen || payMethod !== "transferencia" || !purchaseTarget) {
+      return
+    }
+    // La petición corre en un microtask (mismo patrón que la restauración de
+    // filtros): el primer pintado no espera a la red ni encadena renders.
+    const userName = purchaseTarget.userName.trim()
+    void Promise.resolve().then(() => loadTransferConcept(userName))
+  }, [purchaseOpen, payMethod, purchaseTarget, loadTransferConcept])
+
+  /** Copia el concepto de pago al portapapeles con feedback breve. */
+  const copyConcept = useCallback(() => {
+    if (!transferConcept) return
+    navigator.clipboard
+      .writeText(transferConcept.code)
+      .then(() => {
+        setConceptCopied(true)
+        window.setTimeout(() => setConceptCopied(false), 2000)
+      })
+      .catch(() => {
+        toast.error("No se pudo copiar el concepto.")
+      })
+  }, [transferConcept])
 
   const submitPurchase = useCallback(async () => {
     if (!purchaseTarget) return
@@ -979,7 +1100,7 @@ export function ClientesAccordion({
    * (sheet con el veredicto / flujo legacy de revisión admin).
    */
   const submitTransfer = useCallback(async () => {
-    if (!purchaseTarget) return
+    if (!purchaseTarget || !transferConcept) return
     const ticket = ticketFiles.files[0]?.file
     if (!(ticket instanceof File)) return
     const userName = purchaseTarget.userName.trim()
@@ -995,7 +1116,12 @@ export function ClientesAccordion({
       startedAt: Date.now(),
     })
     try {
-      const result = await createTransferOrder({ userName, months: 1, file: ticket })
+      const result = await createTransferOrder({
+        userName,
+        months: 1,
+        concepto: transferConcept.code,
+        file: ticket,
+      })
       if (result.review === "auto_approved") {
         // Etapa 2: renovación en el panel; el sondeo del bloqueo lleva la
         // orden hasta su estado final antes de liberar.
@@ -1035,6 +1161,17 @@ export function ClientesAccordion({
     } catch (error) {
       clearRenewalStorage()
       setRenewalBlock(null)
+      // Concepto anulado en el servidor (transferencia aprobada/rechazada)
+      // o vencido por cambio de mes: el código en pantalla ya no sirve, así
+      // que se descarta y el paso 1 re-consulta el vigente al instante.
+      if (error instanceof PagoRequestError && error.code === "concepto_invalido") {
+        conceptRequestedKey.current = ""
+        setTransferConcept(null)
+        setConceptError(null)
+        setConceptCopied(false)
+        setTransferStep("concepto")
+        void loadTransferConcept(userName)
+      }
       setPayError(
         error instanceof Error
           ? error.message
@@ -1043,7 +1180,7 @@ export function ClientesAccordion({
     } finally {
       setSubmittingTransfer(false)
     }
-  }, [purchaseTarget, ticketActions, ticketFiles])
+  }, [purchaseTarget, transferConcept, ticketActions, ticketFiles, loadTransferConcept])
 
   /** Copia la cuenta bancaria al portapapeles con feedback breve. */
   const copyAccount = useCallback(() => {
@@ -1729,12 +1866,12 @@ export function ClientesAccordion({
                       ) : null}
                     </span>
                   )
-                })}
-              </div>
-            ) : null}
-          </div>
-        </Filters>
-      ) : null}
+                 })}
+               </div>
+             ) : null}
+           </div>
+         </Filters>
+       ) : null}
 
       {fetchState === "loading" ? (
         <div className="flex flex-col" aria-hidden="true">
@@ -1933,6 +2070,15 @@ export function ClientesAccordion({
             renewalBlock.stage !== "fallo"
           )
             return
+          // Al cerrar se descarta la sesión de transferencia: el concepto
+          // pudo anularse o vencer mientras tanto y se re-consulta al volver.
+          if (!open) {
+            conceptRequestedKey.current = ""
+            setTransferConcept(null)
+            setConceptError(null)
+            setConceptCopied(false)
+            setTransferStep("concepto")
+          }
           setPurchaseOpen(open)
         }}
         showSwipeHandle
@@ -1976,6 +2122,9 @@ export function ClientesAccordion({
                 setPayMethod(value as PayMethod)
                 setPayError(null)
                 setTransferRejected(null)
+                // Volver a entrar a transferencia abre el flujo en el paso 1
+                // (el concepto vigente reaparece sin otra llamada).
+                if (value === "transferencia") setTransferStep("concepto")
               }}
               aria-label="Método de pago"
             >
@@ -2010,7 +2159,8 @@ export function ClientesAccordion({
                           <FieldContent className="min-w-0">
                             <FieldTitle>Transferencia</FieldTitle>
                             <FieldDescription className="text-xs">
-                              Sube tu comprobante · verificación automática
+                              Concepto de pago + comprobante · verificación
+                              automática
                             </FieldDescription>
                           </FieldContent>
                         </span>
@@ -2046,43 +2196,136 @@ export function ClientesAccordion({
             </RadioGroup>
 
             {/*
-             * Panel del método activo: los datos bancarios para copiar y el
-             * ticket a subir. Solo aparece con transferencia seleccionada.
+             * Panel del método activo: flujo de DOS pasos. Paso 1: datos
+             * bancarios y el concepto de pago (código de 4 caracteres) que
+             * el comprador escribe en su transferencia. Paso 2: el ticket a
+             * subir, validado por el servidor contra ese concepto. Solo
+             * aparece con transferencia seleccionada.
              */}
             {transferBank && payMethod === "transferencia" ? (
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-col gap-1.5 text-xs">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Banco</span>
-                    <span className="font-medium">{transferBank.bank}</span>
+              transferStep === "concepto" ? (
+                <div className="flex flex-col gap-3">
+                  <div className="flex flex-col gap-1.5 text-xs">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Banco</span>
+                      <span className="font-medium">{transferBank.bank}</span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Titular</span>
+                      <span className="truncate font-medium">
+                        {transferBank.holder}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Cuenta</span>
+                      <span className="flex items-center gap-1 font-medium tabular-nums">
+                        {transferBank.account}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={copyAccount}
+                          aria-label="Copiar la cuenta bancaria"
+                        >
+                          {accountCopied ? (
+                            <CheckIcon aria-hidden="true" />
+                          ) : (
+                            <CopyIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Titular</span>
-                    <span className="truncate font-medium">
-                      {transferBank.holder}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-muted-foreground">Cuenta</span>
-                    <span className="flex items-center gap-1 font-medium tabular-nums">
-                      {transferBank.account}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={copyAccount}
-                        aria-label="Copiar la cuenta bancaria"
-                      >
-                        {accountCopied ? (
-                          <CheckIcon aria-hidden="true" />
-                        ) : (
-                          <CopyIcon aria-hidden="true" />
-                        )}
-                      </Button>
-                    </span>
+                  <Separator />
+                  {/*
+                   * Concepto de pago (paso 1): código único del comprador +
+                   * usuario durante el mes actual. El comprador lo escribe
+                   * en su transferencia y el comprobante debe traerlo
+                   * impreso para pasar la verificación automática.
+                   */}
+                  <div className="flex flex-col gap-2 rounded-lg border bg-muted/40 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 font-medium text-xs">
+                        <HashIcon aria-hidden="true" className="size-3.5 opacity-60" />
+                        Concepto de pago
+                      </span>
+                      <Badge variant="outline" size="xs">
+                        Vigente · {formatCurrentMonth()}
+                      </Badge>
+                    </div>
+                    {loadingConcept ? (
+                      <Skeleton className="h-9 w-40" aria-hidden="true" />
+                    ) : transferConcept ? (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-2xl font-semibold tracking-[0.35em] tabular-nums">
+                          {transferConcept.code}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={copyConcept}
+                          aria-label="Copiar el concepto de pago"
+                        >
+                          {conceptCopied ? (
+                            <CheckIcon aria-hidden="true" />
+                          ) : (
+                            <CopyIcon aria-hidden="true" />
+                          )}
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-destructive text-xs">
+                          {conceptError ?? "No se pudo generar el concepto."}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="xs"
+                          onClick={() => {
+                            if (!purchaseTarget) return
+                            void loadTransferConcept(
+                              purchaseTarget.userName.trim()
+                            )
+                          }}
+                        >
+                          Reintentar
+                        </Button>
+                      </div>
+                    )}
+                    <p className="text-muted-foreground text-xs">
+                      Escribe este código como concepto de tu transferencia:
+                      con él identificamos tu pago y validamos tu
+                      comprobante.
+                    </p>
                   </div>
                 </div>
-                <Separator />
+              ) : (
+                <div className="flex flex-col gap-3">
+                  {/*
+                   * Paso 2: recordatorio del concepto y subida del
+                   * comprobante; «Ver datos» regresa al paso 1.
+                   */}
+                  <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <span className="text-muted-foreground text-xs">
+                        Concepto de pago
+                      </span>
+                      <span className="truncate font-mono text-sm font-semibold tracking-[0.2em] tabular-nums">
+                        {transferConcept?.code ?? "—"}
+                      </span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setTransferStep("concepto")}
+                    >
+                      Ver datos de pago
+                    </Button>
+                  </div>
+                  <Separator />
                 {/*
                  * Ticket: un archivo (foto o PDF). Sin archivo, botón de
                  * subida a ancho completo; con archivo, el chip con quitar.
@@ -2102,7 +2345,7 @@ export function ClientesAccordion({
                       disabled={submittingTransfer}
                     >
                       <UploadIcon aria-hidden="true" />
-                      Subir ticket
+                      Subir comprobante
                     </Button>
                     <p className="text-muted-foreground text-xs">
                       Foto o PDF del comprobante, hasta{" "}
@@ -2180,11 +2423,12 @@ export function ClientesAccordion({
                       </p>
                     </AlertDescription>
                   </Alert>
-                ) : null}
-              </div>
-            ) : null}
+                 ) : null}
+                 </div>
+               )
+             ) : null}
 
-            {/*
+             {/*
              * Panel del cupón: código de 4 dígitos con InputOTP (un dígito
              * por celda). El servidor valida el código contra los cupones
              * activos al aplicar; un código inválido avisa con el Alert de
@@ -2282,27 +2526,48 @@ export function ClientesAccordion({
                 )}
               </Button>
             ) : payMethod === "transferencia" && transferBank ? (
-              <Button
-                size="lg"
-                onClick={() => void submitTransfer()}
-                disabled={
-                  submittingTransfer ||
-                  ticketFiles.files.length === 0 ||
-                  priceMxn === null
-                }
-              >
-                {submittingTransfer ? (
-                  <>
-                    <LoaderCircleIcon
-                      aria-hidden="true"
-                      className="animate-spin"
-                    />
-                    Enviando…
-                  </>
-                ) : (
-                  "Enviar comprobante"
-                )}
-              </Button>
+              transferStep === "concepto" ? (
+                /* Paso 1 → 2: el comprador confirma que ya hizo la transferencia. */
+                <Button
+                  size="lg"
+                  onClick={() => setTransferStep("comprobante")}
+                  disabled={loadingConcept || transferConcept === null}
+                >
+                  {loadingConcept ? (
+                    <>
+                      <LoaderCircleIcon
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                      Generando concepto…
+                    </>
+                  ) : (
+                    "Ya hice la transferencia"
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  size="lg"
+                  onClick={() => void submitTransfer()}
+                  disabled={
+                    submittingTransfer ||
+                    ticketFiles.files.length === 0 ||
+                    priceMxn === null
+                  }
+                >
+                  {submittingTransfer ? (
+                    <>
+                      <LoaderCircleIcon
+                        aria-hidden="true"
+                        className="animate-spin"
+                      />
+                      Enviando…
+                    </>
+                  ) : (
+                    "Enviar comprobante"
+                  )}
+                </Button>
+              )
             ) : (
               <Button
                 size="lg"
@@ -2378,7 +2643,7 @@ export function ClientesAccordion({
                     id: 1,
                     title: "Comprobante",
                     description:
-                      "Verificación automática: fecha del mes, concepto con el usuario, importe y beneficiario.",
+                      "Verificación automática: fecha del mes, concepto de pago (código), importe y beneficiario.",
                   },
                   {
                     id: 2,

@@ -26,13 +26,14 @@ import {
  * modelo configurado en RECEIPT_SCAN_MODEL vía AI Gateway
  * (AI_GATEWAY_API_KEY), el mismo transporte del escaneo de tickets
  * (src/server/tickets/llm.ts). El modelo SOLO extrae los datos impresos del
- * comprobante (fecha, hora, concepto, importe, beneficiario); las cuatro
- * condiciones de autorización se evalúan en código puro
- * (./verificar.ts) contra los datos reales de la orden:
+ * comprobante (fecha, hora, concepto, importe, beneficiario); las
+ * condiciones de autorización se evalúan en código puro (./verificar.ts)
+ * contra los datos reales de la orden:
  *
  *   1. Fecha dentro del mes actual (hora informativa, sin validación dura).
- *   2. Concepto con el usuario de FlujoTV que se renueva (p. ej.
- *      «usuario flujotv: tv3abcd»).
+ *   2. Concepto con el CÓDIGO DE PAGO de 4 caracteres entregado al
+ *      comprador en el paso 1 (p. ej. «PVNE»): el comprador escribe SOLO el
+ *      código y la orden ya lo liga al usuario renovado.
  *   3. Importe ≥ al importe congelado de la orden (p. ej. $100 por mes).
  *   4. Beneficiario = titular receptor de `.env` (TRANSFER_HOLDER).
  *
@@ -121,7 +122,7 @@ function buildSystemPrompt(): string {
     "3. Campo ilegible o ausente: null. No completes, no estimes ni calcules.",
     "4. \"importe\": el total pagado, como texto decimal con punto y sin símbolos ni comas (\"100.00\").",
     "5. \"fecha\" como YYYY-MM-DD y \"hora\" como HH:mm en 24 h, tal como estén impresas.",
-    "6. \"concepto\": el texto de referencia o concepto que escribió quien pagó (p. ej. \"usuario flujotv: tv3abcd\"); transcríbelo completo, sin recortar.",
+    "6. \"concepto\": el texto de referencia o concepto que escribió quien pagó; suele ser un código corto de 4 caracteres alfanuméricos (p. ej. \"PVNE\"); transcríbelo completo, sin recortar.",
     "7. \"beneficiario\": el nombre de quien RECIBE el dinero (el destino). Si el comprobante no trae la palabra \"beneficiario\" pero se distinguen un origen y un destino (dos nombres, cuenta origen y cuenta destino, «de X para Y»), extrae el nombre del DESTINO. Transcribe abreviaturas e iniciales tal cual están impresas (\"E. Ortiz\", \"Enrique O\"); no las completes. Solo null si realmente no hay ningún nombre identificable como receptor.",
     "8. \"emisor\": el nombre de quien ENVÍA el dinero (el origen); si no se distingue del destino, null.",
     "9. \"moneda\": solo el código impreso (MXN, USD...); sin código legible, null.",
@@ -332,6 +333,8 @@ export async function reviewTransferReceipt(input: {
   mimeType: string
   userName: string
   amountMxn: number
+  /** Código de pago entregado al comprador (paso 1); vacío solo en órdenes previas al concepto. */
+  conceptCode: string
 }): Promise<ReviewOutcome> {
   const holderName = transferBankDataOrNull()?.holder ?? ""
   if (!receiptScanConfigured() || holderName.length === 0) {
@@ -408,7 +411,7 @@ export async function reviewTransferReceipt(input: {
 
   const checks = evaluarCondiciones({
     datos: extraccion.datos,
-    userName: input.userName,
+    conceptCode: input.conceptCode,
     amountMxn: input.amountMxn,
     holderName,
   })
@@ -538,5 +541,6 @@ export async function reviewTransferReceiptFromOrder(
     mimeType: file.mimeType,
     userName: order.user_name,
     amountMxn: order.amount,
+    conceptCode: order.concept_code ?? "",
   })
 }

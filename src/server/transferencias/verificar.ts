@@ -2,16 +2,19 @@
  * Verificación determinística de un comprobante de transferencia contra los
  * datos reales de la orden. Dominio puro (sin IO ni LLM): el modelo
  * RECEIPT_SCAN_MODEL extrae los datos impresos y AQUÍ se decide si el pago
- * cumple las cuatro condiciones de autorización:
+ * cumple las condiciones de autorización:
  *
  *   1. Fecha dentro del mes actual (la hora es informativa).
- *   2. Concepto con el usuario de FlujoTV que se renueva (p. ej.
- *      «usuario flujotv: tv3abcd»; mayúsculas, acentos, espacios y signos
- *      no importan; otro usuario no pasa).
+ *   2. Concepto con el CÓDIGO DE PAGO de 4 caracteres entregado al comprador
+ *      (paso 1 del flujo; mayúsculas, acentos, espacios y signos no
+ *      importan). El comprador escribe SOLO el código como concepto: el
+ *      código ya está ligado internamente al usuario renovado en la orden
+ *      (`getActiveTransferConcept` en la puerta), así que el concepto
+ *      impreso identifica el movimiento sin necesidad del usuario.
  *   3. Importe ≥ al importe congelado de la orden (pago exacto o a favor;
  *      un faltante no autoriza).
  *
- * Estrictos SOLO en fecha, concepto e importe. El beneficiario es
+ * Estrictos SOLO en fecha, código e importe. El beneficiario es
  * TOLERANTE: los comprobantes traen nombres ambiguos, así que basta con
  * que cada palabra del titular configurado aparezca completa («ENRIQUE
  * ORTIZ», «Enrique Ortiz Santos», «ORTIZ, ENRIQUE») o como inicial suelta
@@ -32,8 +35,8 @@ export interface DatosComprobante {
 }
 
 export interface CondicionEvaluada {
-  /** Clave estable: fecha | concepto | importe | beneficiario. */
-  key: "fecha" | "concepto" | "importe" | "beneficiario"
+  /** Clave estable: fecha | codigo | importe | beneficiario. */
+  key: "fecha" | "codigo" | "importe" | "beneficiario"
   label: string
   passed: boolean
   /** Detalle legible de lo que se esperaba y lo que se leyó. */
@@ -83,20 +86,23 @@ function parseImporte(value: string | null): number | null {
 }
 
 /**
- * Evalúa las cuatro condiciones contra los datos de la orden. `now` se
+ * Evalúa las condiciones contra los datos de la orden. `conceptCode` es el
+ * código de pago entregado al comprador (vacío solo en órdenes de la era
+ * previa al concepto: entonces no se evalúa esa condición). `now` se
  * inyecta para poder probar; en producción es el momento del escaneo.
  */
 export function evaluarCondiciones(input: {
   datos: DatosComprobante
-  userName: string
+  conceptCode: string
   amountMxn: number
   holderName: string
   now?: Date
 }): CondicionEvaluada[] {
   const now = input.now ?? new Date()
+  const conceptCode = input.conceptCode.trim().toUpperCase()
   const expected = {
     fecha: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
-    concepto: input.userName,
+    codigo: conceptCode,
     importe: input.amountMxn.toFixed(2),
     beneficiario: input.holderName,
   }
@@ -109,13 +115,15 @@ export function evaluarCondiciones(input: {
     fecha.year === now.getFullYear() &&
     fecha.month === now.getMonth() + 1
 
-  // 2. El concepto menciona el usuario de FlujoTV renovado, ignorando
-  //    mayúsculas, acentos, espacios y signos («usuario flujotv: tv3abcd»,
-  //    «TV3ABCD», «tv3 abcd»… todo pasa; otro usuario no).
-  const conceptoOk =
+  // 2. El concepto menciona el código de pago entregado al comprador,
+  //    ignorando mayúsculas, acentos, espacios y signos («PVNE», «p-v-ne»,
+  //    «pago PVNE»… todo pasa; otro código no). El comprador escribe SOLO
+  //    el código: la orden ya lo liga al usuario renovado.
+  const codigoOk =
+    conceptCode.length > 0 &&
     input.datos.concepto !== null &&
     normalizarTexto(input.datos.concepto).includes(
-      normalizarTexto(input.userName)
+      normalizarTexto(conceptCode)
     )
 
   // 3. Importe leído ≥ importe de la orden (pago exacto o a favor; un
@@ -147,19 +155,25 @@ export function evaluarCondiciones(input: {
       )
     )
 
-  return [
+  const condiciones: CondicionEvaluada[] = [
     {
       key: "fecha",
       label: "Fecha del comprobante (mes actual)",
       passed: fechaOk,
       detail: `esperado ${expected.fecha}; leído ${input.datos.fecha ?? "ilegible"}`,
     },
-    {
-      key: "concepto",
-      label: `Concepto con el usuario de FlujoTV '${input.userName}'`,
-      passed: conceptoOk,
-      detail: `leído ${input.datos.concepto ? `«${input.datos.concepto}»` : "ilegible"}`,
-    },
+  ]
+  // Condición del código de pago: solo con órdenes de la era del concepto
+  // (las previas conservan el flujo de verificación original).
+  if (conceptCode.length > 0) {
+    condiciones.push({
+      key: "codigo",
+      label: `Concepto de pago '${conceptCode}'`,
+      passed: codigoOk,
+      detail: `esperado '${conceptCode}'; leído ${input.datos.concepto ? `«${input.datos.concepto}»` : "ilegible"}`,
+    })
+  }
+  condiciones.push(
     {
       key: "importe",
       label: `Importe de ${expected.importe} MXN`,
@@ -175,6 +189,7 @@ export function evaluarCondiciones(input: {
           ? `«${input.datos.beneficiario}»`
           : "ilegible (no bloquea)"
       }`,
-    },
-  ]
+    }
+  )
+  return condiciones
 }

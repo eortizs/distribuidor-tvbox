@@ -157,6 +157,8 @@ export interface TransferOrder {
   amount: number
   currency: string
   buyer_username: string | null
+  /** Concepto de pago de 4 caracteres (null en órdenes previas al concepto). */
+  concept_code: string | null
   ticket: TransferTicket | null
   /** Resultado del escaneo automático del comprobante (null si no hubo). */
   scan: {
@@ -169,19 +171,50 @@ export interface TransferOrder {
   created_at: string
 }
 
+/** Concepto de pago entregado en el paso 1 de la transferencia. */
+export interface TransferConcept {
+  /** Código de 4 caracteres alfanuméricos (mayúsculas, sin 0/1/O/I). */
+  code: string
+  /** Mes de vigencia 'YYYY-MM': al vencer el mes vence el código. */
+  month: string
+}
+
+/**
+ * Paso 1 de la transferencia: obtiene el concepto de pago vigente para el
+ * comprador + usuario. Idempotente en el mes: si el comprador canceló y
+ * vuelve, recibe el MISMO código; si la transferencia previa terminó
+ * (aprobada o rechazada), el servidor entrega uno nuevo.
+ */
+export async function createTransferConcept(params: {
+  userName: string
+}): Promise<TransferConcept> {
+  const data = await requestJson<{ code: string; month: string }>(
+    "/api/transferencias/concepto",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ user_name: params.userName }),
+    }
+  )
+  return { code: data.code, month: data.month }
+}
+
 /** Resultado de la revisión automática del comprobante al crear la orden. */
 export type TransferReview = "auto_approved" | "auto_rejected" | "manual"
 
 /**
- * Crea la orden de transferencia bancaria con el ticket adjunto: el servidor
- * lo escanea con el LLM configurado (RECEIPT_SCAN_MODEL) y verifica fecha del
- * mes, concepto con el usuario, importe y beneficiario. `auto_approved` lanza
- * la renovación sola; `auto_rejected` deja la orden `pending` para revisión
+ * Paso 2 de la transferencia: crea la orden con el ticket adjunto y el
+ * concepto de pago del paso 1 (el servidor valida que esté activo y vigente
+ * en el mes). El servidor escanea el comprobante con el LLM configurado
+ * (RECEIPT_SCAN_MODEL) y verifica fecha del mes, concepto con el código de
+ * pago y el usuario, importe y beneficiario. `auto_approved` lanza la
+ * renovación sola; `auto_rejected` deja la orden `pending` para revisión
  * manual del admin y devuelve los motivos; `manual` es el flujo de siempre.
  */
 export async function createTransferOrder(params: {
   userName: string
   months: number
+  concepto: string
   file: File
 }): Promise<{
   orderId: string
@@ -193,6 +226,7 @@ export async function createTransferOrder(params: {
   const body = new FormData()
   body.set("user_name", params.userName)
   body.set("months", String(params.months))
+  body.set("concepto", params.concepto)
   body.set("file", params.file)
   const data = await requestJson<{
     order_id: string

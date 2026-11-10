@@ -13,7 +13,7 @@
  *
  * Las órdenes ya pasan por el escaneo automático del comprobante
  * (`RECEIPT_SCAN_MODEL`): las rechazadas por el LLM llegan aquí con `scan`
- * que explica qué condición falló (mes, concepto, importe, beneficiario) —
+ * que explica qué condición falló (mes, código, importe, beneficiario) —
  * contexto para decidir sin abrir el ticket; las aprobadas por el escaneo
  * jamás aparecen (su renovación se lanza sola).
  */
@@ -252,8 +252,23 @@ export function TransferenciasReview({
                     <TicketIcon mimeType={order.ticket.mimeType} />
                   ) : null}
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">
+                    <p className="flex items-center gap-1.5 truncate text-sm font-medium">
                       {order.user_name}
+                      {/*
+                       * Concepto de pago de la orden: el código que el
+                       * comprador debía escribir en su transferencia; permite
+                       * cruzar el comprobante con el movimiento bancario.
+                       */}
+                      {order.concept_code ? (
+                        <Badge
+                          variant="secondary"
+                          size="xs"
+                          className="font-mono tracking-[0.2em]"
+                          title={`Concepto de pago del comprador: ${order.concept_code}`}
+                        >
+                          {order.concept_code}
+                        </Badge>
+                      ) : null}
                     </p>
                     <p className="text-muted-foreground truncate text-xs">
                       {transferOrderLabel(order)} ·{" "}

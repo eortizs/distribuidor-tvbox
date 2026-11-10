@@ -5,6 +5,7 @@ import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { createRenewalNotification } from "@/server/notifications/service"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
+import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
 
@@ -47,8 +48,11 @@ export interface MpOrderRow {
   preference_id: string | null
   payment_id: number | null
   payment_status: string | null
-  ticket_file_id: string | null
+   ticket_file_id: string | null
     coupon_code: string | null
+    /** Concepto de pago ligado (transferencias de la era del concepto). */
+    concept_id: string | null
+    concept_code: string | null
     renewal_baseline_expires_at: string | null
     /** Vencimiento nuevo verificado en el panel al marcar `renewed`. */
     renewal_verified_expires_at: string | null
@@ -199,6 +203,14 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
       row.coupon_code === null || row.coupon_code === undefined
         ? null
         : String(row.coupon_code),
+    concept_id:
+      row.concept_id === null || row.concept_id === undefined
+        ? null
+        : String(row.concept_id),
+    concept_code:
+      row.concept_code === null || row.concept_code === undefined
+        ? null
+        : String(row.concept_code),
     renewal_baseline_expires_at:
       row.renewal_baseline_expires_at === null ||
       row.renewal_baseline_expires_at === undefined
@@ -936,8 +948,11 @@ export interface CreatedTransferOrder {
  * Crea la orden `pending` de una transferencia bancaria: el comprobante ya
  * está guardado (`ticket_file_id`) y la renovación ocurre solo cuando el
  * admin aprueba la revisión (`approveTransferOrder`), nunca al subirlo.
- * El importe queda congelado en la orden, igual que en Mercado Pago.
- * `bonusMonths` > 0 marca un paquete del módulo «Paquetes FlujoTV».
+ * La orden queda ligada al concepto de pago validado en la puerta
+ * (`concept_id`/`concept_code`), que el escaneo del comprobante exige y que
+ * se anula cuando la orden termina. El importe queda congelado en la orden,
+ * igual que en Mercado Pago. `bonusMonths` > 0 marca un paquete del módulo
+ * «Paquetes FlujoTV».
  */
 export async function createTransferOrder(params: {
   userName: string
@@ -945,6 +960,8 @@ export async function createTransferOrder(params: {
   buyerUserId: string
   ticketFileId: string
   bonusMonths?: number
+  conceptId?: string
+  conceptCode?: string
 }): Promise<CreatedTransferOrder> {
   const orderId = randomUUID()
   const bonusMonths = params.bonusMonths ?? 0
@@ -955,10 +972,20 @@ export async function createTransferOrder(params: {
   await pool.query(
     `INSERT INTO mp_orders
        (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
-        external_reference, ticket_file_id)
+        external_reference, ticket_file_id, concept_id, concept_code)
      VALUES ($1::uuid, 'pending', 'transferencia', $2, $3, $4, $5, 'MXN', $6,
-             $1::text, $7::uuid)`,
-    [orderId, params.userName, params.months, bonusMonths, amount, params.buyerUserId, params.ticketFileId]
+             $1::text, $7::uuid, $8::uuid, $9)`,
+    [
+      orderId,
+      params.userName,
+      params.months,
+      bonusMonths,
+      amount,
+      params.buyerUserId,
+      params.ticketFileId,
+      params.conceptId ?? null,
+      params.conceptCode ?? null,
+    ]
   )
 
   notifyOrderChange({ id: orderId, user_name: params.userName }, "pending")
@@ -985,6 +1012,8 @@ export interface TransferOrderPublic {
   amount: number
   currency: string
   buyer_username: string | null
+  /** Concepto de pago de 4 caracteres (null en órdenes previas al concepto). */
+  concept_code: string | null
   ticket:
     | { id: string; fileName: string; mimeType: string; sizeBytes: number }
     | null
@@ -1036,6 +1065,7 @@ function parseTransferRow(row: TransferJoinRow): TransferOrderPublic {
       typeof row.buyer_username === "string" && row.buyer_username.length > 0
         ? row.buyer_username
         : null,
+    concept_code: order.concept_code,
     ticket:
       ticketId &&
       typeof row.ticket_file_name === "string" &&
@@ -1110,6 +1140,12 @@ export async function approveTransferOrder(orderId: string): Promise<MpOrderRow>
     )
   }
 
+  // Transferencia exitosa: el concepto de pago queda anulado (consumed) y la
+  // siguiente transacción del comprador recibe un código nuevo.
+  await consumeTransferConceptByOrder(order.id).catch((error: unknown) =>
+    logError(`transfer_concept_consume ${order.id}`, error)
+  )
+
   const claimed = (await getMpOrder(order.id)) ?? order
   const outcome = await attemptOrderRenewal(claimed, null)
 
@@ -1161,6 +1197,12 @@ export async function rejectTransferOrder(
       "La transferencia ya fue procesada por otra revisión."
     )
   }
+
+  // Transferencia fallida: el concepto de pago queda anulado (consumed) y la
+  // siguiente transacción del comprador recibe un código nuevo.
+  await consumeTransferConceptByOrder(order.id).catch((error: unknown) =>
+    logError(`transfer_concept_consume ${order.id}`, error)
+  )
 
   notifyOrderChange(order, "rejected")
   // Aviso persistente al comprador: su renovación por transferencia no
