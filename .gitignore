@@ -55,3 +55,4 @@ agent/sandbox/workspace/**/node_modules/
 agent/sandbox/workspace/out/
 agent/sandbox/workspace/sims/dist/
 agent/sandbox/workspace/public/*.wav
+client_secret_*.json

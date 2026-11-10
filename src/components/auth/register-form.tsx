@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { GoogleAuthButton } from "@/components/auth/google-auth-button"
 import {
   Field,
   FieldDescription,
@@ -29,7 +30,11 @@ import { EyeOffIcon, EyeIcon } from "lucide-react"
 
 const initialState: RegisterState = { error: null }
 
-export function RegisterForm() {
+export function RegisterForm({
+  googleEnabled = false,
+}: {
+  googleEnabled?: boolean
+}) {
   const [state, formAction, isPending] = useActionState(
     registerAction,
     initialState
@@ -127,6 +132,7 @@ export function RegisterForm() {
           <Button type="submit" className="w-full" disabled={isPending}>
             {isPending ? "Creating account…" : "Create account"}
           </Button>
+          {googleEnabled ? <GoogleAuthButton /> : null}
         </form>
         <p className="text-muted-foreground mt-4 text-center text-sm">
           Already have an account?{" "}

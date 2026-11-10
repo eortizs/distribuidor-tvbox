@@ -1,10 +1,17 @@
 "use server"
 
+import { cookies } from "next/headers"
 import { redirect } from "next/navigation"
 
 import { createSession, destroySession } from "@/server/auth/session"
-import { findUserByUsername } from "@/server/auth/users"
+import { findUserByUsername, updateUser } from "@/server/auth/users"
 import { createAccount } from "@/server/auth/accounts"
+import { populateFullNameFromGoogle } from "@/server/auth/profile"
+import {
+  GOOGLE_LINK_COOKIE,
+  googleLinkCookieOptions,
+  verifyGoogleLinkToken,
+} from "@/server/auth/google"
 import {
   isValidEmail,
   normalizeEmail,
@@ -36,8 +43,38 @@ export async function loginAction(
   }
 
   const user = await findUserByUsername(email)
-  if (!user || !(await verifyPassword(password, user.passwordHash))) {
+  if (
+    !user ||
+    !user.passwordHash ||
+    !(await verifyPassword(password, user.passwordHash))
+  ) {
     return { error: "Credenciales incorrectas" }
+  }
+
+  // Vínculo pendiente de Google: la contraseña acaba de probar que el que
+  // inicia sesión es el dueño de la cuenta, así que el sub (con su foto y
+  // nombre) puede enlazarse.
+  const cookieStore = await cookies()
+  const linkToken = verifyGoogleLinkToken(
+    cookieStore.get(GOOGLE_LINK_COOKIE)?.value,
+    user.username
+  )
+  if (linkToken && !user.googleSub) {
+    await updateUser(user.id, {
+      googleSub: linkToken.sub,
+      // undefined = sin cambio: la foto solo se escribe si el token la trae.
+      googlePicture: linkToken.picture ?? undefined,
+    })
+    if (linkToken.name) {
+      // Solo rellena fullName si está vacío; nunca pisa ediciones manuales.
+      await populateFullNameFromGoogle(user.id, linkToken.name, user.username)
+    }
+  }
+  if (cookieStore.get(GOOGLE_LINK_COOKIE)) {
+    cookieStore.set(GOOGLE_LINK_COOKIE, "", {
+      ...googleLinkCookieOptions(),
+      maxAge: 0,
+    })
   }
 
   await createSession({

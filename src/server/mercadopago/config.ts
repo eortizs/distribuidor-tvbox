@@ -1,4 +1,5 @@
 import { MercadoPagoError } from "./errors"
+import { publicSiteUrl } from "@/server/site-url"
 
 /** Base de la API pública de Mercado Pago. */
 export const MERCADOPAGO_API_BASE = "https://api.mercadopago.com"
@@ -95,10 +96,7 @@ export function resolveMercadoPagoGateway(): {
     )
   }
 
-  const siteUrl = (
-    process.env.SITE_URL?.trim() ||
-    "https://distribuidor-tvbox.people-ia.com"
-  ).replace(/\/+$/, "")
+  const siteUrl = publicSiteUrl()
 
   return { accessToken, siteUrl }
 }

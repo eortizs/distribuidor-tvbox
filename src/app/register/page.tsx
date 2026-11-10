@@ -2,12 +2,13 @@ import { redirect } from "next/navigation"
 
 import { AuthShell } from "@/components/auth/auth-shell"
 import { RegisterForm } from "@/components/auth/register-form"
+import { isGoogleAuthEnabled } from "@/server/auth/google"
 import { getSessionUser } from "@/server/auth/session"
 
 export const instant = false
 
 export const metadata = {
-  title: "Create account",
+  title: "Crear cuenta",
 }
 
 export default async function RegisterPage() {
@@ -18,7 +19,7 @@ export default async function RegisterPage() {
 
   return (
     <AuthShell>
-      <RegisterForm />
+      <RegisterForm googleEnabled={isGoogleAuthEnabled()} />
     </AuthShell>
   )
 }

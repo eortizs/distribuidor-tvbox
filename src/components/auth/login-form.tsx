@@ -12,6 +12,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { GoogleAuthButton } from "@/components/auth/google-auth-button"
 import {
   Field,
   FieldGroup,
@@ -28,7 +29,15 @@ import { EyeOffIcon, EyeIcon } from "lucide-react"
 
 const initialState: LoginState = { error: null }
 
-export function LoginForm() {
+export function LoginForm({
+  googleEnabled = false,
+  oauthError,
+  oauthNotice,
+}: {
+  googleEnabled?: boolean
+  oauthError?: string | null
+  oauthNotice?: string | null
+}) {
   const [state, formAction, isPending] = useActionState(
     loginAction,
     initialState
@@ -85,6 +94,14 @@ export function LoginForm() {
               </InputGroup>
             </Field>
           </FieldGroup>
+          {oauthNotice ? (
+            <p className="text-muted-foreground text-sm">{oauthNotice}</p>
+          ) : null}
+          {oauthError ? (
+            <p className="text-destructive text-sm" role="alert">
+              {oauthError}
+            </p>
+          ) : null}
           {state.error ? (
             <p className="text-destructive text-sm" role="alert">
               {state.error}
@@ -93,6 +110,7 @@ export function LoginForm() {
           <Button type="submit" className="w-full" disabled={isPending}>
             {isPending ? "Iniciando sesión…" : "Iniciar sesión"}
           </Button>
+          {googleEnabled ? <GoogleAuthButton /> : null}
         </form>
         <p className="text-muted-foreground mt-4 text-center text-sm">
           ¿No tienes una cuenta?{" "}

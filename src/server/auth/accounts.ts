@@ -29,7 +29,7 @@ import { ensureUserStorage, removeUserStorage } from "@/server/storage/user-file
 export { ACCOUNT_ENTITY_NAME }
 
 /** Shared draft for the account's umeJSON entity (id/timestamps still sentinel). */
-export function buildAccountDraft(user: AuthUser): UmeJson {
+export function buildAccountDraft(user: AuthUser, fullName?: string): UmeJson {
   return {
     id: SENTINEL,
     entityName: ACCOUNT_ENTITY_NAME,
@@ -38,6 +38,7 @@ export function buildAccountDraft(user: AuthUser): UmeJson {
       userId: user.id,
       role: user.role,
       distribuidorId: user.id,
+      ...(fullName ? { fullName } : {}),
     },
     lifecycle: {
       createdAt: SENTINEL,
@@ -60,7 +61,14 @@ export function buildAccountDraft(user: AuthUser): UmeJson {
 
 export interface CreateAccountInput {
   email: string
-  password: string
+  /** Requerido en cuentas locales; omitido en cuentas solo-Google. */
+  password?: string
+  /** sub de Google para cuentas nacidas de OAuth; undefined en el resto. */
+  googleSub?: string
+  /** Foto de perfil de Google, si el id_token la trajo. */
+  googlePicture?: string | null
+  /** Nombre completo de la cuenta Google, si el id_token lo trajo. */
+  fullName?: string
   /** Defaults to "distribuidor"; only the admin flow overrides it. */
   role?: UserRole
   actor?: string
@@ -92,13 +100,17 @@ export async function createAccount(
       const user = await insertUser(
         {
           username: email,
-          passwordHash: await hashPassword(input.password),
+          passwordHash: input.password
+            ? await hashPassword(input.password)
+            : null,
           role,
+          googleSub: input.googleSub ?? null,
+          googlePicture: input.googlePicture ?? null,
         },
         tx
       )
 
-      const draft = buildAccountDraft(user)
+      const draft = buildAccountDraft(user, input.fullName)
 
       const validation = validateDocument(draft)
       if (!validation.valid) {

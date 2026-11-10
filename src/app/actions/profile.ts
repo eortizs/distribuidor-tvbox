@@ -84,7 +84,7 @@ export async function changePasswordAction(
   }
 
   const user = await findUserById(sessionUser.id)
-  if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
+  if (!user || !user.passwordHash || !(await verifyPassword(currentPassword, user.passwordHash))) {
     return { error: "La contraseña actual no es correcta", success: null }
   }
   if (await verifyPassword(newPassword, user.passwordHash)) {

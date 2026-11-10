@@ -17,6 +17,8 @@ export interface AuthUser {
   id: string
   username: string
   role: UserRole
+  /** URL de la foto de perfil de Google; undefined/null = usar iniciales. */
+  googlePicture?: string | null
 }
 
 export function isValidRole(role: string): role is UserRole {

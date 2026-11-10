@@ -40,6 +40,7 @@ export default async function UsersPage() {
           deniedSections: deniedByUser.get(user.id) ?? [],
           couponDailyLimit: user.couponDailyLimit,
           couponMonthlyLimit: user.couponMonthlyLimit,
+          googleLinked: user.googleLinked,
           createdAt: user.createdAt.toISOString(),
           createdAtLabel: formatDate(user.createdAt),
         }))}

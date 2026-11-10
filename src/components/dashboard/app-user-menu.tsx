@@ -8,7 +8,7 @@ import { logoutAction } from "@/app/actions/auth"
 import { accountNav } from "@/components/dashboard/nav-config"
 import { mobileNavClass } from "@/components/dashboard/nav-layout"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -56,6 +56,13 @@ export function AppUserMenu({
           }
         >
           <Avatar>
+            {user.googlePicture ? (
+              <AvatarImage
+                src={user.googlePicture}
+                alt={`Foto de perfil de ${user.username}`}
+                referrerPolicy="no-referrer"
+              />
+            ) : null}
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
           <span className="hidden max-w-32 truncate text-sm md:inline">

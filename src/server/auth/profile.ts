@@ -147,3 +147,41 @@ export async function saveProfile(
   }
   return { changed: true }
 }
+
+/**
+ * Rellena dynamicProperties.fullName de la entidad Cuenta con el nombre de
+ * la cuenta Google, solo si sigue vacío: el campo es editable por el usuario
+ * y cada entrada por Google nunca pisa una edición manual. Silencioso por
+ * diseño (sin entidad, sin cambios o en carrera de versiones no es fatal).
+ */
+export async function populateFullNameFromGoogle(
+  userId: string,
+  name: string,
+  actor: string
+): Promise<void> {
+  const head = await findAccountHead(userId)
+  if (!head) return
+  const current = head.doc.dynamicProperties.fullName
+  if (typeof current === "string" && current.trim().length > 0) return
+
+  try {
+    await updateProperties(head.id, head.version, { fullName: name }, {
+      actor,
+      reason: "Nombre completo desde Google",
+    })
+  } catch (error) {
+    if (
+      error instanceof AppError &&
+      (error.code === "no_changes" || error.code === "version_conflict")
+    ) {
+      return
+    }
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `google-oauth: nombre desde Google no guardado`,
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    )
+  }
+}

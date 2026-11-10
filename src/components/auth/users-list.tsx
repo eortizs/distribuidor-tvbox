@@ -80,6 +80,8 @@ export interface UserListItem {
   couponDailyLimit: number | null
   /** Override de tope mensual (acumulado) de cupones; null = global. */
   couponMonthlyLimit: number | null
+  /** La cuenta está ligada a Google (inicia sesión vía OAuth). */
+  googleLinked: boolean
   createdAt: string
   createdAtLabel: string
 }
@@ -124,8 +126,13 @@ export function UsersManager({
           <DataGridColumnHeader column={column} title="Email" />
         ),
         cell: ({ row }) => (
-          <span className="text-foreground font-medium">
+          <span className="text-foreground inline-flex items-center gap-2 font-medium">
             {row.original.username}
+            {row.original.googleLinked ? (
+              <Badge variant="secondary" size="sm">
+                Google
+              </Badge>
+            ) : null}
           </span>
         ),
         size: 280,
