@@ -14,8 +14,11 @@
 
 ALTER TABLE mp_orders DROP CONSTRAINT IF EXISTS mp_orders_status_check;
 
+-- `applied` (abono de saldo acreditado, saldo-schema.sql) está en la lista:
+-- ambas migraciones definen la misma restricción y el orden de ejecución da
+-- igual; sin él, esta migración rechazaría órdenes de abono ya existentes.
 ALTER TABLE mp_orders ADD CONSTRAINT mp_orders_status_check CHECK (status IN (
-  'pending', 'paid', 'renewed',
+  'pending', 'paid', 'renewed', 'applied',
   'renewal_failed', 'rejected', 'cancelled',
   'refunding', 'refunded'
 ));

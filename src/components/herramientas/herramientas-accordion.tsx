@@ -15,6 +15,9 @@
  *   funcionalidad por ahora** — «Configurar» (fantasma, con icono de
  *   controles) y «Eliminar» (variante destructive, separada del resto).
  *
+ * **Buscador** (`/clientes` como referencia): píldora con lupa encima de
+ * los filtros; filtra por nombre y descripción (sin acentos) y suma una X
+ * de limpieza visible solo con texto.
  * **Filtros** (`/clientes` como referencia): barra de vistas sobre el
  * listado — «Todos», «Favoritos», los filtros creados por el usuario y el
  * botón «Crear filtro» (círculo «+»). Cada vista lleva su contador en un
@@ -44,10 +47,12 @@ import Link from "next/link"
 import { useEffect, useMemo, useRef, useState } from "react"
 import {
   PlusIcon,
+  SearchIcon,
   Settings2Icon,
   SlidersHorizontalIcon,
   StarIcon,
   TrashIcon,
+  XIcon,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -82,6 +87,12 @@ import {
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
+import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@/components/ui/toggle-group"
@@ -112,6 +123,18 @@ const VISTA_ACTIVE_CLASS =
 const VISTA_COUNT_CLASS =
   "rounded-full tabular-nums group-aria-pressed/toggle:border-background/40 group-aria-pressed/toggle:bg-transparent dark:group-aria-pressed/toggle:border-background/40 dark:group-aria-pressed/toggle:bg-transparent"
 
+/**
+ * Normaliza para comparar textos: minúsculas y sin acentos, igual que la
+ * búsqueda de `/clientes` («calculo» encuentra «Calculadora»).
+ */
+function foldTerm(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+}
+
 export function HerramientasAccordion({
   initialPrefs,
 }: {
@@ -128,6 +151,7 @@ export function HerramientasAccordion({
     initialPrefs?.assignments ?? {}
   )
   const [view, setView] = useState<string>("todos")
+  const [searchInput, setSearchInput] = useState("")
   const [createOpen, setCreateOpen] = useState(false)
   const [assignTarget, setAssignTarget] = useState<{
     tool: Herramienta
@@ -262,15 +286,25 @@ export function HerramientasAccordion({
     )
   }
 
-  const visible = useMemo(
-    () =>
-      MODULOS.filter((tool) => {
-        if (view === "todos") return true
-        if (view === "favoritos") return favorites.includes(tool.href)
-        return (assignments[tool.href] ?? []).includes(view)
-      }),
-    [view, favorites, assignments]
-  )
+  const visible = useMemo(() => {
+    const term = foldTerm(searchInput)
+    return MODULOS.filter((tool) => {
+      if (view === "todos") {
+        // Sin vista: solo la búsqueda acota.
+      } else if (view === "favoritos") {
+        if (!favorites.includes(tool.href)) return false
+      } else if (!(assignments[tool.href] ?? []).includes(view)) {
+        return false
+      }
+      if (!term) return true
+      return (
+        foldTerm(tool.title).includes(term) ||
+        foldTerm(tool.description).includes(term)
+      )
+    })
+  }, [view, favorites, assignments, searchInput])
+
+  const searching = searchInput.trim().length > 0
 
   /** Clic sostenido sobre un módulo: abre la asignación si hay filtros. */
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -309,6 +343,41 @@ export function HerramientasAccordion({
 
   return (
     <div className="flex flex-col gap-4">
+      {/*
+       * Buscador (misma composición que /clientes): renglón flex con la
+       * píldora redondeada — lupa y botón de limpieza (X) visible solo con
+       * texto. El renglón es el mismo contenedor de /clientes (búsqueda +
+       * botón), aquí sin el botón de sincronizar, para que flex-1 y h-12
+       * resuelvan las mismas dimensiones exactas. Filtra por nombre y
+       * descripción del módulo encima de cualquier vista activa.
+       */}
+      <div className="flex items-center gap-2">
+        <InputGroup className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted">
+          <InputGroupAddon align="inline-start" className="pl-3.5">
+            <SearchIcon aria-hidden="true" />
+          </InputGroupAddon>
+          <InputGroupInput
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+            placeholder="Buscar"
+            aria-label="Buscar módulo por nombre o descripción"
+            className="h-full text-base"
+          />
+          {searching ? (
+            <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
+              <InputGroupButton
+                size="icon-sm"
+                className="size-9 rounded-full"
+                onClick={() => setSearchInput("")}
+                aria-label="Limpiar búsqueda"
+              >
+                <XIcon aria-hidden="true" />
+              </InputGroupButton>
+            </InputGroupAddon>
+          ) : null}
+        </InputGroup>
+      </div>
+
       {/*
        * Barra de vistas (misma composición que /clientes): renglón único
        * desplazable en horizontal con el scrollbar oculto; el «+» de crear
@@ -368,9 +437,11 @@ export function HerramientasAccordion({
 
       {visible.length === 0 ? (
         <p className="text-muted-foreground text-sm" role="status">
-          {view === "favoritos"
-            ? "Marca la estrella de un módulo para verlo aquí."
-            : "Ningún módulo pertenece a este filtro. Mantén pulsado un módulo para asignarlo."}
+          {searching
+            ? "Ningún módulo coincide con la búsqueda."
+            : view === "favoritos"
+              ? "Marca la estrella de un módulo para verlo aquí."
+              : "Ningún módulo pertenece a este filtro. Mantén pulsado un módulo para asignarlo."}
         </p>
       ) : (
         <Accordion multiple={false}>
