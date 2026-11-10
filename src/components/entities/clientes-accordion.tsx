@@ -42,10 +42,22 @@
  *   anclado al borde inferior con `swipeDirection="down"` y asa de arrastre
  *   `showSwipeHandle`, patrón móvil moderno) con el resumen compacto de la
  *   operación (usuario, renovación de 1 mes, importe en MXN a la derecha en
- *   grande) y un **selector de método de pago** (RadioGroup en filas-tarjeta,
- *   una línea de descripción por método):
+ *   grande) y un **selector de método de pago** SIN selección por defecto
+ *   (RadioGroup en filas-tarjeta, una línea de descripción por método): no
+ *   hay botón «Continuar»; tocar una de las tres opciones abre directamente
+ *   su propia pantalla (la lista desaparece). «Cambiar método de pago»
+ *   regresa a la lista limpiando la selección en Mercado Pago y cupón; en
+ *   la transferencia no existe (al llegar ahí el comprador ya hizo la
+ *   transferencia, cambiar de método ya no aplica).
  *
- *   - **Mercado Pago**: la acción primaria «Pagar con Mercado Pago» llama
+ *   - **Mercado Pago**: pantalla propia OBLIGATORIA antes de pagar: muestra
+ *     el desglose del cargo con los tres montos — concepto (costo
+ *     de licencia), costo por procesamiento (comisión 3.49% + $4 y su IVA
+ *     16%, que el procesador descuenta del precio final de venta) y total a
+ *     cobrar (`mpTotalMxn` engrosa el precio para que el depósito neto sea
+ *     exactamente el costo de la licencia; la orden y el webhook usan ese
+ *     mismo total). El primario «Pagar con Mercado Pago» solo existe en esa
+ *     pantalla y llama
  *     `POST /api/mercadopago/orders`, que crea la orden `pending` y la
  *     preferencia de Mercado Pago (`purpose: wallet_purchase`: solo pagan
  *     cuentas de Mercado Pago, wallet a wallet), y redirige al `init_point`
@@ -53,7 +65,10 @@
  *     `POST /api/mercadopago/webhook` verifica el pago contra la API de MP
  *     (monto, moneda, external_reference) y recién entonces renueva la
  *     licencia en el panel FlujoTV.
- *   - **Transferencia bancaria**: flujo de DOS pasos. Paso 1: muestra los
+ *   - **Transferencia bancaria**: pantalla propia igual que Mercado Pago —
+ *     elegir la fila limpia la lista y deja solo la información del pago
+ *     (el importe neto sigue visible en el resumen: es el monto a
+ *     transferir). Flujo de DOS pasos. Paso 1: muestra los
  *     datos bancarios del servidor (banco, titular y cuenta con botón de
  *     copiar; env `TRANSFER_*`) y el **concepto de pago** — código de 4
  *     caracteres alfanuméricos que el servidor entrega ligado al comprador y
@@ -81,8 +96,9 @@
  *     refresca solo la fila del usuario renovado (el evento viaja con el
  *     usuario y el estado nuevo): sin recargar el listado completo, que es
  *     lento y traería el snapshot cacheado con el vencimiento viejo.
- *   - **Cupón**: código de 4 dígitos con InputOTP (ejemplo `c-input-otp-2`
- *     de ReUI); «Aplicar cupón» llama `POST /api/cupones/orders`, que valida
+ *   - **Cupón**: pantalla propia con el código de 4 dígitos en InputOTP
+ *     (ejemplo `c-input-otp-2` de ReUI); «Aplicar cupón» llama
+ *     `POST /api/cupones/orders`, que valida
  *     el código contra los cupones activos (por ahora solo `0000`, compra
  *     directa sin validaciones) y renueva la licencia al instante. El código
  *     queda en la orden (`coupon_code`) para la futura conciliación con el
@@ -281,6 +297,7 @@ import {
   formatFlujoDate,
   type FlujoClient,
 } from "@/lib/flujotv"
+import { mpProcessingFeeMxn, mpTotalMxn } from "@/lib/mp-pricing"
 
 import {
   fetchFlujoClient,
@@ -716,8 +733,15 @@ export function ClientesAccordion({
   const [purchaseTarget, setPurchaseTarget] = useState<FlujoClient | null>(null)
   const [purchasing, setPurchasing] = useState(false)
   const [payError, setPayError] = useState<string | null>(null)
-  /** Método elegido en el sheet: Mercado Pago por defecto. */
-  const [payMethod, setPayMethod] = useState<PayMethod>("mercadopago")
+  /**
+   * Método elegido en el sheet; null = lista sin selección: al abrir no hay
+   * método por defecto y el usuario elige entre las tres opciones. Cada
+   * opción abre su propia pantalla (la lista desaparece) y «Cambiar método
+   * de pago» regresa a la lista limpiando la selección.
+   */
+  const [payMethod, setPayMethod] = useState<PayMethod | null>(null)
+  /** Desglose de Mercado Pago activo: concepto, procesamiento y total. */
+  const mpBreakdown = payMethod === "mercadopago"
   const [submittingTransfer, setSubmittingTransfer] = useState(false)
   /**
    * Paso actual de la transferencia: el concepto de pago se entrega primero
@@ -984,7 +1008,7 @@ export function ClientesAccordion({
   const openPurchase = useCallback(
     (client: FlujoClient) => {
       setPurchaseTarget(client)
-      setPayMethod("mercadopago")
+      setPayMethod(null)
       setPayError(null)
       setTransferRejected(null)
       setTransferStep("concepto")
@@ -2070,14 +2094,16 @@ export function ClientesAccordion({
             renewalBlock.stage !== "fallo"
           )
             return
-          // Al cerrar se descarta la sesión de transferencia: el concepto
-          // pudo anularse o vencer mientras tanto y se re-consulta al volver.
+          // Al cerrar se descarta la sesión: la selección de método vuelve a
+          // null (la lista abre sin default) y el concepto de transferencia
+          // se descarta (pudo anularse o vencer; se re-consulta al volver).
           if (!open) {
             conceptRequestedKey.current = ""
             setTransferConcept(null)
             setConceptError(null)
             setConceptCopied(false)
             setTransferStep("concepto")
+            setPayMethod(null)
           }
           setPurchaseOpen(open)
         }}
@@ -2086,7 +2112,15 @@ export function ClientesAccordion({
         <DrawerContent>
           <DrawerHeader>
             <DrawerTitle>Renovar licencia</DrawerTitle>
-            <DrawerDescription>Elige cómo pagar.</DrawerDescription>
+            <DrawerDescription>
+              {payMethod === "mercadopago"
+                ? "Desglose del pago con Mercado Pago."
+                : payMethod === "transferencia"
+                  ? "Pago por transferencia bancaria."
+                  : payMethod === "cupon"
+                    ? "Canje con cupón."
+                    : "Elige cómo pagar."}
+            </DrawerDescription>
           </DrawerHeader>
           <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
             {/*
@@ -2103,34 +2137,93 @@ export function ClientesAccordion({
                     Renovación de 1 mes
                   </span>
                 </div>
-                <span className="text-lg font-semibold tabular-nums">
-                  {priceMxn !== null ? formatMxn(priceMxn) : "—"}
-                </span>
+                {!mpBreakdown ? (
+                  <span className="text-lg font-semibold tabular-nums">
+                    {priceMxn !== null ? formatMxn(priceMxn) : "—"}
+                  </span>
+                ) : null}
               </div>
             ) : null}
 
             {/*
-             * Selector de método: filas-tarjeta con radio al final; la
-             * seleccionada se resalta sola (has-data-checked del FieldLabel).
-             * La transferencia solo se ofrece si el servidor tiene los datos
-             * bancarios configurados; el cupón solo con el modo QA activado
-             * (`COUPON_QA_ENABLED=1`).
+             * Mercado Pago: pantalla propia — la lista desaparece y solo
+             * queda el desglose del cargo. El total es el precio engrosado
+             * (`mpTotalMxn`): la comisión (3.49% + $4) y su IVA se
+             * descuentan del precio final de venta, así que cobrar el precio
+             * neto depositaría menos; engrosado, el depósito neto es
+             * exactamente el costo de licencia y el webhook verifica la
+             * orden contra ese mismo total.
              */}
-            <RadioGroup
-              value={payMethod}
-              onValueChange={(value) => {
-                setPayMethod(value as PayMethod)
-                setPayError(null)
-                setTransferRejected(null)
-                // Volver a entrar a transferencia abre el flujo en el paso 1
-                // (el concepto vigente reaparece sin otra llamada).
-                if (value === "transferencia") setTransferStep("concepto")
-              }}
-              aria-label="Método de pago"
-            >
+            {payMethod === "mercadopago" ? (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5 text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">
+                      Concepto (costo de licencia)
+                    </span>
+                    <span className="font-medium tabular-nums">
+                      {priceMxn !== null ? formatMxn(priceMxn) : "—"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground">
+                      Costo por procesamiento
+                    </span>
+                    <span className="font-medium tabular-nums">
+                      {priceMxn !== null
+                        ? formatMxn(mpProcessingFeeMxn(priceMxn))
+                        : "—"}
+                    </span>
+                  </div>
+                </div>
+                 <Separator />
+                 <div className="flex items-center justify-between gap-2">
+                   <span className="text-sm font-medium">Total</span>
+                   <span className="text-lg font-semibold tabular-nums">
+                     {priceMxn !== null ? formatMxn(mpTotalMxn(priceMxn)) : "—"}
+                   </span>
+                 </div>
+               </div>
+             ) : payMethod === null ? (
+             /*
+              * Selector de método: filas-tarjeta con radio al final; sin
+              * selección por defecto. Tocar una fila abre directamente la
+              * pantalla de ese método (no hay botón «Continuar»). La
+              * transferencia solo se ofrece si el servidor tiene los datos
+              * bancarios configurados; el cupón solo con el modo QA activado
+              * (`COUPON_QA_ENABLED=1`).
+              */
+             <RadioGroup
+               value={payMethod ?? ""}
+               onValueChange={(value) => {
+                 // Respaldo por si el clic llega directo al radio (el
+                 // onClick de la fila es el camino principal): fijar el
+                 // método abre su pantalla, la lista desaparece.
+                 setPayMethod(value as PayMethod)
+                 setPayError(null)
+                 setTransferRejected(null)
+                 // Volver a entrar a transferencia abre el flujo en el paso 1
+                 // (el concepto vigente reaparece sin otra llamada).
+                 if (value === "transferencia") setTransferStep("concepto")
+               }}
+               aria-label="Método de pago"
+             >
               <FieldGroup className="gap-0">
                 <Field>
-                  <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                  {/*
+                   * Tocar la fila abre la pantalla del método directamente:
+                   * fija el método explícitamente sin depender del reenvío
+                   * del label al radio (el valor controlado puede no cambiar
+                   * y onValueChange no dispararse).
+                   */}
+                  <FieldLabel
+                    className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5"
+                    onClick={() => {
+                      setPayMethod("mercadopago")
+                      setPayError(null)
+                      setTransferRejected(null)
+                    }}
+                  >
                     <span className="flex min-w-0 items-center gap-2.5">
                       <WalletIcon
                         aria-hidden="true"
@@ -2150,7 +2243,15 @@ export function ClientesAccordion({
                   <>
                     <Separator />
                     <Field>
-                      <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                      <FieldLabel
+                        className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5"
+                        onClick={() => {
+                          setPayMethod("transferencia")
+                          setTransferStep("concepto")
+                          setPayError(null)
+                          setTransferRejected(null)
+                        }}
+                      >
                         <span className="flex min-w-0 items-center gap-2.5">
                           <LandmarkIcon
                             aria-hidden="true"
@@ -2173,7 +2274,14 @@ export function ClientesAccordion({
                   <>
                     <Separator />
                     <Field>
-                      <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                      <FieldLabel
+                        className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5"
+                        onClick={() => {
+                          setPayMethod("cupon")
+                          setPayError(null)
+                          setTransferRejected(null)
+                        }}
+                      >
                         <span className="flex min-w-0 items-center gap-2.5">
                           <TicketPercentIcon
                             aria-hidden="true"
@@ -2194,13 +2302,15 @@ export function ClientesAccordion({
                 ) : null}
               </FieldGroup>
             </RadioGroup>
+            ) : null}
 
             {/*
-             * Panel del método activo: flujo de DOS pasos. Paso 1: datos
-             * bancarios y el concepto de pago (código de 4 caracteres) que
-             * el comprador escribe en su transferencia. Paso 2: el ticket a
-             * subir, validado por el servidor contra ese concepto. Solo
-             * aparece con transferencia seleccionada.
+             * Panel de la transferencia (pantalla limpia): flujo de DOS
+             * pasos. Paso 1: datos bancarios y el concepto de pago (código
+             * de 4 caracteres) que el comprador escribe en su transferencia.
+             * Paso 2: el ticket a subir, validado por el servidor contra ese
+             * concepto. Pantalla propia de la transferencia: la lista de
+             * métodos ya no está a la vista.
              */}
             {transferBank && payMethod === "transferencia" ? (
               transferStep === "concepto" ? (
@@ -2429,38 +2539,71 @@ export function ClientesAccordion({
              ) : null}
 
              {/*
-             * Panel del cupón: código de 4 dígitos con InputOTP (un dígito
-             * por celda). El servidor valida el código contra los cupones
-             * activos al aplicar; un código inválido avisa con el Alert de
-             * error compartido de abajo.
-             */}
-            {payMethod === "cupon" ? (
-              <Field>
-                <FieldLabel htmlFor="coupon-code">Código del cupón</FieldLabel>
-                <div className="flex justify-center pt-1">
-                  <InputOTP
-                    id="coupon-code"
-                    maxLength={COUPON_CODE_LENGTH}
-                    pattern={REGEXP_ONLY_DIGITS}
-                    value={couponCode}
-                    onChange={(value) => {
-                      setCouponCode(value)
-                      setPayError(null)
-                    }}
-                    disabled={submittingCoupon}
-                  >
-                    <InputOTPGroup>
-                      {Array.from(
-                        { length: COUPON_CODE_LENGTH },
-                        (_, index) => (
-                          <InputOTPSlot key={index} index={index} />
-                        )
-                      )}
-                    </InputOTPGroup>
-                  </InputOTP>
-                </div>
-              </Field>
-            ) : null}
+              * Pantalla propia del cupón: la lista de métodos desaparece y
+              * queda el canje. Código de 4 dígitos con InputOTP (un dígito
+              * por celda); el servidor valida el código contra los cupones
+              * activos al aplicar y renueva al instante; un código inválido
+              * avisa con el Alert de error compartido de abajo.
+              */}
+             {payMethod === "cupon" ? (
+               <div className="flex flex-col gap-3">
+                 <Field>
+                   <FieldLabel htmlFor="coupon-code">Código del cupón</FieldLabel>
+                   <div className="flex justify-center pt-1">
+                     <InputOTP
+                       id="coupon-code"
+                       maxLength={COUPON_CODE_LENGTH}
+                       pattern={REGEXP_ONLY_DIGITS}
+                       value={couponCode}
+                       onChange={(value) => {
+                         setCouponCode(value)
+                         setPayError(null)
+                       }}
+                       disabled={submittingCoupon}
+                     >
+                       <InputOTPGroup>
+                         {Array.from(
+                           { length: COUPON_CODE_LENGTH },
+                           (_, index) => (
+                             <InputOTPSlot key={index} index={index} />
+                           )
+                         )}
+                       </InputOTPGroup>
+                     </InputOTP>
+                   </div>
+                 </Field>
+                 <p className="text-muted-foreground text-center text-xs">
+                   El cupón se valida en el servidor y la renovación se aplica
+                   al instante.
+                 </p>
+               </div>
+              ) : null}
+
+             {/*
+              * Volver a la lista de métodos desde la pantalla del método
+              * activo (Mercado Pago o cupón): limpia la selección para que
+              * la lista abra sin default. En la transferencia no existe: al
+              * llegar a esa pantalla el comprador ya hizo la transferencia,
+              * así que cambiar de método ya no aplica.
+              */}
+             {payMethod === "mercadopago" || payMethod === "cupon" ? (
+               <div className="flex justify-center pt-1">
+                 <Button
+                   type="button"
+                   variant="ghost"
+                   size="sm"
+                   onClick={() => {
+                     setPayMethod(null)
+                     setPayError(null)
+                     setTransferRejected(null)
+                     setTransferStep("concepto")
+                   }}
+                   disabled={purchasing || submittingCoupon}
+                 >
+                   Cambiar método de pago
+                 </Button>
+               </div>
+             ) : null}
 
             {priceMxn === null ? (
               <Alert variant="warning">
@@ -2526,6 +2669,7 @@ export function ClientesAccordion({
                 )}
               </Button>
             ) : payMethod === "transferencia" && transferBank ? (
+              /* Pantalla de transferencia: primarios del flujo de dos pasos. */
               transferStep === "concepto" ? (
                 /* Paso 1 → 2: el comprador confirma que ya hizo la transferencia. */
                 <Button
@@ -2568,7 +2712,8 @@ export function ClientesAccordion({
                   )}
                 </Button>
               )
-            ) : (
+            ) : payMethod === "mercadopago" ? (
+              /* Pantalla de Mercado Pago: el primario abre el checkout. */
               <Button
                 size="lg"
                 onClick={() => void submitPurchase()}
@@ -2586,7 +2731,9 @@ export function ClientesAccordion({
                   "Pagar con Mercado Pago"
                 )}
               </Button>
-            )}
+            ) : null}
+            {/* Lista sin selección: solo Cancelar; el primario aparece al
+                entrar a la pantalla del método elegido. */}
             <DrawerClose
               render={
                 <Button

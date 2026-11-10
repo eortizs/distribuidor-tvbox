@@ -8,6 +8,7 @@ import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
+import { mpTotalMxn } from "@/lib/mp-pricing"
 
 import {
   resolveMercadoPagoConfig,
@@ -284,6 +285,11 @@ export interface CreatePaymentOrderResult {
  * `months` y la renovación añadirá los meses gratis; el precio no cambia.
  * `returnPath` fija la ruta de los back_urls del checkout (default
  * `/clientes`, la del módulo de paquetes pasa la suya).
+ *
+ * El cargo se engrosa con `mpTotalMxn`: Mercado Pago retiene su comisión
+ * (3.49% + $4) y el IVA de la comisión del precio final, así que cobrar el
+ * precio neto depositaría menos. El importe queda congelado en la orden y
+ * el webhook verifica contra él.
  */
 export async function createPaymentOrder(params: {
   userName: string
@@ -296,7 +302,9 @@ export async function createPaymentOrder(params: {
   const config = resolveMercadoPagoConfig()
   const orderId = randomUUID()
   const bonusMonths = params.bonusMonths ?? 0
-  const amount = Math.round(config.licensePriceMxn * params.months * 100) / 100
+  const netAmount =
+    Math.round(config.licensePriceMxn * params.months * 100) / 100
+  const amount = mpTotalMxn(netAmount)
   const title =
     bonusMonths > 0
       ? `Paquete ${params.months} meses + ${bonusMonths} ${

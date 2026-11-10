@@ -126,6 +126,7 @@ import {
   formatFlujoDate,
   type FlujoClient,
 } from "@/lib/flujotv"
+import { mpProcessingFeeMxn, mpTotalMxn } from "@/lib/mp-pricing"
 import {
   PAQUETES,
   PAQUETE_COUPON_CODE,
@@ -414,6 +415,21 @@ export function PaquetesView({
   const paqueteAmount =
     priceMxn !== null
       ? Math.round(priceMxn * paqueteMonths * 100) / 100
+      : null
+
+  /**
+   * Total a cobrar con Mercado Pago: la comisión del procesador (3.49% + $4)
+   * y su IVA se descuentan del precio final de venta, así que la orden se
+   * crea engrosada (`mpTotalMxn`) para que el depósito neto sea el precio
+   * del paquete. La UI muestra ese mismo importe con Mercado Pago elegido.
+   */
+  const paqueteMpTotal =
+    payMethod === "mercadopago" && paqueteAmount !== null
+      ? mpTotalMxn(paqueteAmount)
+      : null
+  const paqueteMpFee =
+    payMethod === "mercadopago" && paqueteAmount !== null
+      ? mpProcessingFeeMxn(paqueteAmount)
       : null
 
   const submitPurchase = useCallback(async () => {
@@ -1137,8 +1153,19 @@ export function PaquetesView({
                     {paqueteTotalMonths(paqueteMonths)} meses de servicio
                   </span>
                 </div>
-                <span className="text-lg font-semibold tabular-nums">
-                  {paqueteAmount !== null ? formatMxn(paqueteAmount) : "—"}
+                <span className="flex min-w-0 flex-col items-end gap-0.5">
+                  <span className="text-lg font-semibold tabular-nums">
+                    {paqueteMpTotal !== null
+                      ? formatMxn(paqueteMpTotal)
+                      : paqueteAmount !== null
+                        ? formatMxn(paqueteAmount)
+                        : "—"}
+                  </span>
+                  {paqueteMpFee !== null ? (
+                    <span className="text-muted-foreground text-xs">
+                      Incluye {formatMxn(paqueteMpFee)} de procesamiento
+                    </span>
+                  ) : null}
                 </span>
               </div>
             ) : null}
@@ -1164,10 +1191,16 @@ export function PaquetesView({
             >
               <FieldGroup className="gap-0">
                 {PAQUETES.map((paquete, index) => {
-                  const amount =
+                  const net =
                     priceMxn !== null
                       ? Math.round(priceMxn * paquete.months * 100) / 100
                       : null
+                  // Con Mercado Pago el importe de la fila es el total
+                  // engrosado: el mismo cargo que creará la orden.
+                  const amount =
+                    payMethod === "mercadopago" && net !== null
+                      ? mpTotalMxn(net)
+                      : net
                   return (
                     <Field key={paquete.months}>
                       {index > 0 ? <Separator /> : null}
