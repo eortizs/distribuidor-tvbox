@@ -258,6 +258,18 @@ export interface SaldoSnapshot {
 const MOVIMIENTOS_LIMIT = 15
 
 /**
+ * Saldo disponible del comprador en una lectura ligera (una fila por PK):
+ * alimenta el chip de la cabecera sin arrastrar movimientos.
+ */
+export async function getSaldoActual(userId: string): Promise<number> {
+  const result = await pool.query<{ saldo: string }>(
+    "SELECT saldo FROM users WHERE id = $1::uuid",
+    [userId]
+  )
+  return Number(result.rows[0]?.saldo ?? 0)
+}
+
+/**
  * Saldo y últimos movimientos del comprador. Los decimales llegan como
  * string desde numeric y se normalizan a número para la UI.
  */
@@ -265,11 +277,8 @@ export async function getSaldoSnapshot(
   userId: string,
   limit: number = MOVIMIENTOS_LIMIT
 ): Promise<SaldoSnapshot> {
-  const [saldoResult, movimientosResult] = await Promise.all([
-    pool.query<{ saldo: string }>(
-      "SELECT saldo FROM users WHERE id = $1::uuid",
-      [userId]
-    ),
+  const [saldo, movimientosResult] = await Promise.all([
+    getSaldoActual(userId),
     pool.query<Record<string, unknown>>(
       `SELECT id, kind, amount, balance_after, order_id, note, created_at
          FROM saldo_movimientos
@@ -295,7 +304,7 @@ export async function getSaldoSnapshot(
   )
 
   return {
-    saldo: Number(saldoResult.rows[0]?.saldo ?? 0),
+    saldo,
     movimientos,
   }
 }

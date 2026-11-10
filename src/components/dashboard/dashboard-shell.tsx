@@ -5,7 +5,6 @@ import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { ChevronLeftIcon } from "lucide-react"
 
-import { AppHeaderDate } from "@/components/app-header-date"
 import { AppBottomNav } from "@/components/dashboard/app-bottom-nav"
 import { AppNotifications } from "@/components/dashboard/app-notifications"
 import { AppUserMenu } from "@/components/dashboard/app-user-menu"
@@ -29,12 +28,13 @@ type ShellViewport = {
  */
 export function DashboardShell({
   user,
-  initialDate,
+  saldo,
   visibleSections,
   children,
 }: {
   user: AuthUser
-  initialDate: string
+  /** Saldo disponible del comprador (MXN) para el chip de la cabecera. */
+  saldo: number
   /** Claves de sección visibles para este usuario (permisos por cuenta). */
   visibleSections: string[]
   children: React.ReactNode
@@ -131,9 +131,11 @@ export function DashboardShell({
         ) : null}
         <div className="ml-auto flex items-center gap-1 md:gap-2">
           <RealtimeIndicator />
-          <AppHeaderDate initialDate={initialDate} />
           <AppNotifications />
-          <AppUserMenu user={user} />
+          <AppUserMenu
+            user={user}
+            saldo={visibleSections.includes("modulos") ? saldo : null}
+          />
         </div>
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto pb-[var(--shell-bottom-nav-space)]">

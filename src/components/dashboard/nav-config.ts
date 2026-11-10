@@ -13,6 +13,8 @@ import {
   UsersRoundIcon,
 } from "lucide-react"
 
+import { MODULOS, type Modulo } from "@/lib/modulos"
+
 /**
  * Coincidencia de rutas:
  * - `exact`: solo el camino exacto cuenta (la raíz `/`).
@@ -179,9 +181,25 @@ export function findNavSection(pathname: string) {
 }
 
 /**
+ * Módulo activo bajo `/modulos`: el hub (`/modulos`) no matchea ningún
+ * módulo; cualquier ruta hija de un módulo (hoy planas) devuelve su módulo.
+ * Una sola fuente (`MODULOS`): el hub y la cabecera nunca divergen.
+ */
+export function findNavModulo(pathname: string): Modulo | null {
+  return (
+    MODULOS.find(
+      (modulo) =>
+        pathname === modulo.href || pathname.startsWith(`${modulo.href}/`)
+    ) ?? null
+  )
+}
+
+/**
  * Rótulo del header para la ruta actual: la sección lo publica con
  * `titleInHeader` y una pestaña concreta también puede hacerlo, con
- * prioridad sobre el rótulo de su sección.
+ * prioridad sobre el rótulo de su sección. En la sección de módulos, el
+ * módulo activo gana sobre el rótulo del hub: «Animación» en vez de
+ * «Módulos».
  */
 export function findNavHeaderTitle(pathname: string) {
   const section = findNavSection(pathname)
@@ -190,6 +208,10 @@ export function findNavHeaderTitle(pathname: string) {
     isNavChildActive(child, pathname)
   )
   if (child?.titleInHeader) return child.title
+  if (section.key === "modulos") {
+    const modulo = findNavModulo(pathname)
+    if (modulo) return modulo.title
+  }
   return section.titleInHeader ? section.title : null
 }
 

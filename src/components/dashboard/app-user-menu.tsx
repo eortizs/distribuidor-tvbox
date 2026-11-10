@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { LogOutIcon } from "lucide-react"
+import { CoinsIcon, LogOutIcon } from "lucide-react"
 import { cn } from "cn"
 
 import { logoutAction } from "@/app/actions/auth"
@@ -18,15 +18,27 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { formatMxn } from "@/lib/finanzas"
 import type { AuthUser } from "@/server/auth/types"
 
 /**
- * Menú de cuenta de la cabecera: perfil, gestión de usuarios (solo admin),
- * tema y cierre de sesión.
+ * Menú de cuenta de la cabecera: perfil, saldo disponible con divider
+ * (solo si el comprador ve la sección de módulos; un toque lleva a «Abonar
+ * saldo»), gestión de usuarios (solo admin), tema y cierre de sesión. El
+ * monto vive como prop del servidor: el SSE refresca el layout y el menú
+ * se abre siempre con el valor vigente.
  */
-export function AppUserMenu({ user }: { user: AuthUser }) {
-  const items = accountNav.filter(
-    (item) => !item.adminOnly || user.role === "admin"
+export function AppUserMenu({
+  user,
+  saldo,
+}: {
+  user: AuthUser
+  /** Saldo disponible (MXN) para el primer renglón; null oculta el renglón. */
+  saldo: number | null
+}) {
+  const mainItems = accountNav.filter((item) => !item.adminOnly)
+  const adminItems = accountNav.filter(
+    (item) => item.adminOnly && user.role === "admin"
   )
   const initials = user.username.slice(0, 2).toUpperCase()
 
@@ -58,7 +70,7 @@ export function AppUserMenu({ user }: { user: AuthUser }) {
         className={cn(mobileNavClass.dropdownContent, "w-56")}
       >
         <DropdownMenuGroup>
-          {items.map((item) => (
+          {mainItems.map((item) => (
             <DropdownMenuItem
               key={item.href}
               render={<Link href={item.href} />}
@@ -68,7 +80,36 @@ export function AppUserMenu({ user }: { user: AuthUser }) {
               <span>{item.title}</span>
             </DropdownMenuItem>
           ))}
+          {saldo !== null ? (
+            <DropdownMenuItem
+              render={<Link href="/modulos/abonar-saldo" />}
+              className={mobileNavClass.dropdownItem}
+            >
+              <CoinsIcon aria-hidden="true" />
+              <span>Saldo</span>
+              <span className="ml-auto font-medium tabular-nums">
+                {formatMxn(saldo)}
+              </span>
+            </DropdownMenuItem>
+          ) : null}
         </DropdownMenuGroup>
+        {adminItems.length > 0 ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              {adminItems.map((item) => (
+                <DropdownMenuItem
+                  key={item.href}
+                  render={<Link href={item.href} />}
+                  className={mobileNavClass.dropdownItem}
+                >
+                  <item.icon aria-hidden="true" />
+                  <span>{item.title}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuGroup>
+          </>
+        ) : null}
         <DropdownMenuSeparator />
         <ThemeToggle />
         <DropdownMenuSeparator />
