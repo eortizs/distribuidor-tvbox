@@ -4,6 +4,7 @@ import {
   ImageIcon,
   PackageIcon,
   PiggyBankIcon,
+  PlugZapIcon,
   ReceiptTextIcon,
   ShoppingBasketIcon,
   type LucideIcon,
@@ -50,6 +51,13 @@ export const MODULOS: Modulo[] = [
       "Del idea al render con el agente EVE: guiones, storyboards y entregables con costo y tiempo.",
     href: "/modulos/animacion",
     icon: ClapperboardIcon,
+  },
+  {
+    title: "Conectores",
+    description:
+      "Conecta tus cuentas de Google Calendar y otros servicios para usarlos desde el panel.",
+    href: "/modulos/conectores",
+    icon: PlugZapIcon,
   },
   {
     title: "Calculadora",
