@@ -37,6 +37,8 @@ export interface PaymentOrder {
    */
   renewal_verified_expires_at: string | null
   refunded_at: string | null
+  /** Billetera destino del abono (`months = 0`); null en renovaciones. */
+  saldo_tipo: "tokens" | "cupones" | null
   created_at: string
   updated_at: string
 }
@@ -161,6 +163,8 @@ export interface TransferOrder {
   buyer_username: string | null
   /** Concepto de pago de 4 caracteres (null en órdenes previas al concepto). */
   concept_code: string | null
+  /** Billetera destino del abono (`months = 0`); null en renovaciones. */
+  saldo_tipo: "tokens" | "cupones" | null
   ticket: TransferTicket | null
   /** Resultado del escaneo automático del comprobante (null si no hubo). */
   scan: {
@@ -385,6 +389,8 @@ export interface RefundOrder {
   currency: string
   payment_id: number | null
   buyer_username: string | null
+  /** Billetera destino del abono (`months = 0`); null en renovaciones. */
+  saldo_tipo: "tokens" | "cupones" | null
   error: string | null
   refunded_at: string | null
   created_at: string

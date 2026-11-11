@@ -16,7 +16,7 @@ import {
   type PaymentOrder,
   type TransferConcept,
 } from "@/components/entities/pago-api"
-import type { AbonoAmountOk } from "@/lib/saldo"
+import type { AbonoAmountOk, SaldoTipo } from "@/lib/saldo"
 
 export {
   PagoRequestError,
@@ -31,6 +31,8 @@ export {
 export async function createSaldoPaymentOrder(params: {
   /** Monto definido por el comprador, ya validado (`parseAbonoAmount`). */
   amount: AbonoAmountOk["amount"]
+  /** Billetera destino del abono: tokens o cupones. */
+  tipo: SaldoTipo
 }): Promise<{
   orderId: string
   initPoint: string
@@ -49,7 +51,7 @@ export async function createSaldoPaymentOrder(params: {
   }>("/api/saldo/mercadopago", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ amount: params.amount }),
+    body: JSON.stringify({ amount: params.amount, tipo: params.tipo }),
   })
   return {
     orderId: data.order_id,
@@ -67,6 +69,8 @@ export async function createSaldoPaymentOrder(params: {
  */
 export async function createSaldoTransferOrder(params: {
   amount: AbonoAmountOk["amount"]
+  /** Billetera destino del abono: tokens o cupones. */
+  tipo: SaldoTipo
   concepto: string
   file: File
 }): Promise<{
@@ -78,6 +82,7 @@ export async function createSaldoTransferOrder(params: {
 }> {
   const body = new FormData()
   body.set("amount", String(params.amount))
+  body.set("tipo", params.tipo)
   body.set("concepto", params.concepto)
   body.set("file", params.file)
   const data = await requestJson<{
@@ -104,6 +109,8 @@ export async function createSaldoTransferOrder(params: {
  */
 export async function createSaldoCouponOrder(params: {
   amount: AbonoAmountOk["amount"]
+  /** Billetera destino del abono: tokens o cupones. */
+  tipo: SaldoTipo
   code: string
   requestId: string
 }): Promise<{
@@ -125,6 +132,7 @@ export async function createSaldoCouponOrder(params: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       amount: params.amount,
+      tipo: params.tipo,
       code: params.code,
       request_id: params.requestId,
     }),

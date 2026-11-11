@@ -13,6 +13,9 @@ import { countAdmins, findUserById } from "@/server/auth/users"
 import { getAccountDistribuidorName } from "@/server/auth/accounts"
 import { isValidEmail, isValidRole, normalizeEmail, type UserRole } from "@/server/auth/types"
 import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
+import { parseAbonoAmount, parseSaldoTipo } from "@/lib/saldo"
+import { formatMxn } from "@/lib/finanzas"
+import { ajustarSaldoAdmin } from "@/server/saldo/service"
 import { AppError } from "@/server/umejson/types"
 
 export interface CreateUserState {
@@ -213,5 +216,70 @@ export async function deleteUserAction(
   return {
     error: null,
     success: `Account '${target.username}' deleted`,
+  }
+}
+
+export interface AdjustSaldoState {
+  error: string | null
+  success: string | null
+}
+
+/**
+ * Abono directo de saldo a la cuenta de un usuario (solo admin, desde
+ * `/users`): acredita tokens o cupones sin pasar por el checkout de pagos.
+ * El monto usa la misma validación del módulo «Abonar saldo» y el
+ * movimiento queda trazado como ajuste con el admin responsable.
+ */
+export async function adjustUserSaldoAction(
+  _prev: AdjustSaldoState,
+  formData: FormData
+): Promise<AdjustSaldoState> {
+  const session = await getSessionUser()
+  if (!session || session.role !== "admin") {
+    return { error: "Forbidden", success: null }
+  }
+
+  const userId = String(formData.get("userId") ?? "")
+  const tipo = parseSaldoTipo(formData.get("tipo"))
+  const parsed = parseAbonoAmount(formData.get("amount"))
+  if (!userId) {
+    return { error: "User not found", success: null }
+  }
+  if (!tipo) {
+    return {
+      error: "El tipo de saldo debe ser tokens o cupones.",
+      success: null,
+    }
+  }
+  if (!parsed.ok) {
+    return { error: parsed.message, success: null }
+  }
+
+  const target = await findUserById(userId)
+  if (!target) {
+    return { error: "User not found", success: null }
+  }
+
+  try {
+    await ajustarSaldoAdmin({
+      targetUserId: target.id,
+      tipo,
+      amount: parsed.amount,
+      adminUserId: session.id,
+    })
+  } catch (error) {
+    return {
+      error:
+        error instanceof Error
+          ? error.message
+          : "No se pudo acreditar el saldo.",
+      success: null,
+    }
+  }
+
+  revalidatePath("/users")
+  return {
+    error: null,
+    success: `Abono directo de ${formatMxn(parsed.amount)} en ${tipo} acreditado a ${target.username}.`,
   }
 }

@@ -16,6 +16,45 @@
 /** Techo técnico del abono por transacción (MXN): cabe engrosado en numeric(10,2). */
 export const ABONO_MAX_MXN = 10_000_000
 
+/**
+ * Tipos de saldo de la cuenta (`users.saldo_tokens` / `users.saldo_cupones`):
+ * los tokens pagan el uso de herramientas con APIs externas (fal.ai,
+ * OpenRouter, etc.) y los cupones la compra de licencias de FlujoTV.
+ */
+export type SaldoTipo = "tokens" | "cupones"
+
+/** Catálogo canónico, en el orden en que se ofrecen en el módulo. */
+export const SALDO_TIPOS: readonly SaldoTipo[] = ["tokens", "cupones"]
+
+/**
+ * Valida el tipo de saldo que llega del cliente (campo `tipo` de las rutas
+ * `/api/saldo/*`). Devuelve null si no es una de las opciones válidas.
+ */
+export function parseSaldoTipo(value: unknown): SaldoTipo | null {
+  return value === "tokens" || value === "cupones" ? value : null
+}
+
+/**
+ * Columna de la billetera destino en `users` según el tipo de saldo. Solo
+ * para interpolar en SQL con un valor ya validado (`parseSaldoTipo`): jamás
+ * con entrada cruda del cliente.
+ */
+export const SALDO_TIPO_COLUMN: Record<
+  SaldoTipo,
+  "saldo_tokens" | "saldo_cupones"
+> = {
+  tokens: "saldo_tokens",
+  cupones: "saldo_cupones",
+}
+
+/**
+ * Etiqueta corta para UI (badges, títulos): «tokens» / «cupones». El nombre
+ * completo siempre va acompañado de «Saldo en …».
+ */
+export function saldoTipoLabel(tipo: SaldoTipo): string {
+  return tipo
+}
+
 export interface AbonoAmountOk {
   ok: true
   /** Monto en centavos redondeado (el que se acredita al saldo). */

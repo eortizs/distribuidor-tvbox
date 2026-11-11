@@ -1,7 +1,12 @@
 -- Saldo del panel (módulo «Abonar saldo», /modulos/abonar-saldo):
 -- wallet por usuario del panel con historial de movimientos.
 --
--- `users.saldo` es el disponible actual; `saldo_movimientos` es el libro
+-- `saldo_cupones` es el disponible actual de la cuenta para licencias
+-- FlujoTV (renombrado desde `saldo` por saldo-tipos-schema.sql; los tokens
+-- para herramientas con APIs viven en `users.saldo_tokens`); este script
+-- crea `saldo_cupones` directamente para que instalaciones frescas y
+-- re-ejecuciones converjan al mismo esquema. `saldo_movimientos` es el
+-- libro
 -- mayor (una fila por abono aplicado; `cargo`/`ajuste` quedan previstos para
 -- el gasto y la corrección manual del admin). Cada abono queda trazado con
 -- la orden de pago que lo originó (`order_id` único: el crédito idempotente
@@ -12,7 +17,7 @@
 -- estado nuevo `applied` cuando el saldo ya se acreditó.
 
 ALTER TABLE users
-  ADD COLUMN IF NOT EXISTS saldo numeric(12,2) NOT NULL DEFAULT 0;
+  ADD COLUMN IF NOT EXISTS saldo_cupones numeric(12,2) NOT NULL DEFAULT 0;
 
 CREATE TABLE IF NOT EXISTS saldo_movimientos (
   id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),

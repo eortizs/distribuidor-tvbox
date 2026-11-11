@@ -13,7 +13,7 @@ import {
   checkRateLimitReceiptScan,
 } from "@/server/transferencias/scan"
 import { getActiveTransferConcept } from "@/server/transferencias/concepto"
-import { parseAbonoAmount } from "@/lib/saldo"
+import { parseAbonoAmount, parseSaldoTipo } from "@/lib/saldo"
 
 /** Tipos de comprobante admitidos: foto o PDF del ticket de transferencia. */
 const TICKET_MIME_PREFIXES = ["image/"]
@@ -61,6 +61,21 @@ export async function POST(request: Request) {
     const parsed = parseAbonoAmount(amount)
     if (!parsed.ok) {
       throw new AppError(422, "validation_error", parsed.message)
+    }
+
+    // Billetera destino del abono: tokens o cupones. Sin `tipo` (bundle
+    // viejo en caché) el destino es cupones; un valor inválido se rechaza.
+    const tipoRaw = formData.get("tipo")
+    const saldoTipo =
+      typeof tipoRaw === "string" && tipoRaw.length > 0
+        ? parseSaldoTipo(tipoRaw)
+        : "cupones"
+    if (!saldoTipo) {
+      throw new AppError(
+        422,
+        "validation_error",
+        "El tipo de saldo debe ser tokens o cupones."
+      )
     }
 
     // Concepto de pago (paso 1 del flujo): el código entregado al comprador
@@ -127,6 +142,7 @@ export async function POST(request: Request) {
       buyerUserId: user.id,
       buyerUsername: user.username,
       amountMxn: parsed.amount,
+      saldoTipo,
       ticketFileId: saved.id,
       conceptId: concept.id,
       conceptCode: concept.code,

@@ -2,32 +2,39 @@
 
 /**
  * Módulo «Abonar saldo» (`/modulos/abonar-saldo`): el mismo checkout de las
- * renovaciones (`/clientes`) con una sola diferencia — el monto lo define el
- * comprador. Tres métodos idénticos:
+ * renovaciones (`/clientes`) con dos diferencias — el monto y el TIPO de
+ * saldo los define el comprador. Dos categorías de saldo:
+ *
+ * - **Saldo en tokens**: para pagar el uso de herramientas que consumen
+ *   APIs externas (fal.ai, OpenRouter, etc.).
+ * - **Saldo en cupones**: para la compra de licencias de FlujoTV.
+ *
+ * Tres métodos idénticos para ambas categorías:
  *
  * - **Mercado Pago**: desglose del cargo (abono + costo por procesamiento +
  *   total engrosado con `mpTotalMxn`, para que el depósito neto acredite
  *   exactamente el monto definido) y redirección al `init_point`; el webhook
- *   acredita el saldo y el retorno sondea `GET /api/mercadopago/orders/{id}`
- *   hasta ver la orden `applied`.
+ *   acredita la billetera elegida y el retorno sondea
+ *   `GET /api/mercadopago/orders/{id}` hasta ver la orden `applied`.
  * - **Transferencia**: flujo de dos pasos (concepto de pago + comprobante
  *   con escaneo automático); el crédito llega cuando el admin aprueba o el
  *   escaneo lo autoriza.
  * - **Cupón QA (0000)**: con `COUPON_QA_ENABLED`, el canje acredita al
  *   instante (respuesta sincrónica; idempotente por request_id).
  *
- * El saldo y los movimientos llegan del servidor; los cambios en vivo
- * (evento `mp_order` con estado `applied`) refrescan la pantalla. La
- * composición del sheet es la del sheet de compra de `/clientes`: Drawer de
- * Base UI con asa, selector de método en filas-tarjeta sin selección por
- * defecto y panel propio por método.
+ * Los saldos (tokens y cupones) y los movimientos llegan del servidor; los
+ * cambios en vivo (evento `mp_order` con estado `applied`) refrescan la
+ * pantalla. La composición del sheet es la del sheet de compra de
+ * `/clientes`: Drawer de Base UI con asa, selector de método en filas-tarjeta
+ * sin selección por defecto y panel propio por método.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import {
   CheckIcon,
   CircleCheckIcon,
+  CoinsIcon,
   CopyIcon,
   FileTextIcon,
   HashIcon,
@@ -36,6 +43,7 @@ import {
   LoaderCircleIcon,
   TicketPercentIcon,
   TriangleAlertIcon,
+  TvIcon,
   UploadIcon,
   WalletIcon,
   XIcon,
@@ -82,7 +90,14 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { formatMxn } from "@/lib/finanzas"
-import { parseAbonoAmount, type AbonoAmountOk } from "@/lib/saldo"
+import {
+  parseAbonoAmount,
+  parseSaldoTipo,
+  saldoTipoLabel,
+  SALDO_TIPOS,
+  type AbonoAmountOk,
+  type SaldoTipo,
+} from "@/lib/saldo"
 import { mpProcessingFeeMxn, mpTotalMxn } from "@/lib/mp-pricing"
 
 import {
@@ -120,6 +135,25 @@ const COUPON_POLL_INTERVAL_MS = 2000
 /** Montos rápidos para el campo: un toque llena el importe. */
 const MONTOS_RAPIDOS = [100, 200, 500, 1000]
 
+/**
+ * Categorías de saldo del selector: metadatos de presentación. Los tokens
+ * van primero (la novedad del módulo) y quedan preseleccionados; las
+ * descripciones dejan inequívoco para qué sirve cada billetera.
+ */
+const SALDO_TIPO_META: Record<
+  SaldoTipo,
+  { label: string; description: string }
+> = {
+  tokens: {
+    label: "Saldo en tokens",
+    description: "Paga el uso de herramientas con APIs (fal.ai, OpenRouter, etc.).",
+  },
+  cupones: {
+    label: "Saldo en cupones",
+    description: "Compra y renueva licencias de FlujoTV.",
+  },
+}
+
 /** Mes de vigencia legible: «noviembre de 2026». */
 function formatCurrentMonth(): string {
   return new Intl.DateTimeFormat("es", {
@@ -141,6 +175,8 @@ function formatWhen(iso: string): string {
 export interface MovimientoView {
   id: string
   kind: string
+  /** Billetera del movimiento: tokens o cupones. */
+  tipo: SaldoTipo
   amount: number
   balance_after: number
   order_id: string | null
@@ -162,7 +198,8 @@ interface PollResult {
 }
 
 export function AbonarSaldoView({
-  saldoInicial,
+  saldoCuponesInicial,
+  saldoTokensInicial,
   movimientos,
   buyerUsername,
   couponEnabled,
@@ -170,8 +207,10 @@ export function AbonarSaldoView({
   returnOrder,
   returnState,
 }: {
-  /** Saldo actual de la cuenta (server-rendered). */
-  saldoInicial: number
+  /** Saldo en cupones actual de la cuenta (server-rendered). */
+  saldoCuponesInicial: number
+  /** Saldo en tokens actual de la cuenta (server-rendered). */
+  saldoTokensInicial: number
   movimientos: MovimientoView[]
   /** Username del comprador: liga el concepto de pago de la transferencia. */
   buyerUsername: string
@@ -182,11 +221,23 @@ export function AbonarSaldoView({
 }) {
   const router = useRouter()
 
-  /** Saldo mostrado: el del servidor más los créditos confirmados en vivo. */
-  const [saldo, setSaldo] = useState(saldoInicial)
+  /**
+   * Saldos mostrados: los del servidor más los créditos confirmados en vivo,
+   * por billetera (`{ cupones, tokens }`).
+   */
+  const [saldos, setSaldos] = useState({
+    cupones: saldoCuponesInicial,
+    tokens: saldoTokensInicial,
+  })
+  /** Últimos saldos de servidor vistos: detecta props nuevas sin effects. */
+  const [saldosServidor, setSaldosServidor] = useState({
+    cupones: saldoCuponesInicial,
+    tokens: saldoTokensInicial,
+  })
 
-  // Monto y sheet de pago.
+  // Monto, tipo de saldo y sheet de pago.
   const [amountInput, setAmountInput] = useState("")
+  const [saldoTipo, setSaldoTipo] = useState<SaldoTipo>("tokens")
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [payMethod, setPayMethod] = useState<PayMethod | null>(null)
   const [payError, setPayError] = useState<string | null>(null)
@@ -231,6 +282,23 @@ export function AbonarSaldoView({
 
   const amount = useMemo(() => parseAbonoAmount(amountInput), [amountInput])
   const amountOk: AbonoAmountOk | null = amount.ok ? amount : null
+
+  /**
+   * Los saldos de servidor mandan: si las props trajeron valores nuevos
+   * (refresh por realtime o retorno del checkout), se sincronizan durante
+   * el render — patrón React «ajustar el estado cuando cambia una prop»,
+   * sin pisar las actualizaciones optimistas mientras no haya datos nuevos.
+   */
+  if (
+    saldosServidor.cupones !== saldoCuponesInicial ||
+    saldosServidor.tokens !== saldoTokensInicial
+  ) {
+    setSaldosServidor({
+      cupones: saldoCuponesInicial,
+      tokens: saldoTokensInicial,
+    })
+    setSaldos({ cupones: saldoCuponesInicial, tokens: saldoTokensInicial })
+  }
 
   /**
    * Desglose de Mercado Pago: la comisión del procesador va aparte para que
@@ -337,6 +405,7 @@ export function AbonarSaldoView({
     try {
       const result = await createSaldoTransferOrder({
         amount: amountOk.amount,
+        tipo: saldoTipo,
         concepto: transferConcept.code,
         file: ticket,
       })
@@ -345,7 +414,7 @@ export function AbonarSaldoView({
         // (local, segundos); el evento `mp_order` refresca el saldo.
         closeCheckout()
         toast.success("Abono autorizado", {
-          description: `El comprobante pasó la verificación; ${formatMxn(result.amount)} se acreditarán en tu saldo en unos segundos.`,
+          description: `El comprobante pasó la verificación; ${formatMxn(result.amount)} se acreditarán en tu saldo en ${saldoTipoLabel(saldoTipo)} en unos segundos.`,
         })
         router.refresh()
       } else if (result.review === "auto_rejected") {
@@ -389,7 +458,7 @@ export function AbonarSaldoView({
     } finally {
       setSubmittingTransfer(false)
     }
-  }, [amountOk, transferConcept, ticketActions, ticketFiles.files, closeCheckout, loadTransferConcept, router])
+  }, [amountOk, saldoTipo, transferConcept, ticketActions, ticketFiles.files, closeCheckout, loadTransferConcept, router])
 
   /* ---------------------------- Mercado Pago ----------------------------- */
 
@@ -398,7 +467,10 @@ export function AbonarSaldoView({
     setPurchasing(true)
     setPayError(null)
     try {
-      const order = await createSaldoPaymentOrder({ amount: amountOk.amount })
+      const order = await createSaldoPaymentOrder({
+        amount: amountOk.amount,
+        tipo: saldoTipo,
+      })
       // Redirección completa al checkout de Mercado Pago (wallet_purchase):
       // el pago ocurre fuera del panel y el retorno lo maneja el aviso de
       // retorno; la acreditación la aplica el webhook del servidor.
@@ -409,7 +481,7 @@ export function AbonarSaldoView({
       )
       setPurchasing(false)
     }
-  }, [amountOk])
+  }, [amountOk, saldoTipo])
 
   /* -------------------------------- Cupón -------------------------------- */
 
@@ -422,6 +494,7 @@ export function AbonarSaldoView({
     try {
       const result = await createSaldoCouponOrder({
         amount: amountOk.amount,
+        tipo: saldoTipo,
         code: couponCode,
         requestId,
       })
@@ -434,9 +507,11 @@ export function AbonarSaldoView({
         )
       } else if (result.status === "applied") {
         closeCheckout()
-        if (result.saldo !== null) setSaldo(result.saldo)
+        if (result.saldo !== null) {
+          setSaldos((prev) => ({ ...prev, [saldoTipo]: result.saldo ?? prev[saldoTipo] }))
+        }
         toast.success("Abono aplicado", {
-          description: `${formatMxn(result.amount)} quedaron acreditados en tu saldo.`,
+          description: `${formatMxn(result.amount)} quedaron acreditados en tu saldo en ${saldoTipoLabel(saldoTipo)}.`,
         })
         router.refresh()
       } else {
@@ -461,7 +536,7 @@ export function AbonarSaldoView({
     } finally {
       setSubmittingCoupon(false)
     }
-  }, [amountOk, couponCode, closeCheckout, router])
+  }, [amountOk, saldoTipo, couponCode, closeCheckout, router])
 
   /** Sondeo del canje en curso (orden `paid` con crédito desacoplado). */
   useEffect(() => {
@@ -483,11 +558,12 @@ export function AbonarSaldoView({
 
       if (order) {
         if (order.status === "applied") {
+          const tipo = parseSaldoTipo(order.saldo_tipo) ?? saldoTipo
           setCouponPollOrderId(null)
           closeCheckout()
-          setSaldo((prev) => prev + order.amount)
+          setSaldos((prev) => ({ ...prev, [tipo]: prev[tipo] + order.amount }))
           toast.success("Abono aplicado", {
-            description: `${formatMxn(order.amount)} quedaron acreditados en tu saldo.`,
+            description: `${formatMxn(order.amount)} quedaron acreditados en tu saldo en ${saldoTipoLabel(tipo)}.`,
           })
           router.refresh()
           return
@@ -522,7 +598,7 @@ export function AbonarSaldoView({
       cancelled = true
       if (timer) clearTimeout(timer)
     }
-  }, [couponPollOrderId, closeCheckout, router])
+  }, [couponPollOrderId, saldoTipo, closeCheckout, router])
 
   /** Reintento del crédito de un canje con acreditación fallida. */
   const retryCoupon = useCallback(async () => {
@@ -540,7 +616,7 @@ export function AbonarSaldoView({
       } else {
         closeCheckout()
         toast.success("Abono aplicado", {
-          description: "Tu abono quedó acreditado en tu saldo.",
+          description: `Tu abono quedó acreditado en tu saldo en ${saldoTipoLabel(saldoTipo)}.`,
         })
         router.refresh()
       }
@@ -553,7 +629,7 @@ export function AbonarSaldoView({
     } finally {
       setSubmittingCoupon(false)
     }
-  }, [couponRetryOrderId, closeCheckout, router])
+  }, [saldoTipo, couponRetryOrderId, closeCheckout, router])
 
   /* --------------------- Retorno del checkout de MP ---------------------- */
 
@@ -718,29 +794,96 @@ export function AbonarSaldoView({
       ) : null}
 
       {/*
-       * Saldo disponible: el número manda, con el historial debajo para el
-       * contexto. Un solo título visible; el h1 de la página es sr-only.
+       * Saldos disponibles: las dos billeteras lado a lado, con su propósito
+       * a la vista para que nunca haya duda de qué paga cada una. Los
+       * números mandan (misma jerarquía); el historial vive abajo.
        */}
       <Card className="gap-3 p-5">
         <p className="text-muted-foreground text-xs font-medium">
           Saldo disponible
         </p>
-        <p className="text-4xl font-semibold tracking-tight tabular-nums">
-          {formatMxn(saldo)}
-        </p>
+        <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1">
+            <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+              <CoinsIcon aria-hidden="true" className="size-3.5" />
+              Saldo en tokens
+            </span>
+            <span className="text-2xl font-semibold tracking-tight tabular-nums">
+              {formatMxn(saldos.tokens)}
+            </span>
+            <span className="text-muted-foreground text-xs">
+              Para herramientas con APIs (fal.ai, OpenRouter…)
+            </span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+              <TvIcon aria-hidden="true" className="size-3.5" />
+              Saldo en cupones
+            </span>
+            <span className="text-2xl font-semibold tracking-tight tabular-nums">
+              {formatMxn(saldos.cupones)}
+            </span>
+            <span className="text-muted-foreground text-xs">
+              Para comprar y renovar licencias de FlujoTV
+            </span>
+          </div>
+        </div>
         <p className="text-muted-foreground text-xs">
-          Se acumula en tu cuenta del panel; el abono entra cuando se confirma
-          el pago.
+          Se acumulan en tu cuenta del panel; el abono entra cuando se
+          confirma el pago.
         </p>
       </Card>
 
       {/*
-       * Monto a abonar: campo grande con atajos y una sola acción primaria.
-       * El checkout abre solo con un monto válido.
+       * Abono: primero el TIPO de saldo (tokens o cupones) y luego el
+       * monto — la categoría decide a qué billetera entra el dinero. Un
+       * solo botón primario; el checkout abre solo con monto válido.
        */}
       <Card className="gap-4 p-5">
+        <fieldset className="flex flex-col gap-2">
+          <legend className="text-sm font-medium">Tipo de saldo</legend>
+          <RadioGroup
+            value={saldoTipo}
+            onValueChange={(value) => setSaldoTipo(value as SaldoTipo)}
+            aria-label="Tipo de saldo a abonar"
+          >
+            <FieldGroup className="gap-0 rounded-lg border">
+              {SALDO_TIPOS.map((tipo, index) => {
+                const meta = SALDO_TIPO_META[tipo]
+                const Icon = tipo === "tokens" ? CoinsIcon : TvIcon
+                return (
+                  <Fragment key={tipo}>
+                    {index > 0 ? <Separator /> : null}
+                    <Field>
+                      <FieldLabel
+                        className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5"
+                        onClick={() => setSaldoTipo(tipo)}
+                      >
+                        <span className="flex min-w-0 items-center gap-2.5">
+                          <Icon
+                            aria-hidden="true"
+                            className="size-4 shrink-0 opacity-60"
+                          />
+                          <FieldContent className="min-w-0">
+                            <FieldTitle>{meta.label}</FieldTitle>
+                            <FieldDescription className="text-xs">
+                              {meta.description}
+                            </FieldDescription>
+                          </FieldContent>
+                        </span>
+                        <RadioGroupItem value={tipo} />
+                      </FieldLabel>
+                    </Field>
+                  </Fragment>
+                )
+              })}
+            </FieldGroup>
+          </RadioGroup>
+        </fieldset>
         <Field>
-          <FieldLabel htmlFor="abono-monto">Monto a abonar</FieldLabel>
+          <FieldLabel htmlFor="abono-monto">
+            Monto a abonar en {saldoTipoLabel(saldoTipo)}
+          </FieldLabel>
           <InputGroup className="h-12">
             <InputGroupAddon align="inline-start" className="pl-3.5">
               <span aria-hidden="true" className="text-muted-foreground text-sm">
@@ -753,7 +896,7 @@ export function AbonarSaldoView({
               onChange={(event) => setAmountInput(event.target.value)}
               inputMode="decimal"
               placeholder="0.00"
-              aria-label="Monto a abonar en pesos mexicanos"
+              aria-label={`Monto a abonar en pesos mexicanos al saldo en ${saldoTipoLabel(saldoTipo)}`}
               className="h-full text-lg font-semibold tabular-nums"
             />
             {amountInput.length > 0 ? (
@@ -819,7 +962,7 @@ export function AbonarSaldoView({
           }}
         >
           {amountOk
-            ? `Continuar con ${formatMxn(amountOk.amount)}`
+            ? `Continuar con ${formatMxn(amountOk.amount)} en ${saldoTipoLabel(saldoTipo)}`
             : "Continuar al pago"}
         </Button>
       </Card>
@@ -850,10 +993,11 @@ export function AbonarSaldoView({
                 <div className="flex items-center justify-between gap-3 px-4 py-2.5">
                   <div className="flex min-w-0 flex-col gap-0.5">
                     <span className="truncate text-sm font-medium">
-                      Abono de saldo
+                      Abono de saldo en {saldoTipoLabel(mov.tipo)}
                     </span>
                     <span className="text-muted-foreground truncate text-xs">
-                      {formatWhen(mov.created_at)} · saldo{" "}
+                      {formatWhen(mov.created_at)} · saldo en{" "}
+                      {saldoTipoLabel(mov.tipo)}{" "}
                       {formatMxn(mov.balance_after)}
                     </span>
                   </div>
@@ -897,17 +1041,19 @@ export function AbonarSaldoView({
           </DrawerHeader>
           <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
             {/*
-             * Resumen: solo lo relevante — cuánto entra al saldo y cuánto
-             * se cobra. El monto definido manda a la derecha en grande.
+             * Resumen: solo lo relevante — a qué billetera entra el dinero
+             * (tokens o cupones, tal cual se eligió) y cuánto se cobra. El
+             * monto definido manda a la derecha en grande.
              */}
             {amountOk ? (
               <div className="flex items-end justify-between gap-3">
                 <div className="flex min-w-0 flex-col gap-0.5">
                   <span className="truncate text-sm font-semibold tracking-tight">
-                    Abono a tu cuenta
+                    Abono a tu saldo en {saldoTipoLabel(saldoTipo)}
                   </span>
                   <span className="text-muted-foreground text-xs">
-                    Entra a tu saldo al confirmarse el pago
+                    Entra a tu saldo en {saldoTipoLabel(saldoTipo)} al
+                    confirmarse el pago
                   </span>
                 </div>
                 {mpTotal === null ? (
@@ -930,7 +1076,7 @@ export function AbonarSaldoView({
                 <div className="flex flex-col gap-1.5 text-xs">
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-muted-foreground">
-                      Abono a tu saldo
+                      Abono a tu saldo en {saldoTipoLabel(saldoTipo)}
                     </span>
                     <span className="font-medium tabular-nums">
                       {formatMxn(amountOk.amount)}

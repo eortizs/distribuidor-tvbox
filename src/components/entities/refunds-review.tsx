@@ -174,7 +174,9 @@ export function RefundsReview() {
                     </p>
                     <p className="text-muted-foreground truncate text-xs">
                       {order.months === 0
-                        ? "Abono de saldo"
+                        ? order.saldo_tipo === "tokens"
+                          ? "Abono de saldo en tokens"
+                          : "Abono de saldo en cupones"
                         : `${order.months} ${order.months === 1 ? "mes" : "meses"}`}
                       {order.months !== 0 && (order.bonus_months ?? 0) > 0
                         ? ` + ${order.bonus_months} gratis`

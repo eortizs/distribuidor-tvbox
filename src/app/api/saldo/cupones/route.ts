@@ -2,11 +2,14 @@ import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { mpErrorResponse } from "@/server/mercadopago/errors"
 import { createSaldoCouponOrder } from "@/server/mercadopago/saldo-orders"
 import { readJsonBody } from "@/server/http"
+import { parseSaldoTipo } from "@/lib/saldo"
 
 interface SaldoCouponBody {
   amount?: unknown
   code?: unknown
   request_id?: unknown
+  /** Billetera destino del abono: tokens o cupones. */
+  tipo?: unknown
 }
 
 /**
@@ -67,12 +70,29 @@ export async function POST(request: Request) {
       )
     }
 
+    // Sin `tipo` (bundle viejo en caché) el destino es cupones: la billetera
+    // que siempre existió; un tipo inválido explícito se rechaza.
+    const saldoTipo = body.tipo === undefined ? "cupones" : parseSaldoTipo(body.tipo)
+    if (!saldoTipo) {
+      return Response.json(
+        {
+          ok: false,
+          error: {
+            code: "validation_error",
+            message: "El tipo de saldo debe ser tokens o cupones.",
+          },
+        },
+        { status: 422 }
+      )
+    }
+
     const result = await createSaldoCouponOrder({
       buyerUserId: user.id,
       buyerUsername: user.username,
       code,
       requestId,
       amountMxn: body.amount,
+      saldoTipo,
     })
 
     return Response.json({

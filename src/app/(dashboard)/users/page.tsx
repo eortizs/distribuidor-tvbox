@@ -41,6 +41,8 @@ export default async function UsersPage() {
           couponDailyLimit: user.couponDailyLimit,
           couponMonthlyLimit: user.couponMonthlyLimit,
           googleLinked: user.googleLinked,
+          saldoCupones: user.saldoCupones,
+          saldoTokens: user.saldoTokens,
           createdAt: user.createdAt.toISOString(),
           createdAtLabel: formatDate(user.createdAt),
         }))}

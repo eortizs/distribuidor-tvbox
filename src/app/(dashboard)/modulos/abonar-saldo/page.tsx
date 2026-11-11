@@ -12,12 +12,14 @@ export const metadata = {
 
 /**
  * Módulo «Abonar saldo» (`/modulos/abonar-saldo`): el comprador define el
- * monto y paga con el mismo checkout de las renovaciones (Mercado Pago,
- * transferencia o cupón), pero el cumplimiento acredita saldo en su cuenta
- * del panel en vez de renovar una licencia. El saldo y los movimientos se
- * leen del servidor (`users.saldo` + `saldo_movimientos`); el retorno del
- * checkout de Mercado Pago vuelve por query (`orden` + `estado`) para el
- * aviso y el sondeo, igual que en `/clientes`.
+ * monto y el TIPO de saldo (tokens para herramientas con APIs, cupones para
+ * licencias de FlujoTV) y paga con el mismo checkout de las renovaciones
+ * (Mercado Pago, transferencia o cupón), pero el cumplimiento acredita esa
+ * billetera en su cuenta del panel en vez de renovar una licencia. Los
+ * saldos y los movimientos se leen del servidor (`users.saldo_tokens` /
+ * `users.saldo_cupones` + `saldo_movimientos`); el retorno del checkout de
+ * Mercado Pago vuelve por query (`orden` + `estado`) para el aviso y el
+ * sondeo, igual que en `/clientes`.
  */
 export default async function AbonarSaldoPage({
   searchParams,
@@ -31,7 +33,8 @@ export default async function AbonarSaldoPage({
     <div className="flex flex-1 flex-col p-4 md:p-6">
       <h1 className="sr-only">Abonar saldo</h1>
       <AbonarSaldoView
-        saldoInicial={snapshot.saldo}
+        saldoCuponesInicial={snapshot.cupones}
+        saldoTokensInicial={snapshot.tokens}
         movimientos={snapshot.movimientos}
         buyerUsername={user.username}
         couponEnabled={isCouponQaEnabled()}

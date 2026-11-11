@@ -2,21 +2,24 @@ import { pool } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { MercadoPagoError } from "@/server/mercadopago/errors"
 import { createRenewalNotification } from "@/server/notifications/service"
+import { parseSaldoTipo, SALDO_TIPO_COLUMN, type SaldoTipo } from "@/lib/saldo"
 
 /**
  * Saldo del panel (módulo «Abonar saldo», `/modulos/abonar-saldo`):
  *
  * - `applySaldoCredit` es el cumplimiento de una orden de abono cobrada
- *   (`mp_orders.months = 0`): acredita el monto en `users.saldo` y deja el
- *   movimiento trazado en `saldo_movimientos`. Es idempotente por diseño:
- *   la transacción reclama la orden hacia `applied` (claim atómico) y el
- *   índice único `saldo_movimientos.order_id` hace imposible acreditar la
- *   misma orden dos veces — reintentos del webhook, conciliación de `paid`
- *   varado, revisión admin y reintento de cupón re-ejecutan sin efecto.
+ *   (`mp_orders.months = 0`): acredita el monto en la billetera que la orden
+ *   definió (`mp_orders.saldo_tipo`: tokens o cupones; NULL legado →
+ *   cupones) y deja el movimiento trazado en `saldo_movimientos`. Es
+ *   idempotente por diseño: la transacción reclama la orden hacia `applied`
+ *   (claim atómico) y el índice único `saldo_movimientos.order_id` hace
+ *   imposible acreditar la misma orden dos veces — reintentos del webhook,
+ *   conciliación de `paid` varado, revisión admin y reintento de cupón
+ *   re-ejecutan sin efecto.
  * - El abono de una orden con cupón es el único camino sincrónico (el canje
  *   ES el pago y la acreditación es local, sin llamadas al panel FlujoTV).
- * - `getSaldoSnapshot` alimenta la pantalla del módulo: saldo actual y
- *   últimos movimientos del comprador.
+ * - `getSaldoSnapshot` alimenta la pantalla del módulo: saldo en tokens y en
+ *   cupones, y últimos movimientos del comprador.
  */
 
 export type SaldoApplyOutcome =
@@ -41,6 +44,11 @@ export interface SaldoOrderLike {
   amount: number
   buyer_user_id: string | null
   error: string | null
+  /**
+   * Tipo de saldo que la orden acredita (`mp_orders.saldo_tipo`): tokens o
+   * cupones; NULL en órdenes legadas y se interpreta como cupones.
+   */
+  saldo_tipo: string | null
 }
 
 function log(event: string, fields: Record<string, unknown>): void {
@@ -86,6 +94,11 @@ export async function applySaldoCredit(
     }
 
     const buyerUserId = order.buyer_user_id
+    // NULL legado (o renovación mal clasificada) → cupones: el saldo que
+    // existía antes de los tipos era para licencias.
+    const saldoTipo: SaldoTipo =
+      parseSaldoTipo(order.saldo_tipo) ?? "cupones"
+    const balanceColumn = SALDO_TIPO_COLUMN[saldoTipo]
     const client = await pool.connect()
     let claimApplied = false
     try {
@@ -110,7 +123,7 @@ export async function applySaldoCredit(
 
       if (claimApplied) {
         const updated = await client.query<{ saldo: string }>(
-          `UPDATE users SET saldo = saldo + $2 WHERE id = $1::uuid RETURNING saldo`,
+          `UPDATE users SET ${balanceColumn} = ${balanceColumn} + $2 WHERE id = $1::uuid RETURNING ${balanceColumn} AS saldo`,
           [buyerUserId, amount]
         )
         const balanceAfter = Number(updated.rows[0]?.saldo ?? Number.NaN)
@@ -127,10 +140,19 @@ export async function applySaldoCredit(
         // predicado del índice único parcial, o Postgres no la infiere.
         const movimiento = await client.query(
           `INSERT INTO saldo_movimientos
-             (user_id, order_id, kind, amount, balance_after, note)
-           VALUES ($1::uuid, $2::uuid, 'abono', $3, $4, 'Abono de saldo')
-           ON CONFLICT (order_id) WHERE order_id IS NOT NULL DO NOTHING`,
-          [buyerUserId, order.id, amount, balanceAfter]
+              (user_id, order_id, kind, tipo, amount, balance_after, note)
+            VALUES ($1::uuid, $2::uuid, 'abono', $5, $3, $4, $6)
+            ON CONFLICT (order_id) WHERE order_id IS NOT NULL DO NOTHING`,
+          [
+            buyerUserId,
+            order.id,
+            amount,
+            balanceAfter,
+            saldoTipo,
+            saldoTipo === "tokens"
+              ? "Abono de saldo en tokens"
+              : "Abono de saldo en cupones",
+          ]
         )
         if ((movimiento.rowCount ?? 0) === 0) {
           await client.query("ROLLBACK")
@@ -184,6 +206,7 @@ export async function applySaldoCredit(
       userName: order.user_name,
       months: 0,
       amountMxn: amount,
+      saldoTipo,
       orderId: order.id,
     })
     log("saldo.apply", {
@@ -191,6 +214,7 @@ export async function applySaldoCredit(
       payment_id: paymentId,
       user_name: order.user_name,
       amount,
+      saldo_tipo: saldoTipo,
       outcome: "applied",
     })
     return { outcome: "applied" }
@@ -215,6 +239,7 @@ export async function applySaldoCredit(
         userName: order.user_name,
         months: 0,
         amountMxn: Math.round(order.amount * 100) / 100,
+        saldoTipo: parseSaldoTipo(order.saldo_tipo) ?? "cupones",
         // Sin el detalle técnico (errores de BD o de Mercado Pago llegan en
         // inglés): el comprador recibe el texto genérico del aviso y el
         // motivo real queda en `mp_orders.error` para el administrador.
@@ -234,12 +259,91 @@ export async function applySaldoCredit(
 }
 
 /* -------------------------------------------------------------------------- */
+/*                     Ajuste manual del admin (sin checkout)                  */
+/* -------------------------------------------------------------------------- */
+
+export interface AjusteSaldoResult {
+  /** Saldo de la billetera ajustada después del movimiento. */
+  balance: number
+}
+
+/**
+ * Abono directo de saldo a la cuenta de un usuario, ejecutado por un admin
+ * desde `/users` sin pasar por el checkout de pagos. Transacción atómica con
+ * el mismo advisory lock por comprador que `applySaldoCredit`: dos ajustes
+ * concurrentes (o un ajuste contra un abono de orden) no se pisan. El
+ * movimiento queda trazado con `kind = 'ajuste'`, la billetera (`tipo`) y el
+ * admin responsable (`created_by`); sin `order_id`, el índice único de
+ * idempotencia de abonos no aplica (cada ajuste es un movimiento nuevo).
+ */
+export async function ajustarSaldoAdmin(params: {
+  /** Cuenta del usuario que recibe el abono. */
+  targetUserId: string
+  /** Billetera destino: tokens o cupones. */
+  tipo: SaldoTipo
+  /** Monto a acreditar en MXN, ya validado (> 0). */
+  amount: number
+  /** Admin responsable (para la auditoría del movimiento). */
+  adminUserId: string
+}): Promise<AjusteSaldoResult> {
+  const amount = Math.round(params.amount * 100) / 100
+  if (!(amount > 0)) {
+    throw new Error("El monto del abono debe ser mayor a $0.")
+  }
+  const balanceColumn = SALDO_TIPO_COLUMN[params.tipo]
+  const client = await pool.connect()
+  try {
+    await client.query("BEGIN")
+    // Serializa los ajustes y créditos de la misma cuenta: la lectura del
+    // balance_after siempre es la vigente.
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      params.targetUserId,
+    ])
+    const updated = await client.query<{ saldo: string }>(
+      `UPDATE users SET ${balanceColumn} = ${balanceColumn} + $2 WHERE id = $1::uuid RETURNING ${balanceColumn} AS saldo`,
+      [params.targetUserId, amount]
+    )
+    if ((updated.rowCount ?? 0) === 0) {
+      throw new Error("La cuenta del usuario no existe.")
+    }
+    const balanceAfter = Number(updated.rows[0]?.saldo ?? Number.NaN)
+    if (!Number.isFinite(balanceAfter)) {
+      throw new Error("La base no devolvió el saldo actualizado del usuario.")
+    }
+    await client.query(
+      `INSERT INTO saldo_movimientos
+          (user_id, order_id, kind, tipo, amount, balance_after, note, created_by)
+        VALUES ($1::uuid, NULL, 'ajuste', $2, $3, $4, $5, $6::uuid)`,
+      [
+        params.targetUserId,
+        params.tipo,
+        amount,
+        balanceAfter,
+        params.tipo === "tokens"
+          ? "Abono directo de saldo en tokens (admin)"
+          : "Abono directo de saldo en cupones (admin)",
+        params.adminUserId,
+      ]
+    )
+    await client.query("COMMIT")
+    return { balance: balanceAfter }
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
+/* -------------------------------------------------------------------------- */
 /*                        Lectura del saldo para la UI                         */
 /* -------------------------------------------------------------------------- */
 
 export interface SaldoMovimientoPublic {
   id: string
   kind: string
+  /** Billetera del movimiento: tokens o cupones. */
+  tipo: SaldoTipo
   amount: number
   balance_after: number
   order_id: string | null
@@ -248,39 +352,52 @@ export interface SaldoMovimientoPublic {
 }
 
 export interface SaldoSnapshot {
-  /** Saldo disponible actual de la cuenta (MXN). */
-  saldo: number
-  /** Últimos movimientos, el más nuevo primero. */
+  /** Saldo en cupones disponible (MXN): compra de licencias de FlujoTV. */
+  cupones: number
+  /** Saldo en tokens disponible (MXN): herramientas con APIs externas. */
+  tokens: number
+  /** Últimos movimientos, el más nuevo primero (ambas billeteras). */
   movimientos: SaldoMovimientoPublic[]
 }
 
 /** Tope de movimientos devueltos por la pantalla del módulo. */
 const MOVIMIENTOS_LIMIT = 15
 
-/**
- * Saldo disponible del comprador en una lectura ligera (una fila por PK):
- * alimenta el chip de la cabecera sin arrastrar movimientos.
- */
-export async function getSaldoActual(userId: string): Promise<number> {
-  const result = await pool.query<{ saldo: string }>(
-    "SELECT saldo FROM users WHERE id = $1::uuid",
-    [userId]
-  )
-  return Number(result.rows[0]?.saldo ?? 0)
+export interface SaldosActual {
+  cupones: number
+  tokens: number
 }
 
 /**
- * Saldo y últimos movimientos del comprador. Los decimales llegan como
+ * Saldos disponibles del comprador en una lectura ligera (una fila por PK):
+ * alimenta el chip de la cabecera sin arrastrar movimientos.
+ */
+export async function getSaldosActual(userId: string): Promise<SaldosActual> {
+  const result = await pool.query<{
+    saldo_cupones: string
+    saldo_tokens: string
+  }>("SELECT saldo_cupones, saldo_tokens FROM users WHERE id = $1::uuid", [
+    userId,
+  ])
+  const row = result.rows[0]
+  return {
+    cupones: Number(row?.saldo_cupones ?? 0),
+    tokens: Number(row?.saldo_tokens ?? 0),
+  }
+}
+
+/**
+ * Saldos y últimos movimientos del comprador. Los decimales llegan como
  * string desde numeric y se normalizan a número para la UI.
  */
 export async function getSaldoSnapshot(
   userId: string,
   limit: number = MOVIMIENTOS_LIMIT
 ): Promise<SaldoSnapshot> {
-  const [saldo, movimientosResult] = await Promise.all([
-    getSaldoActual(userId),
+  const [saldos, movimientosResult] = await Promise.all([
+    getSaldosActual(userId),
     pool.query<Record<string, unknown>>(
-      `SELECT id, kind, amount, balance_after, order_id, note, created_at
+      `SELECT id, kind, tipo, amount, balance_after, order_id, note, created_at
          FROM saldo_movimientos
         WHERE user_id = $1::uuid
         ORDER BY created_at DESC
@@ -293,6 +410,7 @@ export async function getSaldoSnapshot(
     (row) => ({
       id: String(row.id),
       kind: String(row.kind),
+      tipo: parseSaldoTipo(row.tipo) ?? "cupones",
       amount: Number(row.amount),
       balance_after: Number(row.balance_after),
       order_id: row.order_id === null || row.order_id === undefined
@@ -304,7 +422,8 @@ export async function getSaldoSnapshot(
   )
 
   return {
-    saldo,
+    cupones: saldos.cupones,
+    tokens: saldos.tokens,
     movimientos,
   }
 }

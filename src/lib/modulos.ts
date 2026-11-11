@@ -90,7 +90,7 @@ export const MODULOS: Modulo[] = [
   {
     title: "Abonar saldo",
     description:
-      "Define el monto y abona a tu cuenta con Mercado Pago, transferencia o cupón, el mismo checkout de siempre.",
+      "Elige tokens (herramientas con APIs) o cupones (licencias FlujoTV), define el monto y paga con Mercado Pago, transferencia o cupón.",
     href: "/modulos/abonar-saldo",
     icon: PiggyBankIcon,
   },

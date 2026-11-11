@@ -67,12 +67,17 @@ export interface MpOrderRow {
      * guardado en caché) sube a 2 → `mp-<id>-r2`, etc.
      */
     renewal_key_attempts: number
-    error: string | null
+   error: string | null
    renewed_at: string | null
    refunded_at: string | null
+   /**
+    * Tipo de saldo que acredita un abono (`months = 0`): tokens o cupones.
+    * NULL en renovaciones y abonos legados (→ cupones).
+    */
+   saldo_tipo: "tokens" | "cupones" | null
    created_at: string
    updated_at: string
- }
+  }
 
 export interface MpOrderPublic {
   id: string
@@ -94,9 +99,11 @@ export interface MpOrderPublic {
    */
   renewal_verified_expires_at: string | null
   refunded_at: string | null
+  /** Billetera destino del abono (`months = 0`); null en renovaciones. */
+  saldo_tipo: "tokens" | "cupones" | null
    created_at: string
    updated_at: string
- }
+  }
 
 interface MpPaymentPayload {
   id?: unknown
@@ -278,6 +285,10 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
       row.refunded_at === null || row.refunded_at === undefined
         ? null
         : new Date(row.refunded_at as string).toISOString(),
+    saldo_tipo:
+      row.saldo_tipo === "tokens" || row.saldo_tipo === "cupones"
+        ? row.saldo_tipo
+        : null,
     created_at: new Date(row.created_at as string).toISOString(),
     updated_at: new Date(row.updated_at as string).toISOString(),
   }
@@ -299,6 +310,7 @@ export function toMpOrderPublic(row: MpOrderRow): MpOrderPublic {
     renewed_at: row.renewed_at,
     renewal_verified_expires_at: row.renewal_verified_expires_at,
     refunded_at: row.refunded_at,
+    saldo_tipo: row.saldo_tipo,
     created_at: row.created_at,
     updated_at: row.updated_at,
   }
@@ -1175,6 +1187,8 @@ export interface TransferOrderPublic {
   buyer_username: string | null
   /** Concepto de pago de 4 caracteres (null en órdenes previas al concepto). */
   concept_code: string | null
+  /** Billetera destino del abono (`months = 0`); null en renovaciones. */
+  saldo_tipo: "tokens" | "cupones" | null
   ticket:
     | { id: string; fileName: string; mimeType: string; sizeBytes: number }
     | null
@@ -1227,6 +1241,7 @@ function parseTransferRow(row: TransferJoinRow): TransferOrderPublic {
         ? row.buyer_username
         : null,
     concept_code: order.concept_code,
+    saldo_tipo: order.saldo_tipo,
     ticket:
       ticketId &&
       typeof row.ticket_file_name === "string" &&
@@ -1741,6 +1756,8 @@ export interface RefundOrderView {
   currency: string
   payment_id: number | null
   buyer_username: string | null
+  /** Billetera destino del abono (`months = 0`); null en renovaciones. */
+  saldo_tipo: "tokens" | "cupones" | null
   error: string | null
   refunded_at: string | null
   created_at: string
@@ -1766,6 +1783,7 @@ function parseRefundRow(row: RefundJoinRow): RefundOrderView {
       typeof row.buyer_username === "string" && row.buyer_username.length > 0
         ? row.buyer_username
         : null,
+    saldo_tipo: order.saldo_tipo,
     error: order.error,
     refunded_at: order.refunded_at,
     created_at: order.created_at,

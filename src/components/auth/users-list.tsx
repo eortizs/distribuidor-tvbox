@@ -1,14 +1,30 @@
 "use client"
 
-import { useActionState, useEffect, useMemo, useState } from "react"
+import {
+  Fragment,
+  useActionState,
+  useEffect,
+  useMemo,
+  useState,
+} from "react"
 import { useRouter } from "next/navigation"
-import { PencilIcon, PlusIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react"
+import {
+  CoinsIcon,
+  EllipsisVerticalIcon,
+  PencilIcon,
+  PlusIcon,
+  ShieldCheckIcon,
+  Trash2Icon,
+  TvIcon,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import {
+  adjustUserSaldoAction,
   createUserAction,
   deleteUserAction,
   updateUserAction,
+  type AdjustSaldoState,
   type CreateUserState,
   type DeleteUserState,
   type UpdateUserState,
@@ -37,7 +53,6 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-  AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
@@ -51,9 +66,30 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { Input } from "@/components/ui/input"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
+import { formatMxn } from "@/lib/finanzas"
+import {
+  parseAbonoAmount,
+  SALDO_TIPOS,
+  type SaldoTipo,
+} from "@/lib/saldo"
 import { navSections } from "@/components/dashboard/nav-config"
 import {
   Select,
@@ -82,6 +118,10 @@ export interface UserListItem {
   couponMonthlyLimit: number | null
   /** La cuenta está ligada a Google (inicia sesión vía OAuth). */
   googleLinked: boolean
+  /** Saldo en cupones disponible (MXN): licencias de FlujoTV. */
+  saldoCupones: number
+  /** Saldo en tokens disponible (MXN): herramientas con APIs. */
+  saldoTokens: number
   createdAt: string
   createdAtLabel: string
 }
@@ -194,19 +234,14 @@ export function UsersManager({
         id: "actions",
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
-          <div className="flex gap-1">
-            <PermissionsDialog
-              user={row.original}
-              couponDailyLimitDefault={couponDailyLimitDefault}
-              couponMonthlyLimitDefault={couponMonthlyLimitDefault}
-            />
-            <EditUserDialog user={row.original} />
-            {row.original.id !== currentUserId ? (
-              <DeleteUserDialog user={row.original} />
-            ) : null}
-          </div>
+          <UserActionsMenu
+            user={row.original}
+            isSelf={row.original.id === currentUserId}
+            couponDailyLimitDefault={couponDailyLimitDefault}
+            couponMonthlyLimitDefault={couponMonthlyLimitDefault}
+          />
         ),
-        size: 130,
+        size: 80,
       },
     ],
     [currentUserId, couponDailyLimitDefault, couponMonthlyLimitDefault]
@@ -343,16 +378,319 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
   )
 }
 
-function EditUserDialog({ user }: { user: UserListItem }) {
-  const [open, setOpen] = useState(false)
+/**
+ * Menú contextual de acciones de la fila (los tres puntos): agrupa todas las
+ * acciones de la cuenta — Saldo, Permisos, Editar y Eliminar (esta solo para
+ * cuentas ajenas) — y abre el diálogo correspondiente al elegirla.
+ */
+function UserActionsMenu({
+  user,
+  isSelf,
+  couponDailyLimitDefault,
+  couponMonthlyLimitDefault,
+}: {
+  user: UserListItem
+  /** La fila es la cuenta del propio admin: sin acción destructiva. */
+  isSelf: boolean
+  couponDailyLimitDefault: number
+  couponMonthlyLimitDefault: number
+}) {
+  const [dialog, setDialog] = useState<
+    "saldo" | "permisos" | "editar" | "eliminar" | null
+  >(null)
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
-        <PencilIcon />
-        <span className="sr-only">Edit {user.username}</span>
-      </DialogTrigger>
-      {open ? <EditUserForm user={user} onDone={() => setOpen(false)} /> : null}
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={`Acciones de ${user.username}`}
+            />
+          }
+        >
+          <EllipsisVerticalIcon />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuGroup>
+            <DropdownMenuItem onClick={() => setDialog("saldo")}>
+              <CoinsIcon aria-hidden="true" />
+              <span>Saldo</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setDialog("permisos")}>
+              <ShieldCheckIcon aria-hidden="true" />
+              <span>Permisos</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => setDialog("editar")}>
+              <PencilIcon aria-hidden="true" />
+              <span>Editar</span>
+            </DropdownMenuItem>
+          </DropdownMenuGroup>
+          {!isSelf ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuGroup>
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setDialog("eliminar")}
+                >
+                  <Trash2Icon aria-hidden="true" />
+                  <span>Eliminar</span>
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
+            </>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <SaldoDialog
+        user={user}
+        open={dialog === "saldo"}
+        onOpenChange={(open) => setDialog(open ? "saldo" : null)}
+      />
+      <PermissionsDialog
+        user={user}
+        couponDailyLimitDefault={couponDailyLimitDefault}
+        couponMonthlyLimitDefault={couponMonthlyLimitDefault}
+        open={dialog === "permisos"}
+        onOpenChange={(open) => setDialog(open ? "permisos" : null)}
+      />
+      <EditUserDialog
+        user={user}
+        open={dialog === "editar"}
+        onOpenChange={(open) => setDialog(open ? "editar" : null)}
+      />
+      {!isSelf ? (
+        <DeleteUserDialog
+          user={user}
+          open={dialog === "eliminar"}
+          onOpenChange={(open) => setDialog(open ? "eliminar" : null)}
+        />
+      ) : null}
+    </>
+  )
+}
+
+/**
+ * Abono directo de saldo (solo admin): acredita tokens o cupones a la cuenta
+ * sin checkout. Muestra los saldos vigentes y registra el ajuste con la
+ * cuenta del admin como responsable.
+ */
+const adjustSaldoState: AdjustSaldoState = { error: null, success: null }
+
+const SALDO_TIPO_MENU_META: Record<
+  SaldoTipo,
+  { label: string; description: string }
+> = {
+  tokens: {
+    label: "Saldo en tokens",
+    description: "Herramientas con APIs (fal.ai, OpenRouter…)",
+  },
+  cupones: {
+    label: "Saldo en cupones",
+    description: "Compra y renovación de licencias FlujoTV",
+  },
+}
+
+function SaldoDialog({
+  user,
+  open,
+  onOpenChange,
+}: {
+  user: UserListItem
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {open ? <SaldoForm user={user} onDone={() => onOpenChange(false)} /> : null}
+    </Dialog>
+  )
+}
+
+function SaldoForm({
+  user,
+  onDone,
+}: {
+  user: UserListItem
+  onDone: () => void
+}) {
+  const router = useRouter()
+  const [state, formAction, isPending] = useActionState(
+    adjustUserSaldoAction,
+    adjustSaldoState
+  )
+  const [tipo, setTipo] = useState<SaldoTipo>("tokens")
+  const [amountInput, setAmountInput] = useState("")
+
+  const amount = useMemo(() => parseAbonoAmount(amountInput), [amountInput])
+  const amountOk = amount.ok ? amount : null
+
+  useEffect(() => {
+    if (state.success) {
+      toast.success(state.success)
+      router.refresh()
+      onDone()
+    }
+  }, [state.success, router, onDone])
+
+  return (
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>Abonar saldo a {user.username}</DialogTitle>
+        <DialogDescription>
+          Acreditación directa en su cuenta, sin checkout ni pago. El
+          movimiento queda registrado como ajuste con tu cuenta como
+          responsable.
+        </DialogDescription>
+      </DialogHeader>
+      <form action={formAction} className="contents">
+        <input type="hidden" name="userId" value={user.id} />
+        <input type="hidden" name="tipo" value={tipo} />
+        <input
+          type="hidden"
+          name="amount"
+          value={amountOk ? String(amountOk.amount) : ""}
+        />
+        <FieldGroup>
+          {/*
+           * Saldos vigentes de la cuenta: el admin confirma el destino con
+           * el número a la vista antes de abonar.
+           */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-muted/40 flex flex-col gap-0.5 rounded-lg p-2.5">
+              <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+                <CoinsIcon aria-hidden="true" className="size-3.5" />
+                Saldo en tokens
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                {formatMxn(user.saldoTokens)}
+              </span>
+            </div>
+            <div className="bg-muted/40 flex flex-col gap-0.5 rounded-lg p-2.5">
+              <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+                <TvIcon aria-hidden="true" className="size-3.5" />
+                Saldo en cupones
+              </span>
+              <span className="text-sm font-semibold tabular-nums">
+                {formatMxn(user.saldoCupones)}
+              </span>
+            </div>
+          </div>
+          <Field>
+            <FieldLabel>Tipo de saldo</FieldLabel>
+            <RadioGroup
+              value={tipo}
+              onValueChange={(value) => setTipo(value as SaldoTipo)}
+              aria-label="Tipo de saldo a abonar"
+            >
+              <FieldGroup className="gap-0 rounded-lg border">
+                {SALDO_TIPOS.map((option, index) => {
+                  const meta = SALDO_TIPO_MENU_META[option]
+                  const Icon = option === "tokens" ? CoinsIcon : TvIcon
+                  return (
+                    <Fragment key={option}>
+                      {index > 0 ? <Separator /> : null}
+                      <Field>
+                        <FieldLabel
+                          className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5"
+                          onClick={() => setTipo(option)}
+                        >
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <Icon
+                              aria-hidden="true"
+                              className="size-4 shrink-0 opacity-60"
+                            />
+                            <span className="flex min-w-0 flex-col gap-0.5">
+                              <span className="text-foreground text-sm font-medium">
+                                {meta.label}
+                              </span>
+                              <span className="text-muted-foreground truncate text-xs">
+                                {meta.description}
+                              </span>
+                            </span>
+                          </span>
+                          <RadioGroupItem value={option} />
+                        </FieldLabel>
+                      </Field>
+                    </Fragment>
+                  )
+                })}
+              </FieldGroup>
+            </RadioGroup>
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`saldo-monto-${user.id}`}>
+              Monto a abonar
+            </FieldLabel>
+            <InputGroup className="h-11">
+              <InputGroupAddon align="inline-start" className="pl-3">
+                <span
+                  aria-hidden="true"
+                  className="text-muted-foreground text-sm"
+                >
+                  $
+                </span>
+              </InputGroupAddon>
+              <InputGroupInput
+                id={`saldo-monto-${user.id}`}
+                value={amountInput}
+                onChange={(event) => setAmountInput(event.target.value)}
+                inputMode="decimal"
+                placeholder="0.00"
+                aria-label={`Monto a abonar en pesos mexicanos al saldo en ${tipo}`}
+                className="font-semibold tabular-nums"
+              />
+            </InputGroup>
+            {!amount.ok && amountInput.trim().length > 0 ? (
+              <p className="text-destructive text-xs" role="alert">
+                {amount.message}
+              </p>
+            ) : (
+              <FieldDescription>
+                Mayor a $0, con hasta 2 decimales. Se acredita al instante en
+                el saldo elegido.
+              </FieldDescription>
+            )}
+          </Field>
+          {state.error ? (
+            <p className="text-destructive text-sm" role="alert">
+              {state.error}
+            </p>
+          ) : null}
+        </FieldGroup>
+        <DialogFooter>
+          <DialogClose render={<Button variant="outline" />}>
+            Cancelar
+          </DialogClose>
+          <Button type="submit" disabled={isPending || !amountOk}>
+            {isPending
+              ? "Abonando…"
+              : amountOk
+                ? `Abonar ${formatMxn(amountOk.amount)}`
+                : "Abonar"}
+          </Button>
+        </DialogFooter>
+      </form>
+    </DialogContent>
+  )
+}
+
+function EditUserDialog({
+  user,
+  open,
+  onOpenChange,
+}: {
+  user: UserListItem
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {open ? (
+        <EditUserForm user={user} onDone={() => onOpenChange(false)} />
+      ) : null}
     </Dialog>
   )
 }
@@ -522,25 +860,23 @@ function PermissionsDialog({
   user,
   couponDailyLimitDefault,
   couponMonthlyLimitDefault,
+  open,
+  onOpenChange,
 }: {
   user: UserListItem
   couponDailyLimitDefault: number
   couponMonthlyLimitDefault: number
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }) {
-  const [open, setOpen] = useState(false)
-
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
-        <ShieldCheckIcon />
-        <span className="sr-only">Permisos de {user.username}</span>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       {open ? (
         <PermissionsForm
           user={user}
           couponDailyLimitDefault={couponDailyLimitDefault}
           couponMonthlyLimitDefault={couponMonthlyLimitDefault}
-          onDone={() => setOpen(false)}
+          onDone={() => onOpenChange(false)}
         />
       ) : null}
     </Dialog>
@@ -711,17 +1047,19 @@ function PermissionsForm({
   )
 }
 
-function DeleteUserDialog({ user }: { user: UserListItem }) {
-  const [open, setOpen] = useState(false)
-
+function DeleteUserDialog({
+  user,
+  open,
+  onOpenChange,
+}: {
+  user: UserListItem
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
   return (
-    <AlertDialog open={open} onOpenChange={setOpen}>
-      <AlertDialogTrigger render={<Button variant="ghost" size="icon-sm" />}>
-        <Trash2Icon />
-        <span className="sr-only">Delete {user.username}</span>
-      </AlertDialogTrigger>
+    <AlertDialog open={open} onOpenChange={onOpenChange}>
       {open ? (
-        <DeleteUserForm user={user} onDone={() => setOpen(false)} />
+        <DeleteUserForm user={user} onDone={() => onOpenChange(false)} />
       ) : null}
     </AlertDialog>
   )

@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { CoinsIcon, LogOutIcon } from "lucide-react"
+import { CoinsIcon, LogOutIcon, TvIcon } from "lucide-react"
 import { cn } from "cn"
 
 import { logoutAction } from "@/app/actions/auth"
@@ -22,19 +22,22 @@ import { formatMxn } from "@/lib/finanzas"
 import type { AuthUser } from "@/server/auth/types"
 
 /**
- * Menú de cuenta de la cabecera: perfil, saldo disponible con divider
- * (solo si el comprador ve la sección de módulos; un toque lleva a «Abonar
- * saldo»), gestión de usuarios (solo admin), tema y cierre de sesión. El
- * monto vive como prop del servidor: el SSE refresca el layout y el menú
- * se abre siempre con el valor vigente.
+ * Menú de cuenta de la cabecera: perfil, los dos saldos disponibles (tokens
+ * y cupones) con divider (solo si el comprador ve la sección de módulos; un
+ * toque lleva a «Abonar saldo»), gestión de usuarios (solo admin), tema y
+ * cierre de sesión. Los montos viven como props del servidor: el SSE
+ * refresca el layout y el menú se abre siempre con los valores vigentes.
  */
 export function AppUserMenu({
   user,
   saldo,
 }: {
   user: AuthUser
-  /** Saldo disponible (MXN) para el primer renglón; null oculta el renglón. */
-  saldo: number | null
+  /**
+   * Saldos disponibles (MXN) para los renglones del menú; null oculta el
+   * grupo (cuentas sin la sección de módulos).
+   */
+  saldo: { cupones: number; tokens: number } | null
 }) {
   const mainItems = accountNav.filter((item) => !item.adminOnly)
   const adminItems = accountNav.filter(
@@ -88,16 +91,28 @@ export function AppUserMenu({
             </DropdownMenuItem>
           ))}
           {saldo !== null ? (
-            <DropdownMenuItem
-              render={<Link href="/modulos/abonar-saldo" />}
-              className={mobileNavClass.dropdownItem}
-            >
-              <CoinsIcon aria-hidden="true" />
-              <span>Saldo</span>
-              <span className="ml-auto font-medium tabular-nums">
-                {formatMxn(saldo)}
-              </span>
-            </DropdownMenuItem>
+            <>
+              <DropdownMenuItem
+                render={<Link href="/modulos/abonar-saldo" />}
+                className={mobileNavClass.dropdownItem}
+              >
+                <CoinsIcon aria-hidden="true" />
+                <span>Saldo en tokens</span>
+                <span className="ml-auto font-medium tabular-nums">
+                  {formatMxn(saldo.tokens)}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                render={<Link href="/modulos/abonar-saldo" />}
+                className={mobileNavClass.dropdownItem}
+              >
+                <TvIcon aria-hidden="true" />
+                <span>Saldo en cupones</span>
+                <span className="ml-auto font-medium tabular-nums">
+                  {formatMxn(saldo.cupones)}
+                </span>
+              </DropdownMenuItem>
+            </>
           ) : null}
         </DropdownMenuGroup>
         {adminItems.length > 0 ? (

@@ -63,11 +63,14 @@ function TicketIcon({ mimeType }: { mimeType: string }) {
 /**
  * Plazo de la orden con los meses gratis de un paquete visibles: «6 meses +
  * 1 gratis»; las individuales quedan como «1 mes». Las órdenes de abono de
- * saldo (`months = 0`, módulo «Abonar saldo») se rotulan como abono.
+ * saldo (`months = 0`, módulo «Abonar saldo») se rotulan con su billetera:
+ * «Abono de saldo en tokens» / «en cupones».
  */
 function transferOrderLabel(order: TransferOrder): string {
   if (order.months === 0) {
-    return "Abono de saldo"
+    return order.saldo_tipo === "tokens"
+      ? "Abono de saldo en tokens"
+      : "Abono de saldo en cupones"
   }
   const base = `${order.months} ${order.months === 1 ? "mes" : "meses"}`
   const bonus = order.bonus_months ?? 0

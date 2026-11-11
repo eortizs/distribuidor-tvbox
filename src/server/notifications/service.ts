@@ -139,6 +139,11 @@ export interface RenewalNotificationInput {
   months: number
   /** Monto del abono (solo con `months = 0`), para el cuerpo del aviso. */
   amountMxn?: number
+  /**
+   * Billetera destino del abono (`months = 0`): tokens o cupones. Falta en
+   * los abonos legados y se lee como cupones.
+   */
+  saldoTipo?: "tokens" | "cupones"
   /** Meses gratis del paquete (0 en renovaciones individuales). */
   bonusMonths?: number
   /** Vencimiento nuevo verificado en el panel (solo éxito). */
@@ -167,18 +172,22 @@ export function createRenewalNotification(
       typeof input.amountMxn === "number" && input.amountMxn > 0
         ? formatMxn(input.amountMxn)
         : ""
+    // Billetera destino nombrada en el texto (cupones si no llegó el campo,
+    // el saldo histórico era para licencias).
+    const billetera =
+      input.saldoTipo === "tokens" ? "tu saldo en tokens" : "tu saldo en cupones"
     let title: string
     let body: string
     if (kind === "renewal_success") {
       title = "Abono aplicado"
       body = amount
-        ? `Tu abono de ${amount} quedó acreditado en tu saldo.`
-        : "Tu abono quedó acreditado en tu saldo."
+        ? `Tu abono de ${amount} quedó acreditado en ${billetera}.`
+        : `Tu abono quedó acreditado en ${billetera}.`
     } else {
       title = "Abono no acreditado"
       const reason = (input.error ?? "").trim()
       body =
-        "El pago quedó registrado pero el abono no se pudo acreditar en tu saldo." +
+        `El pago quedó registrado pero el abono no se pudo acreditar en ${billetera}.` +
         (reason ? ` Motivo: ${reason.slice(0, 200)}` : "") +
         " Se reintentará solo; si persiste, contacta al administrador."
     }

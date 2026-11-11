@@ -66,11 +66,16 @@ export async function listUsers(): Promise<
     couponMonthlyLimit: number | null
     /** La cuenta está ligada a Google (google_sub presente). */
     googleLinked: boolean
+    /** Saldo en cupones disponible (MXN): licencias de FlujoTV. */
+    saldoCupones: number
+    /** Saldo en tokens disponible (MXN): herramientas con APIs. */
+    saldoTokens: number
   })[]
 > {
   const result = await pool.query(
     `SELECT u.id, u.username, u.role, u.created_at, u.google_sub,
             u.coupon_daily_limit, u.coupon_monthly_limit,
+            u.saldo_cupones, u.saldo_tokens,
             count(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) AS entity_count,
             max(acc.doc->'dynamicProperties'->>'distribuidorName') AS distribuidor_name
        FROM users u
@@ -102,6 +107,8 @@ export async function listUsers(): Promise<
     couponDailyLimit: positiveIntOrNull(row.coupon_daily_limit),
     couponMonthlyLimit: positiveIntOrNull(row.coupon_monthly_limit),
     googleLinked: typeof row.google_sub === "string" && row.google_sub.length > 0,
+    saldoCupones: Number(row.saldo_cupones ?? 0),
+    saldoTokens: Number(row.saldo_tokens ?? 0),
   }))
 }
 

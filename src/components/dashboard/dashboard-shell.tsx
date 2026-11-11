@@ -28,13 +28,16 @@ type ShellViewport = {
  */
 export function DashboardShell({
   user,
-  saldo,
+  saldoCupones,
+  saldoTokens,
   visibleSections,
   children,
 }: {
   user: AuthUser
-  /** Saldo disponible del comprador (MXN) para el chip de la cabecera. */
-  saldo: number
+  /** Saldo en cupones (MXN) para el menú de la cabecera. */
+  saldoCupones: number
+  /** Saldo en tokens (MXN) para el menú de la cabecera. */
+  saldoTokens: number
   /** Claves de sección visibles para este usuario (permisos por cuenta). */
   visibleSections: string[]
   children: React.ReactNode
@@ -134,7 +137,9 @@ export function DashboardShell({
           <AppNotifications />
           <AppUserMenu
             user={user}
-            saldo={visibleSections.includes("modulos") ? saldo : null}
+            saldo={visibleSections.includes("modulos")
+              ? { cupones: saldoCupones, tokens: saldoTokens }
+              : null}
           />
         </div>
       </header>

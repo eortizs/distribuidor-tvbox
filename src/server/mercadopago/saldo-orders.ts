@@ -14,16 +14,21 @@ import {
   retryOrderRenewal,
 } from "./service"
 import { mpTotalMxn } from "@/lib/mp-pricing"
-import { parseAbonoAmount } from "@/lib/saldo"
+import {
+  parseAbonoAmount,
+  parseSaldoTipo,
+  SALDO_TIPO_COLUMN,
+  type SaldoTipo,
+} from "@/lib/saldo"
 
 /**
  * Órdenes de abono de saldo del módulo «Abonar saldo»
  * (`/modulos/abonar-saldo`): el mismo motor de pagos de las renovaciones
- * (`mp_orders`) con la marca `months = 0` — la diferencia es que el monto lo
- * define el comprador y el cumplimiento acredita saldo en su cuenta en vez
- * de renovar una licencia (el despacho por `months = 0` vive en
- * `attemptOrderRenewal`, compartido por webhook, conciliación, revisión
- * admin y reintento).
+ * (`mp_orders`) con la marca `months = 0` — la diferencia es que el monto y
+ * el tipo de saldo (tokens o cupones) los define el comprador y el
+ * cumplimiento acredita esa billetera en su cuenta en vez de renovar una
+ * licencia (el despacho por `months = 0` vive en `attemptOrderRenewal`,
+ * compartido por webhook, conciliación, revisión admin y reintento).
  *
  * Métodos, con el mismo tratamiento que las renovaciones:
  *
@@ -74,6 +79,8 @@ export async function createSaldoPaymentOrder(params: {
   buyerUsername: string
   /** Monto definido por el comprador que se acreditará al saldo (MXN). */
   amountMxn: unknown
+  /** Billetera destino del abono: tokens o cupones. */
+  saldoTipo: SaldoTipo
   returnPath?: string
 }): Promise<CreatedSaldoPaymentOrder> {
   const parsed = parseAbonoAmount(params.amountMxn)
@@ -88,9 +95,10 @@ export async function createSaldoPaymentOrder(params: {
 
   await pool.query(
     `INSERT INTO mp_orders
-       (id, status, user_name, months, bonus_months, amount, currency, buyer_user_id, external_reference)
-     VALUES ($1::uuid, 'pending', $2, 0, 0, $3, 'MXN', $4::uuid, $1::text)`,
-    [orderId, params.buyerUsername, amount, params.buyerUserId]
+       (id, status, user_name, months, bonus_months, amount, currency, buyer_user_id,
+        external_reference, saldo_tipo)
+     VALUES ($1::uuid, 'pending', $2, 0, 0, $3, 'MXN', $4::uuid, $1::text, $5)`,
+    [orderId, params.buyerUsername, amount, params.buyerUserId, params.saldoTipo]
   )
 
   try {
@@ -102,7 +110,10 @@ export async function createSaldoPaymentOrder(params: {
           items: [
             {
               id: "abono-saldo",
-              title: `Abono de saldo — ${params.buyerUsername}`,
+              title:
+                params.saldoTipo === "tokens"
+                  ? `Abono de saldo en tokens — ${params.buyerUsername}`
+                  : `Abono de saldo en cupones — ${params.buyerUsername}`,
               quantity: 1,
               unit_price: amount,
               currency_id: "MXN",
@@ -184,6 +195,8 @@ export async function createSaldoTransferOrder(params: {
   buyerUserId: string
   buyerUsername: string
   amountMxn: unknown
+  /** Billetera destino del abono: tokens o cupones. */
+  saldoTipo: SaldoTipo
   ticketFileId: string
   conceptId?: string
   conceptCode?: string
@@ -197,9 +210,9 @@ export async function createSaldoTransferOrder(params: {
   await pool.query(
     `INSERT INTO mp_orders
        (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
-        external_reference, ticket_file_id, concept_id, concept_code)
+        external_reference, ticket_file_id, concept_id, concept_code, saldo_tipo)
      VALUES ($1::uuid, 'pending', 'transferencia', $2, 0, 0, $3, 'MXN', $4::uuid,
-             $1::text, $5::uuid, $6::uuid, $7)`,
+             $1::text, $5::uuid, $6::uuid, $7, $8)`,
     [
       orderId,
       params.buyerUsername,
@@ -208,6 +221,7 @@ export async function createSaldoTransferOrder(params: {
       params.ticketFileId,
       params.conceptId ?? null,
       params.conceptCode ?? null,
+      params.saldoTipo,
     ]
   )
 
@@ -250,6 +264,8 @@ export async function createSaldoCouponOrder(params: {
   code: string
   requestId: string
   amountMxn: unknown
+  /** Billetera destino del abono: tokens o cupones. */
+  saldoTipo: SaldoTipo
 }): Promise<CreatedSaldoCouponOrder> {
   const parsed = parseAbonoAmount(params.amountMxn)
   if (!parsed.ok) {
@@ -315,8 +331,8 @@ export async function createSaldoCouponOrder(params: {
     const inserted = await tx.query<{ id: string }>(
       `INSERT INTO mp_orders
          (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
-          external_reference, coupon_code, coupon_request_id)
-       VALUES ($1::uuid, 'paid', 'cupon', $2, 0, 0, $3, 'MXN', $4::uuid, $1::text, $5, $6)
+          external_reference, coupon_code, coupon_request_id, saldo_tipo)
+       VALUES ($1::uuid, 'paid', 'cupon', $2, 0, 0, $3, 'MXN', $4::uuid, $1::text, $5, $6, $7)
        ON CONFLICT (coupon_request_id) WHERE method = 'cupon' AND coupon_request_id IS NOT NULL
        DO NOTHING
        RETURNING id`,
@@ -327,6 +343,7 @@ export async function createSaldoCouponOrder(params: {
         params.buyerUserId,
         code,
         params.requestId,
+        params.saldoTipo,
       ]
     )
     insertedId = inserted.rows[0]?.id ?? null
@@ -342,22 +359,25 @@ export async function createSaldoCouponOrder(params: {
   if (!orderId) {
     // Reintento con el mismo request_id: localiza la orden original del
     // mismo comprador (el índice es global; un id ajeno no filtra nada).
-    const replayed = await pool.query<{ id: string; status: string }>(
-      `SELECT id, status FROM mp_orders
+    const replayed = await pool.query<{ id: string; status: string; saldo_tipo: string | null }>(
+      `SELECT id, status, saldo_tipo FROM mp_orders
         WHERE coupon_request_id = $1 AND buyer_user_id = $2::uuid`,
       [params.requestId, params.buyerUserId]
     )
     orderId = replayed.rows[0]?.id ?? null
     if (orderId && replayed.rows[0]?.status === "applied") {
       // Canje ya aplicado: responder el éxito sin re-ejecutar el cumplimiento.
+      // El reintento conservó el tipo de saldo de la orden original.
+      const tipo = parseSaldoTipo(replayed.rows[0]?.saldo_tipo) ?? "cupones"
       const saldo = await pool.query<{ saldo: string }>(
-        "SELECT saldo FROM users WHERE id = $1::uuid",
+        `SELECT ${SALDO_TIPO_COLUMN[tipo]} AS saldo FROM users WHERE id = $1::uuid`,
         [params.buyerUserId]
       )
       log("saldo.coupon_order", {
         order_id: orderId,
         user_name: params.buyerUsername,
         outcome: "already_applied",
+        saldo_tipo: tipo,
       })
       return {
         orderId,
@@ -383,7 +403,7 @@ export async function createSaldoCouponOrder(params: {
   // atómico sella `applied` o `renewal_failed` (reintento seguro).
   const fulfilled = await retryOrderRenewal(orderId)
   const saldo = await pool.query<{ saldo: string }>(
-    "SELECT saldo FROM users WHERE id = $1::uuid",
+    `SELECT ${SALDO_TIPO_COLUMN[params.saldoTipo]} AS saldo FROM users WHERE id = $1::uuid`,
     [params.buyerUserId]
   )
 
@@ -391,6 +411,7 @@ export async function createSaldoCouponOrder(params: {
     order_id: orderId,
     user_name: params.buyerUsername,
     amount: creditAmount,
+    saldo_tipo: params.saldoTipo,
     outcome: fulfilled.status,
   })
 
