@@ -137,9 +137,15 @@ function foldTerm(value: string): string {
 
 export function HerramientasAccordion({
   initialPrefs,
+  isAdmin = false,
 }: {
   /** Preferencias ya guardadas en el servidor; null si el usuario aún no tiene. */
   initialPrefs: ModulePrefs | null
+  /**
+   * La cuenta es admin: ve además los módulos `adminOnly` (Distribuidores).
+   * Para el resto de cuentas esos módulos no existen en el catálogo.
+   */
+  isAdmin?: boolean
 }) {
   const [favorites, setFavorites] = useState<string[]>(
     initialPrefs?.favorites ?? []
@@ -286,9 +292,19 @@ export function HerramientasAccordion({
     )
   }
 
+  /**
+   * Catálogo visible para esta cuenta: el listado completo de MODULOS menos
+   * los módulos `adminOnly` cuando la cuenta no es admin. La búsqueda, las
+   * vistas y los contadores trabajan siempre sobre este catálogo.
+   */
+  const catalog = useMemo(
+    () => MODULOS.filter((tool) => !tool.adminOnly || isAdmin),
+    [isAdmin]
+  )
+
   const visible = useMemo(() => {
     const term = foldTerm(searchInput)
-    return MODULOS.filter((tool) => {
+    return catalog.filter((tool) => {
       if (view === "todos") {
         // Sin vista: solo la búsqueda acota.
       } else if (view === "favoritos") {
@@ -302,7 +318,7 @@ export function HerramientasAccordion({
         foldTerm(tool.description).includes(term)
       )
     })
-  }, [view, favorites, assignments, searchInput])
+  }, [catalog, view, favorites, assignments, searchInput])
 
   const searching = searchInput.trim().length > 0
 
@@ -337,7 +353,7 @@ export function HerramientasAccordion({
   }
 
   const categoryCount = (id: string) =>
-    MODULOS.filter((tool) =>
+    catalog.filter((tool) =>
       (assignments[tool.href] ?? []).includes(id)
     ).length
 
@@ -402,7 +418,7 @@ export function HerramientasAccordion({
           <ToggleGroupItem value="todos" className={`rounded-full ${VISTA_ACTIVE_CLASS}`}>
             Todos
             <Badge variant="outline" size="xs" className={VISTA_COUNT_CLASS}>
-              {MODULOS.length}
+              {catalog.length}
             </Badge>
           </ToggleGroupItem>
           <ToggleGroupItem value="favoritos" className={`rounded-full ${VISTA_ACTIVE_CLASS}`}>

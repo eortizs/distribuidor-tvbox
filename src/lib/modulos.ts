@@ -7,6 +7,7 @@ import {
   PlugZapIcon,
   ReceiptTextIcon,
   ShoppingBasketIcon,
+  UserCogIcon,
   type LucideIcon,
 } from "lucide-react"
 
@@ -35,6 +36,11 @@ export interface Modulo {
   description: string
   href: string
   icon: LucideIcon
+  /**
+   * Solo visible para cuentas admin: el hub oculta la tarjeta y la ruta
+   * queda servida detrás de `requireRole("admin")`.
+   */
+  adminOnly?: boolean
 }
 
 export const MODULOS: Modulo[] = [
@@ -93,6 +99,14 @@ export const MODULOS: Modulo[] = [
       "Elige tokens (herramientas con APIs) o cupones (licencias FlujoTV), define el monto y paga con Mercado Pago, transferencia o cupón.",
     href: "/modulos/abonar-saldo",
     icon: PiggyBankIcon,
+  },
+  {
+    title: "Distribuidores",
+    description:
+      "Gestiona las cuentas de distribuidores: saldo, permisos, edición y baja, con el mismo menú de Usuarios.",
+    href: "/modulos/distribuidores",
+    icon: UserCogIcon,
+    adminOnly: true,
   },
 ]
 

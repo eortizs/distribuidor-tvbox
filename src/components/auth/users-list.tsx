@@ -382,18 +382,30 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
  * Menú contextual de acciones de la fila (los tres puntos): agrupa todas las
  * acciones de la cuenta — Saldo, Permisos, Editar y Eliminar (esta solo para
  * cuentas ajenas) — y abre el diálogo correspondiente al elegirla.
+ *
+ * Compartido por `/users` y el módulo Distribuidores
+ * (`/modulos/distribuidores`): el trigger es configurable por props para que
+ * el módulo pueda pintar el mismo botón que el carrito de compra de
+ * `/clientes` (mismo tamaño, posición y feedback de pulsación) con el icono
+ * settings-2; sin props, el trigger es el de siempre en `/users`.
  */
-function UserActionsMenu({
+export function UserActionsMenu({
   user,
   isSelf,
   couponDailyLimitDefault,
   couponMonthlyLimitDefault,
+  triggerIcon,
+  triggerClassName,
 }: {
   user: UserListItem
   /** La fila es la cuenta del propio admin: sin acción destructiva. */
   isSelf: boolean
   couponDailyLimitDefault: number
   couponMonthlyLimitDefault: number
+  /** Contenido del trigger; por defecto los tres puntos de `/users`. */
+  triggerIcon?: React.ReactNode
+  /** Clases extra del trigger (tamaño, redondeo y feedback de `/clientes`). */
+  triggerClassName?: string
 }) {
   const [dialog, setDialog] = useState<
     "saldo" | "permisos" | "editar" | "eliminar" | null
@@ -408,10 +420,11 @@ function UserActionsMenu({
               variant="ghost"
               size="icon-sm"
               aria-label={`Acciones de ${user.username}`}
+              className={triggerClassName}
             />
           }
         >
-          <EllipsisVerticalIcon />
+          {triggerIcon ?? <EllipsisVerticalIcon />}
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
           <DropdownMenuGroup>

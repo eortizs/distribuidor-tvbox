@@ -12,7 +12,10 @@ export default async function HerramientasPage() {
 
   return (
     <div className="flex flex-1 flex-col p-4 md:p-6">
-      <HerramientasAccordion initialPrefs={prefs} />
+      <HerramientasAccordion
+        initialPrefs={prefs}
+        isAdmin={user.role === "admin"}
+      />
     </div>
   )
 }
