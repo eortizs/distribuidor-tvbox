@@ -5,6 +5,7 @@ import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { createRenewalNotification } from "@/server/notifications/service"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
+import { FlujoApiError } from "@/server/flujotv/errors"
 import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
 import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
@@ -60,6 +61,12 @@ export interface MpOrderRow {
     renewal_baseline_expires_at: string | null
     /** Vencimiento nuevo verificado en el panel al marcar `renewed`. */
     renewal_verified_expires_at: string | null
+    /**
+     * Rotación de la clave de idempotencia de renovación: 1 = clave base
+     * `mp-<id>`; tras un rechazo del panel SIN ejecutar nada (cooldown
+     * guardado en caché) sube a 2 → `mp-<id>-r2`, etc.
+     */
+    renewal_key_attempts: number
     error: string | null
    renewed_at: string | null
    refunded_at: string | null
@@ -130,6 +137,39 @@ const RENEWAL_VERIFY_RETRY_DELAY_MS = 1_500
  * compras.
  */
 const RENEWAL_VERIFY_READ_TIMEOUT_MS = 45_000
+
+/**
+ * Tope de rotación de la clave de idempotencia (`mp-<id>` → `mp-<id>-r2` →
+ * … → `-r4`). Solo rota cuando el panel rechazó SIN ejecutar nada (cooldown
+ * guardado en su caché bajo esa clave), así que cada peldaño consume una
+ * respuesta «bloqueada», nunca una compra real. Superado el tope la orden
+ * pide revisión del administrador en lugar de quemar claves infinitas.
+ */
+const RENEWAL_KEY_MAX_ATTEMPTS = 4
+
+/**
+ * Clave de idempotencia de la renovación según el contador de la orden.
+ * Las claves de los meses bonus (`…-b1`, `-b2`) NO rotan: deben seguir
+ * estables entre intentos para que un paso ya ejecutado se replay-e en lugar
+ * de duplicarse con una clave nueva.
+ */
+function renewalIdempotencyKey(orderId: string, attempts: number): string {
+  return attempts <= 1 ? `mp-${orderId}` : `mp-${orderId}-r${attempts}`
+}
+
+/**
+ * ¿El rechazo del panel llegó SIN ejecutar nada? (`months_added: 0` y
+ * `attempts: 0`: el lock de cooldown lo bloqueó antes de tocar el panel.)
+ * Es la única situación en la que rotar la clave es seguro: la compra real
+ * nunca usó la clave anterior.
+ */
+function isRejectedWithoutExecution(error: unknown): boolean {
+  if (!(error instanceof FlujoApiError) || error.code !== "renewal_rejected") {
+    return false
+  }
+  if (!isRecord(error.details)) return false
+  return error.details.months_added === 0 && error.details.attempts === 0
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -225,6 +265,12 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
       row.renewal_verified_expires_at === undefined
         ? null
         : String(row.renewal_verified_expires_at),
+    renewal_key_attempts:
+      typeof row.renewal_key_attempts === "number" &&
+      Number.isInteger(row.renewal_key_attempts) &&
+      row.renewal_key_attempts >= 1
+        ? row.renewal_key_attempts
+        : 1,
     error: row.error === null ? null : String(row.error),
     renewed_at:
       row.renewed_at === null ? null : new Date(row.renewed_at as string).toISOString(),
@@ -537,6 +583,14 @@ async function verifyRenewalApplied(
  * renovación en lugar de sumar meses dos veces, así que es seguro invocarla
  * también sobre órdenes `paid` varadas o `renewal_failed`.
  *
+ * La clave rota (`mp-<orderId>-r2`, `-r3`, …) SOLO cuando el servicio de
+ * licencias rechaza la compra sin ejecutarla (cooldown post-éxito guardado en
+ * su caché bajo la clave usada): repetir esa clave re-obtendría el rechazo
+ * guardado para siempre. Como el rechazo llega con `months_added: 0` y
+ * `attempts: 0`, la compra real nunca usó la clave anterior y rotarla no
+ * puede duplicar meses. Las claves de los meses bonus NO rotan: un paso ya
+ * ejecutado debe seguir replay-eando su renovación original.
+ *
  * Las órdenes de paquete añaden los meses gratis como renovaciones extra de
  * 1 mes con claves derivadas (`mp-<orderId>-b1`, `-b2`, …): cada paso es
  * idempotente por separado, así que una respuesta perdida a mitad del plan
@@ -550,6 +604,52 @@ async function verifyRenewalApplied(
  * «renovación exitosa».
  */
 async function attemptOrderRenewal(
+  order: MpOrderRow,
+  paymentId: string | null,
+  renewalTimeoutMs?: number
+): Promise<PaymentOutcome> {
+  // Cerrojo por orden (lock de sesión de Postgres): serializa webhook,
+  // conciliación, reintento admin y canje de cupón que intentan renovar la
+  // MISMA orden a la vez. Con claves rotadas, dos llamadas en paralelo que
+  // derivaran claves distintas podrían ejecutar dos compras reales; con el
+  // cerrojo, el segundo intento no entra y se reporta «en curso» (su
+  // conciliación/reintento posterior reutiliza la clave ya ejecutada).
+  const lockClient = await pool.connect()
+  let locked = false
+  try {
+    const lockResult = await lockClient.query(
+      `SELECT pg_try_advisory_lock(hashtext($1)) AS acquired`,
+      [`mp-renewal:${order.id}`]
+    )
+    locked = lockResult.rows[0]?.acquired === true
+  } catch (lockError) {
+    logError("renewal_lock_acquire", lockError)
+  }
+  if (!locked) {
+    lockClient.release()
+    log("mercadopago.payment", {
+      order_id: order.id,
+      payment_id: paymentId,
+      outcome: "in_progress",
+      reason: "otra renovación de la misma orden sigue en curso",
+    })
+    return "in_process"
+  }
+  try {
+    return await runOrderRenewal(order, paymentId, renewalTimeoutMs)
+  } finally {
+    await lockClient
+      .query(`SELECT pg_advisory_unlock(hashtext($1))`, [
+        `mp-renewal:${order.id}`,
+      ])
+      .catch((unlockError: unknown) =>
+        logError("renewal_lock_release", unlockError)
+      )
+    lockClient.release()
+  }
+}
+
+async function runOrderRenewal(
   order: MpOrderRow,
   paymentId: string | null,
   renewalTimeoutMs?: number
@@ -585,7 +685,13 @@ async function attemptOrderRenewal(
         ? order.bonus_months
         : 0
     const renewalSteps: { months: RenewalMonths; idempotencyKey: string }[] = [
-      { months: order.months as RenewalMonths, idempotencyKey: `mp-${order.id}` },
+      {
+        months: order.months as RenewalMonths,
+        idempotencyKey: renewalIdempotencyKey(
+          order.id,
+          order.renewal_key_attempts
+        ),
+      },
       ...Array.from({ length: bonusMonths }, (_, index) => ({
         months: 1 as RenewalMonths,
         idempotencyKey: `mp-${order.id}-b${index + 1}`,
@@ -672,7 +778,9 @@ async function attemptOrderRenewal(
     // Se deja el estado tal cual (normalmente `paid`): si el intento en
     // curso falla de verdad, él mismo marcará `renewal_failed`; si muere sin
     // respuesta, la conciliación de `paid` varado reintenta a los 10 minutos.
-    if (/está en curso/i.test(message)) {
+    // «está en curso» = panel de licencias; «operación en curso» = servicio
+    // de licencias con otra compra del mismo usuario en vuelo.
+    if (/(?:está|operaci[oó]n) en curso/i.test(message)) {
       log("mercadopago.payment", {
         order_id: order.id,
         payment_id: paymentId,
@@ -680,6 +788,28 @@ async function attemptOrderRenewal(
         reason: message.slice(0, 300),
       })
       return "in_process"
+    }
+
+    // Rechazo sin ejecución (cooldown del panel guardado en su caché bajo la
+    // clave usada): la compra real nunca partió, así que la clave se puede
+    // rotar para que el próximo reintento no re-obtenga la respuesta guardada
+    // para siempre. El tope evita quemar claves infinitas si el comprador
+    // insiste dentro del cooldown; al superarlo el mensaje pide esperar y,
+    // si persiste, revisión del administrador.
+    if (
+      isRejectedWithoutExecution(error) &&
+      order.renewal_key_attempts < RENEWAL_KEY_MAX_ATTEMPTS
+    ) {
+      await pool
+        .query(
+          `UPDATE mp_orders
+              SET renewal_key_attempts = renewal_key_attempts + 1, updated_at = now()
+            WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
+          [order.id]
+        )
+        .catch((rotateError: unknown) =>
+          logError("rotate_renewal_key", rotateError)
+        )
     }
 
     const failedClaim = await pool

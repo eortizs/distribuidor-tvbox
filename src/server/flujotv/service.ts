@@ -823,6 +823,36 @@ export async function renewFlujoLicense(params: {
     }
   )
 
+  // El panel puede responder HTTP 200 con `success: false`: el servicio de
+  // licencias bloquea la compra cuando hay una operación muy reciente para el
+  // mismo usuario (cooldown post-éxito de ~5 min u otra compra en curso).
+  // Tratar ese 200 como éxito era invisible aquí y la verificación posterior
+  // lo degradaba a «el vencimiento no cambió», un mensaje críptico que el
+  // comprador reintentaba de inmediato para volver a chocar con el cooldown.
+  // Rechazar la respuesta en la puerta de entrada pone el motivo real —con la
+  // espera estimada— en el error de la orden y en el aviso al comprador.
+  if (isRecord(response.data) && response.data.success === false) {
+    const detail =
+      typeof response.data.message === "string"
+        ? response.data.message.trim()
+        : ""
+    const cooldown = /cooldown post-exito (\d+)s/i.exec(detail)
+    const minutes = cooldown
+      ? Math.max(2, Math.ceil(Number(cooldown[1]) / 60))
+      : null
+    const hint = minutes
+      ? ` Espera ~${minutes} minutos y vuelve a intentar la renovación.`
+      : " Espera unos minutos y vuelve a intentar la renovación."
+    throw new FlujoApiError(
+      502,
+      "renewal_rejected",
+      `El panel de licencias rechazó la renovación${
+        detail ? `: ${detail}` : "."
+      }${hint}`,
+      { details: response.data }
+    )
+  }
+
   return {
     status: response.status,
     durationMs: response.durationMs,
