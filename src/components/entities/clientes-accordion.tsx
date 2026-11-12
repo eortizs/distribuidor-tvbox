@@ -20,7 +20,9 @@
  *   botón; el detalle vive en el contenido expandido. Sin borde inferior
  *   entre filas (`not-last:border-b-0`): el ritmo lo dan el espaciado y el
  *   fondo al pasar el cursor.
- * - Contenido expandido: fecha de vencimiento ("vence 27 nov 2026").
+ * - Contenido expandido: fecha de vencimiento ("vence 27 nov 2026") y, debajo,
+ *   el nombre del distribuidor asignado al usuario (`resellerOf`: llave cruda
+ *   del cliente o mapa de `/users/validity`; se omite si no tiene).
  *
  * Cada fila lleva además el botón de **compra rápida** (shopping-cart-plus
  * de lucide), colocado entre el contenido y el punto de estado:
@@ -140,7 +142,10 @@
  * que el operador no pueda desconfigurarlas. La vista activa se pinta con
  * el foreground del tema (negro en claro, blanco en oscuro). Las vistas y el
  * botón «Añadir filtro» — un círculo «+» con el mismo fondo del tema — van en
- * el renglón superior, desplazable en horizontal con el scrollbar oculto.
+ * el renglón superior, desplazable en horizontal con el scrollbar oculto;
+ * un chevron gris flotante en el margen derecho solo sugiere que la fila
+ * continúa: el tooltip «deslizar» aparece al hover o tap y el tap además
+ * recorre la fila hasta el final para demostrar el gesto.
  * El picker abre con el título «Crear filtro», sin buscador de atributos, y
  * lista los campos como «por estado», «por distribuidor» y «por días para
  * vencer» (las etiquetas leen el chip como una frase). Los chips se
@@ -185,6 +190,7 @@ import { useRouter } from "next/navigation"
 import { REGEXP_ONLY_DIGITS } from "input-otp"
 import {
   CheckIcon,
+  ChevronRightIcon,
   CircleCheckIcon,
   CopyIcon,
   FileTextIcon,
@@ -274,6 +280,11 @@ import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@/components/ui/toggle-group"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { Filters } from "@/components/reui/filters/filters"
 import { FilterChip } from "@/components/reui/filters/filters-chip"
 import { FiltersBuilder } from "@/components/reui/filters/filters-builder"
@@ -728,6 +739,12 @@ export function ClientesAccordion({
   const [reloadCount, setReloadCount] = useState(0)
   const [syncOpen, setSyncOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  /**
+   * Tooltip de la pista «deslizar» del renglón de filtros: controlado para
+   * que el tap en móvil lo abra (el hover de Base UI es solo-mouse, así que
+   * sin control el tap no haría nada) y el toque fuera lo cierre.
+   */
+  const [swipeHintOpen, setSwipeHintOpen] = useState(false)
   const [purchaseOpen, setPurchaseOpen] = useState(false)
   const [purchaseTarget, setPurchaseTarget] = useState<FlujoClient | null>(null)
   const [purchasing, setPurchasing] = useState(false)
@@ -810,6 +827,12 @@ export function ClientesAccordion({
 
   const requestCounter = useRef(0)
   const router = useRouter()
+
+  /**
+   * Renglón desplazable de vistas: el chevron de la pista «deslizar» lo
+   * recorre con desplazamiento suave al hacer tap.
+   */
+  const filterRowRef = useRef<HTMLDivElement>(null)
 
   /**
    * Llave del concepto de pago ya pedido (usuario + mes): evita repetir la
@@ -976,6 +999,26 @@ export function ClientesAccordion({
   const reload = useCallback(() => {
     setFetchState("loading")
     setReloadCount((token) => token + 1)
+  }, [])
+
+  /**
+   * Tap en la pista «deslizar»: despliega el tooltip y recorre la fila de
+   * vistas hasta el final con desplazamiento suave — el recorrido hace obvio
+   * que la fila se puede deslizar. Si ya está al final, un tap regresa al
+   * inicio. Respeta `prefers-reduced-motion` con salto instantáneo.
+   */
+  const runSwipeHint = useCallback(() => {
+    setSwipeHintOpen(true)
+    const row = filterRowRef.current
+    if (!row) return
+    const atEnd = row.scrollLeft + row.clientWidth >= row.scrollWidth - 1
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)"
+    ).matches
+    row.scrollTo({
+      left: atEnd ? 0 : row.scrollWidth,
+      behavior: reduceMotion ? "auto" : "smooth",
+    })
   }, [])
 
   /**
@@ -1801,46 +1844,54 @@ export function ClientesAccordion({
              * Renglón 1: las vistas preconfiguradas y el botón «Añadir
              * filtro», en una sola fila desplazable en horizontal con el
              * scrollbar oculto. El «+» se queda arriba: los filtros que crea
-             * bajan al renglón de abajo.
+             * bajan al renglón de abajo. El `pr-10` reserva espacio al final
+             * del desplazamiento para que el «+» quede fuera de la zona del
+             * chevron y no se esconda debajo de él. En el margen derecho flota
+             * un chevron gris, pista visual de que la fila continúa: al hover
+             * o tap muestra el tooltip «deslizar» y el tap además recorre la
+             * fila hasta el final (y de vuelta al inicio si ya está al final)
+             * para demostrar que se puede deslizar.
              */}
-            <div
-              role="toolbar"
-              aria-label={LAB_FILTER_LABELS.filtersLabel}
-              className="flex flex-nowrap items-center gap-2 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
-            >
-              <ToggleGroup
-                variant="outline"
-                size="sm"
-                value={[preset]}
-                onValueChange={(groupValue) => {
-                  // Radio fijo: volver a pulsar la vista activa no la suelta.
-                  // «Todos» además limpia los filtros manuales: la vista muestra
-                  // el listado completo sin condiciones.
-                  const next =
-                    PRESET_ITEMS.find((item) =>
-                      groupValue.includes(item.value)
-                    )?.value ?? preset
-                  setPreset(next)
-                  if (next === "todos") {
-                    setQuery((current) => clearFilterQuery(current))
-                  }
-                }}
-                aria-label="Vistas preconfiguradas de clientes"
+            <div className="relative">
+              <div
+                ref={filterRowRef}
+                role="toolbar"
+                aria-label={LAB_FILTER_LABELS.filtersLabel}
+                className="flex flex-nowrap items-center gap-2 overflow-x-auto pr-10 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
               >
-                {PRESET_ITEMS.map((item) => (
-                  <ToggleGroupItem
-                    key={item.value}
-                    value={item.value}
-                    className={`rounded-full ${PRESET_ACTIVE_CLASS}`}
-                  >
-                    {item.label}
-                    <Badge variant="outline" size="xs" className={PRESET_COUNT_CLASS}>
-                      {presetCounts[item.value]}
-                    </Badge>
-                  </ToggleGroupItem>
-                ))}
-              </ToggleGroup>
-              <FiltersBuilder
+                <ToggleGroup
+                  variant="outline"
+                  size="sm"
+                  value={[preset]}
+                  onValueChange={(groupValue) => {
+                    // Radio fijo: volver a pulsar la vista activa no la suelta.
+                    // «Todos» además limpia los filtros manuales: la vista muestra
+                    // el listado completo sin condiciones.
+                    const next =
+                      PRESET_ITEMS.find((item) =>
+                        groupValue.includes(item.value)
+                      )?.value ?? preset
+                    setPreset(next)
+                    if (next === "todos") {
+                      setQuery((current) => clearFilterQuery(current))
+                    }
+                  }}
+                  aria-label="Vistas preconfiguradas de clientes"
+                >
+                  {PRESET_ITEMS.map((item) => (
+                    <ToggleGroupItem
+                      key={item.value}
+                      value={item.value}
+                      className={`rounded-full ${PRESET_ACTIVE_CLASS}`}
+                    >
+                      {item.label}
+                      <Badge variant="outline" size="xs" className={PRESET_COUNT_CLASS}>
+                        {presetCounts[item.value]}
+                      </Badge>
+                    </ToggleGroupItem>
+                  ))}
+                </ToggleGroup>
+                <FiltersBuilder
                 /* El picker abre como una vista de «Crear filtro»: sin buscador
                    de atributos (la fila de búsqueda se oculta desde el
                    consumidor) y con el título impreso sobre la lista. */
@@ -1856,6 +1907,41 @@ export function ClientesAccordion({
                   </Button>
                 }
               />
+              </div>
+              {/*
+               * Pista de deslizamiento: chevron gris flotante sobre el borde
+               * derecho del renglón. Sin fondo, sin borde y sin hover de
+               * pulsación: solo sugiere que hay más contenido a la derecha y
+               * despliega el tooltip «deslizar» al hover o tap. El tap TAMBIÉN
+               * recorre la fila hasta el final (demostración del gesto; con
+               * `prefers-reduced-motion` el salto es instantáneo) y si ya está
+               * al final regresa al inicio. El Tooltip es controlado porque el
+               * hover de Base UI es solo-mouse: el `onPointerDown` del trigger
+               * abre en el tap táctil y el toque fuera (dismiss) lo cierra. La
+               * capa es `pointer-events-none` y solo el chevron recibe toques,
+               * así el resto de la fila sigue desplazándose con el gesto.
+               */}
+              <div className="pointer-events-none absolute inset-y-0 right-0 z-10 flex items-center">
+                <Tooltip
+                  open={swipeHintOpen}
+                  onOpenChange={setSwipeHintOpen}
+                >
+                  <TooltipTrigger
+                    closeOnClick={false}
+                    render={
+                      <button
+                        type="button"
+                        aria-label="Más filtros hacia la derecha"
+                        onPointerDown={runSwipeHint}
+                        className="pointer-events-auto flex h-full cursor-default items-center bg-gradient-to-l from-background via-background/70 to-transparent pr-0.5 pl-5 text-muted-foreground/60"
+                      />
+                    }
+                  >
+                    <ChevronRightIcon aria-hidden="true" className="size-4" />
+                  </TooltipTrigger>
+                  <TooltipContent>deslizar</TooltipContent>
+                </Tooltip>
+              </div>
             </div>
             {/*
              * Renglón 2: el stack de filtros creados. Cada chip viaja con su
@@ -2028,6 +2114,11 @@ export function ClientesAccordion({
                   <span className="truncate">
                     vence {formatFlujoDate(client.expiresAt)}
                   </span>
+                  {resellerOf(client) ? (
+                    <span className="truncate">
+                      distribuidor: {resellerOf(client)}
+                    </span>
+                  ) : null}
                 </div>
               </AccordionContent>
             </AccordionItem>
