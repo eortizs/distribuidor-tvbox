@@ -2116,7 +2116,7 @@ export function ClientesAccordion({
                   </span>
                   {resellerOf(client) ? (
                     <span className="truncate">
-                      distribuidor: {resellerOf(client)}
+                      socio: {resellerOf(client)}
                     </span>
                   ) : null}
                 </div>
