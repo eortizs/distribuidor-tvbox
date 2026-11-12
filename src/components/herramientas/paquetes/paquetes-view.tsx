@@ -701,6 +701,12 @@ export function PaquetesView({
         setPayError(
           `La renovación volvió a fallar (orden ${couponRetryOrderId.slice(0, 8)}…).${result.error ? ` ${result.error}` : " Quedó registrada para revisión; inténtalo de nuevo en unos minutos."}`
         )
+      } else if (result.status === "paid") {
+        // El panel sigue lento: el reintento quedó agendado y el servidor lo
+        // ejecuta solo con backoff; la campana trae el resultado final.
+        setPayError(
+          "El panel de licencias sigue lento: la renovación quedó en curso con reintentos automáticos. La campana te avisará el resultado en unos minutos."
+        )
       } else {
         setPurchaseOpen(false)
         toast.success("Renovación aplicada", {

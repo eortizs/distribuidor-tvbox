@@ -613,6 +613,10 @@ export function AbonarSaldoView({
         setPayError(
           `El abono volvió a fallar (orden ${couponRetryOrderId.slice(0, 8)}…). Quedó registrada para revisión; inténtalo de nuevo en unos minutos o contacta al administrador.`
         )
+      } else if (result.status === "paid") {
+        setPayError(
+          "La acreditación sigue en curso con reintentos automáticos. La campana te avisará el resultado en unos minutos."
+        )
       } else {
         closeCheckout()
         toast.success("Abono aplicado", {

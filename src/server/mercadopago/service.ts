@@ -67,6 +67,13 @@ export interface MpOrderRow {
      * guardado en caché) sube a 2 → `mp-<id>-r2`, etc.
      */
     renewal_key_attempts: number
+    /**
+     * Reintentos automáticos ya agendados tras fallos transitorios del panel
+     * (timeout, red, cooldown). El reintento manual del admin los reinicia.
+     */
+    renewal_retry_count: number
+    /** Cuándo toca el próximo reintento automático (NULL = sin pendiente). */
+    renewal_next_retry_at: string | null
    error: string | null
    renewed_at: string | null
    refunded_at: string | null
@@ -153,6 +160,76 @@ const RENEWAL_VERIFY_READ_TIMEOUT_MS = 45_000
  * pide revisión del administrador en lugar de quemar claves infinitas.
  */
 const RENEWAL_KEY_MAX_ATTEMPTS = 4
+
+/**
+ * Backoff de los reintentos automáticos tras un fallo TRANSITORIO del panel
+ * (timeout, red, 5xx, cooldown post-éxito, verificación imposible): el pago
+ * ya está confirmado, así que el cumplimiento se reintenta solo en lugar de
+ * quemar `renewal_failed` a la primera. La orden permanece en `paid` —el
+ * overlay del comprador sigue en «renovación en curso»— y solo al agotar
+ * este presupuesto (o ante un fallo permanente) cae a `renewal_failed` con
+ * su notificación. Ventana total ~14 min, dentro de la paciencia del
+ * sondeo del overlay (que no expira) y del aviso de demora (90 s).
+ */
+const RENEWAL_RETRY_DELAYS_MS = [60_000, 180_000, 600_000]
+/** Techo del delay agendado (respeta el Retry-After del panel sin esperar horas). */
+const RENEWAL_RETRY_MAX_DELAY_MS = 15 * 60_000
+
+/**
+ * Códigos del panel cuyo fallo se recupera solo esperando: timeout/red,
+ * límites, 5xx y el rechazo por cooldown (operación reciente del mismo
+ * usuario). Los de configuración o permisos (`not_configured`,
+ * `unauthorized`, `forbidden`, 4xx de datos) son permanentes: reintentar no
+ * los arregla y toca revisión del admin.
+ */
+const TRANSIENT_FLUJO_CODES = new Set([
+  "timeout",
+  "network_error",
+  "rate_limited",
+  "service_unavailable",
+  "renewal_timeout",
+  "renewal_rejected",
+  "upstream_error",
+])
+
+/** Ídem para errores propios del motor de pagos durante el cumplimiento. */
+const TRANSIENT_MP_CODES = new Set([
+  "renewal_unverifiable",
+  "renewal_not_applied",
+  "rate_limited",
+  "upstream_error",
+])
+
+function isTransientRenewalFailure(error: unknown): boolean {
+  if (error instanceof FlujoApiError) {
+    return TRANSIENT_FLUJO_CODES.has(error.code) || error.status >= 500
+  }
+  if (error instanceof MercadoPagoError) {
+    return TRANSIENT_MP_CODES.has(error.code)
+  }
+  // Infra no traducida (p. ej. la base caída a mitad del intento): reintentar
+  // es barato e idempotente por la clave determinista. Si el fallo es otro,
+  // el presupuesto se agota y la orden termina en `renewal_failed` como hoy.
+  return true
+}
+
+/**
+ * Delay del próximo reintento: el backoff base, salvo que el panel haya
+ * dicho cuánto esperar (`Retry-After` o el cooldown restante impreso en el
+ * rechazo) — entonces manda esa espera (margen de 10 s), con techo.
+ */
+function renewalRetryDelayMs(baseMs: number, error: unknown): number {
+  let hintMs = 0
+  if (error instanceof FlujoApiError) {
+    if (error.retryAfter !== null && error.retryAfter > 0) {
+      hintMs = error.retryAfter * 1000 + 10_000
+    } else {
+      const cooldown = /cooldown post-exito (\d+)s/i.exec(error.message)
+      if (cooldown) hintMs = Number(cooldown[1]) * 1000 + 10_000
+    }
+  }
+  return Math.min(Math.max(baseMs, hintMs), RENEWAL_RETRY_MAX_DELAY_MS)
+}
 
 /**
  * Clave de idempotencia de la renovación según el contador de la orden.
@@ -278,6 +355,17 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
       row.renewal_key_attempts >= 1
         ? row.renewal_key_attempts
         : 1,
+    renewal_retry_count:
+      typeof row.renewal_retry_count === "number" &&
+      Number.isInteger(row.renewal_retry_count) &&
+      row.renewal_retry_count >= 0
+        ? row.renewal_retry_count
+        : 0,
+    renewal_next_retry_at:
+      row.renewal_next_retry_at === null ||
+      row.renewal_next_retry_at === undefined
+        ? null
+        : new Date(row.renewal_next_retry_at as string).toISOString(),
     error: row.error === null ? null : String(row.error),
     renewed_at:
       row.renewed_at === null ? null : new Date(row.renewed_at as string).toISOString(),
@@ -501,6 +589,12 @@ export type PaymentOutcome =
   | "in_process"
   | "already_processed"
   | "ignored"
+  /**
+   * Fallo transitorio del panel con el pago ya confirmado: se agendó un
+   * reintento automático (la orden permanece `paid`/`renewal_failed` y el
+   * scheduler lo ejecuta con backoff).
+   */
+  | "retry_scheduled"
 
 /**
  * Vencimiento original de la licencia para verificar la renovación: se lee
@@ -741,6 +835,7 @@ async function runOrderRenewal(
       `UPDATE mp_orders
           SET status = 'renewed', renewed_at = now(),
               renewal_verified_expires_at = $2,
+              renewal_next_retry_at = NULL,
               error = NULL, updated_at = now()
         WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
       [order.id, verification.verifiedAt]
@@ -824,10 +919,60 @@ async function runOrderRenewal(
         )
     }
 
+    // Fallo transitorio con presupuesto restante: agenda el reintento
+    // automático y NO degrada la orden. El comprador ya pagó; el overlay
+    // sigue sondeando la orden `paid` («renovación en curso») y el scheduler
+    // (src/server/mercadopago/renewal-scheduler.ts) ejecuta el intento a la
+    // hora agendada con la misma clave determinista — sin meses duplicados.
+    // Si la agenda no prospera (la orden cambió de estado o el contador ya
+    // avanzó por otra vía), cae al sellado `renewal_failed` de abajo.
+    if (
+      order.renewal_retry_count < RENEWAL_RETRY_DELAYS_MS.length &&
+      isTransientRenewalFailure(error)
+    ) {
+      const delayMs = renewalRetryDelayMs(
+        RENEWAL_RETRY_DELAYS_MS[order.renewal_retry_count],
+        error
+      )
+      const scheduled = await pool
+        .query(
+          `UPDATE mp_orders
+              SET renewal_retry_count = renewal_retry_count + 1,
+                  renewal_next_retry_at =
+                    now() + ($2::double precision * interval '1 second'),
+                  error = $3, updated_at = now()
+            WHERE id = $1 AND status IN ('paid', 'renewal_failed')
+              AND renewal_retry_count = $4`,
+          [
+            order.id,
+            delayMs / 1000,
+            message.slice(0, 500),
+            order.renewal_retry_count,
+          ]
+        )
+        .catch((scheduleError: unknown) => {
+          logError("schedule_renewal_retry", scheduleError)
+          return null
+        })
+      if (scheduled !== null && (scheduled.rowCount ?? 0) > 0) {
+        log("mercadopago.payment", {
+          order_id: order.id,
+          payment_id: paymentId,
+          user_name: order.user_name,
+          outcome: "retry_scheduled",
+          attempt: order.renewal_retry_count + 1,
+          retry_in_ms: delayMs,
+          reason: message.slice(0, 300),
+        })
+        return "retry_scheduled"
+      }
+    }
+
     const failedClaim = await pool
       .query(
         `UPDATE mp_orders
-            SET status = 'renewal_failed', error = $2, updated_at = now()
+            SET status = 'renewal_failed', error = $2,
+                renewal_next_retry_at = NULL, updated_at = now()
           WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
         [order.id, message.slice(0, 500)]
       )
@@ -1092,6 +1237,23 @@ export async function retryOrderRenewal(orderId: string): Promise<MpOrderRow> {
     )
   }
 
+  // Reintento manual: el presupuesto de reintentos automáticos se renueva —
+  // un fallo transitorio durante este intento vuelve a agendarse solo en
+  // lugar de rebotar al `renewal_failed` que el admin acaba de intervenir.
+  await pool
+    .query(
+      `UPDATE mp_orders
+          SET renewal_retry_count = 0, renewal_next_retry_at = NULL,
+              updated_at = now()
+        WHERE id = $1 AND status IN ('paid', 'renewal_failed')`,
+      [order.id]
+    )
+    .catch((resetError: unknown) =>
+      logError(`reset_renewal_retries_${order.id}`, resetError)
+    )
+  order.renewal_retry_count = 0
+  order.renewal_next_retry_at = null
+
   const outcome = await attemptOrderRenewal(
     order,
     order.payment_id === null ? null : String(order.payment_id)
@@ -1105,6 +1267,58 @@ export async function retryOrderRenewal(orderId: string): Promise<MpOrderRow> {
 
   const fresh = await getMpOrder(order.id)
   return fresh ?? order
+}
+
+/* -------------------------------------------------------------------------- */
+/*                    Scheduler de cumplimiento de renovaciones                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Órdenes cuyo cumplimiento toca ejecutar ya:
+ * - Reintentos automáticos vencidos (fallo transitorio del panel agendado;
+ *   en `paid` normalmente, o `renewal_failed` re-intentado).
+ * - Órdenes `paid` varadas (un crash o deploy cortó el proceso entre el
+ *   cobro y la renovación): mismo margen que la conciliación por lectura.
+ *
+ * El cerrojo por orden dentro de `attemptOrderRenewal` deduplica contra
+ * webhook, conciliación por lectura y reintento admin en curso.
+ */
+export async function listRenewalDueOrders(limit = 5): Promise<MpOrderRow[]> {
+  const result = await pool.query(
+    `SELECT * FROM mp_orders
+      WHERE (status = 'paid' AND (
+              (renewal_next_retry_at IS NOT NULL AND renewal_next_retry_at <= now())
+           OR updated_at <= now() - ($1::double precision * interval '1 second')
+            ))
+         OR (status = 'renewal_failed'
+             AND renewal_next_retry_at IS NOT NULL
+             AND renewal_next_retry_at <= now())
+      ORDER BY renewal_next_retry_at ASC NULLS LAST, updated_at ASC
+      LIMIT $2`,
+    [STUCK_PAID_AFTER_MS / 1000, limit]
+  )
+  return result.rows.map((row) => parseRow(row))
+}
+
+/**
+ * Una pasada del scheduler: ejecuta el cumplimiento vencido, secuencial a
+ * propósito (el panel es lento; sin stampede). Cada intento exitoso sella
+ * `renewed`; uno transitorio re-agenda con backoff; uno permanente (o con
+ * presupuesto agotado) sella `renewal_failed` y notifica como hoy.
+ */
+export async function renewalSchedulerTick(): Promise<number> {
+  const orders = await listRenewalDueOrders()
+  for (const order of orders) {
+    try {
+      await attemptOrderRenewal(
+        order,
+        order.payment_id === null ? null : String(order.payment_id)
+      )
+    } catch (error) {
+      logError(`renewal_scheduler_${order.id}`, error)
+    }
+  }
+  return orders.length
 }
 
 /* -------------------------------------------------------------------------- */

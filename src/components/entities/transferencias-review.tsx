@@ -174,6 +174,11 @@ export function TransferenciasReview({
           toast.success("Abono aplicado", {
             description: `${order.user_name} · ${formatMxn(order.amount)} acreditados en su saldo.`,
           })
+        } else if (result.status === "paid") {
+          toast.info("Transferencia aprobada", {
+            description:
+              "El panel está lento: la renovación quedó en curso y el servidor la reintenta sola. El resultado llegará a la campana.",
+          })
         } else if (result.status === "renewal_failed") {
           toast.error("El pago se aprobó pero la renovación falló", {
             description: `Reintenta la renovación de la orden ${order.id}.`,
