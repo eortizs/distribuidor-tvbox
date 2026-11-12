@@ -119,57 +119,54 @@
  *   (`renewal_failed`) avisa para que el admin la reintente;
  *   `rejected`/`cancelled` informa que no hubo cargo.
  *
- * La pantalla compone además la barra de **filtros** ReUI (`filters` en
- * variante básica, copia en español del Lab) sobre el listado ya descargado:
- * Estado como selección, Distribuidor con la lista real de resellers del panel
- * (más "Sin distribuidor"), y Días para vencer con operadores numéricos (igual,
- * comparaciones y rango) y vacío para "sin dato"; toda regla de días excluye
- * a los clientes vencidos. La barra se compone por
- * piezas (`children` de `Filters` con `FilterChip` + `FiltersBuilder`) para
- * intercalar, tras cada filtro aplicado, un **chip independiente con el
- * contador de instancias** que arroja esa condición, calculado sobre el
- * listado cargado; las opciones del menú llevan además el conteo como
- * subtítulo (`description`). Los conteos van **en cascada**: la primera
- * regla cuenta sobre el listado completo y cada siguiente sobre el
- * resultado de las anteriores (los datos locales que dejó el filtro previo).
+ * La pantalla compone además la **barra de filtros** sobre el listado ya
+ * descargado, en **selección única**: las vistas preconfiguradas y los
+ * filtros guardados son excluyentes entre sí (se combinaban con AND y
+ * podían contradecirse — «Vencido» + «estado es Activo» = lista vacía—) y
+ * la búsqueda se aplica encima de la que esté activa. El matching de
+ * reglas vive en `matchesFilterRule` (`src/components/lab/filter-utils.ts`,
+ * compartido con el Lab) y toda regla de «días para vencer» excluye a los
+ * clientes vencidos, aunque el operador numérico los incluyera por sus días
+ * negativos.
  *
- * Antes de los chips, la barra abre con **vistas preconfiguradas**
- * (ToggleGroup outline, radio fijo), cada una con su contador: «Todos» —
- * limpia también los filtros manuales —, «Por vencer» (regla fija hardcoded
- * de menos de 3 días solo sobre clientes vigentes), «Activo» y «Inactivo»
- * (parten el listado por el estado del semáforo: inactivo = todo lo que no
- * está activo). Las reglas fijas viven fuera de la consulta editable para
- * que el operador no pueda desconfigurarlas. La vista activa se pinta con
- * el foreground del tema (negro en claro, blanco en oscuro). Junto a las
- * vistas va el interruptor **«Agrupar por estado»** (independiente del radio
- * de vistas, combina con cualquiera): activado, el listado se parte en dos
- * secciones con encabezado y contador — «Activo» (semáforo en activo) e
- * «Inactivo» (todo lo demás: vencidos, pendientes y pruebas) — calculadas
- * sobre el resultado de la vista, los filtros y la búsqueda ya aplicados; las
- * secciones vacías se omiten. Las vistas, el interruptor y el
- * botón «Añadir filtro» — un círculo «+» con el mismo fondo del tema — van en
- * el renglón superior, desplazable en horizontal con el scrollbar oculto;
- * un chevron gris flotante en el margen derecho solo sugiere que la fila
- * continúa: el tooltip «deslizar» aparece al hover o tap y el tap además
- * recorre la fila hasta el final para demostrar el gesto.
- * El picker abre con el título «Crear filtro», sin buscador de atributos, y
- * lista los campos como «por estado», «por distribuidor» y «por días para
- * vencer» (las etiquetas leen el chip como una frase). Los chips se
- * redondean a cápsula y la búsqueda lleva icono de lupa (InputGroup con
- * addon inicial).
+ * La barra abre con **vistas preconfiguradas** (ToggleGroup outline, radio
+ * fijo), cada una con su contador: «Todos» — deja el listado sin condiciones
+ * de ningún tipo —, «Por vencer» (regla fija hardcoded de menos de 3 días
+ * solo sobre clientes vigentes), «Activo» y «Vencido» (parten el
+ * listado por el estado del semáforo). Elegir una vista suelta el filtro
+ * guardado activo. Las reglas fijas viven fuera de las
+ * reglas del usuario, para que el operador no pueda desconfigurarlas; la
+ * vista activa se pinta con el foreground del tema (negro en claro, blanco
+ * en oscuro).
  *
- * Los **filtros creados** bajan a su propio renglón, debajo de las vistas:
- * cada chip viaja con su contador en un paquete indivisible y el contenedor
- * envuelve (`flex-wrap`), de modo que al no caber el filtro salta al renglón
- * siguiente y la pila crece hacia abajo — siempre legible, sin escaparse en
- * el scroll horizontal. El renglón solo existe mientras haya filtros.
- *
- * Los filtros creados son **persistentes**: cada cambio de consulta se
- * guarda en localStorage (`clientes.filtros.v1`) y al recargar la página se
- * restaura el árbol guardado — se validan la forma y los campos (una regla
- * de un campo que ya no existe en la barra se suelta) y los ids se
- * reasignan para no chocar con la fábrica de ids del nuevo montaje. Borrar
- * los filtros («Todos» o la papelera del chip) también se guarda.
+ * Después van los **filtros compuestos guardados en la cuenta** del
+ * usuario: un chip por filtro (nombre + contador del resultado sobre el
+ * listado completo; la cápsula es un botón partido — aplicar + menú
+ * settings-2 con Editar/Borrar integrado en ella) que al pulsarse
+ * aplica su stack de reglas y su modo de agrupación, soltando la vista
+ * preconfigurada activa (selección única); pulsarlo de nuevo lo suelta y
+ * regresa a «Todos». Las reglas del filtro
+ * activo bajan a su propio renglón como píldoras de solo lectura con conteo
+ * en cascada. El botón «+» abre un **bottom sheet de creación**: nombre,
+ * stack de reglas (campo → operador → valor, con el conteo como subtítulo
+ * de las opciones y número para días), «Agrupar por» (ninguno/estado/socio,
+ * el socio solo admin) y vista previa en vivo de cuántos clientes
+ * coinciden; al guardar (POST /api/clientes/filters, tabla
+ * `client_saved_filters`) el filtro queda en la cuenta y aplicado. La
+ * agrupación del listado vive SOLO en los filtros guardados: no hay chips
+ * de agrupación sueltos (los vio el builder). El render agrupado produce un
+ * arreglo plano (encabezados con key `hdr-<grupo>` + filas con su
+ * `client.id` intacta) para que alternar solo monte los encabezados y
+ * reutilice las filas vivas. La validación de la carga útil vive en
+ * `src/lib/client-filters.ts` y la comparten el builder y el servidor
+ * (422/409). Las vistas, los filtros guardados y el «+» van en el renglón
+ * superior,
+ * desplazable en horizontal con el scrollbar oculto; un chevron gris
+ * flotante en el margen derecho solo sugiere que la fila continúa: el
+ * tooltip «deslizar» aparece al hover o tap y el tap además recorre la fila
+ * hasta el final para demostrar el gesto. Con perfil distribuidor el
+ * builder omite el campo Distribuidor y la opción Socio (todas las filas
+ * comparten el mismo).
  *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario,
@@ -200,7 +197,6 @@ import {
   CircleCheckIcon,
   CopyIcon,
   FileTextIcon,
-  GroupIcon,
   HashIcon,
   ImageIcon,
   LandmarkIcon,
@@ -215,6 +211,9 @@ import {
   XIcon,
   ShoppingCartPlusIcon,
   TriangleAlertIcon,
+  Settings2Icon,
+  PencilIcon,
+  Trash2Icon,
 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -293,9 +292,20 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Filters } from "@/components/reui/filters/filters"
-import { FilterChip } from "@/components/reui/filters/filters-chip"
-import { FiltersBuilder } from "@/components/reui/filters/filters-builder"
+import { Input } from "@/components/ui/input"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import {
   Timeline,
   TimelineContent,
@@ -305,25 +315,27 @@ import {
   TimelineSeparator,
   TimelineTitle,
 } from "@/components/reui/timeline"
-import {
-  clearFilterQuery,
-  createFilterQuery,
-  flattenFilterRules,
-  isFilterRuleComplete,
-} from "@/components/reui/filters/filters-query"
-import type {
-  FilterField,
-  FilterNode,
-  FilterOption,
-  FilterQuery,
-} from "@/components/reui/filters/filters-types"
-import type { FilterOperatorLabels } from "@/components/reui/filters/filters-operators"
 import { formatMxn } from "@/lib/finanzas"
 import {
   formatFlujoDate,
   type FlujoClient,
 } from "@/lib/flujotv"
 import { mpProcessingFeeMxn, mpTotalMxn } from "@/lib/mp-pricing"
+import {
+  buildClientFilterQuery,
+  CLIENT_FILTER_ESTADO_VALUES,
+  CLIENT_FILTER_MAX_RULES,
+  CLIENT_FILTER_NAME_MAX,
+  CLIENT_FILTER_OPERATORS,
+  clientEstadoLabel,
+  clientFilterRuleText,
+  isClientFilterRuleComplete,
+  normalizeClientFilterPayload,
+  type ClientFilterField,
+  type ClientFilterGroupBy,
+  type ClientFilterRule,
+  type ClientSavedFilter,
+} from "@/lib/client-filters"
 
 import {
   fetchFlujoClient,
@@ -348,7 +360,6 @@ import {
   applyFilterQuery,
   matchesFilterRule,
 } from "@/components/lab/filter-utils"
-import { LAB_FILTER_LABELS } from "@/components/lab/lab-i18n"
 
 type FetchState = "loading" | "success" | "error"
 
@@ -578,113 +589,6 @@ function optionCount(count: number | undefined): string | undefined {
   return `${count} ${count === 1 ? "cliente" : "clientes"}`
 }
 
-/** Etiquetas en español para los operadores del catálogo de filtros. */
-const CLIENT_FILTER_OPERATOR_LABELS: FilterOperatorLabels = {
-  contains: "contiene",
-  not_contains: "no contiene",
-  starts_with: "empieza con",
-  ends_with: "termina con",
-  is: "es",
-  is_not: "no es",
-  is_any_of: "es alguno de",
-  is_none_of: "no es ninguno de",
-  eq: "es igual a",
-  neq: "no es igual a",
-  gt: "mayor que",
-  gte: "mayor o igual que",
-  lt: "menor que",
-  lte: "menor o igual que",
-  between: "entre",
-  not_between: "fuera de",
-  empty: "está vacío",
-  not_empty: "no está vacío",
-}
-
-/**
- * Clave de localStorage donde viven los filtros creados de `/clientes`: al
- * recargar la página se restauran tal y como quedaron (los valores son texto
- * y números JSON, así que el árbol viaja sin transformación).
- */
-const FILTERS_STORAGE_KEY = "clientes.filtros.v1"
-
-/**
- * Reconstruye un nodo guardado: valida la forma del árbol, descarta las
- * reglas cuyo campo ya no existe en la barra (p. ej. «por distribuidor» bajo
- * alcance de distribuidor) y reasigna ids frescos — la fábrica de ids de
- * `Filters` arranca en el mismo número en cada montaje, así que conservar los
- * ids guardados chocaría con el de la primera regla nueva. `null` = nodo
- * ilegible, se suelta.
- */
-function reviveFilterNode(
-  node: unknown,
-  allowed: Set<string>,
-  nextId: () => string
-): FilterNode | null {
-  if (!node || typeof node !== "object") return null
-  const raw = node as {
-    type?: unknown
-    path?: unknown
-    operator?: unknown
-    value?: unknown
-    negated?: unknown
-    combinator?: unknown
-    rules?: unknown
-  }
-  if (raw.type === "rule") {
-    const path = Array.isArray(raw.path) ? raw.path.map(String) : []
-    if (path.length === 0 || !allowed.has(path[0])) return null
-    if (typeof raw.operator !== "string") return null
-    return {
-      id: nextId(),
-      type: "rule",
-      path,
-      operator: raw.operator,
-      value: raw.value,
-      ...(raw.negated === true ? { negated: true } : {}),
-    }
-  }
-  if (raw.type === "group") {
-    const rules = Array.isArray(raw.rules)
-      ? raw.rules
-          .map((child) => reviveFilterNode(child, allowed, nextId))
-          .filter((child): child is FilterNode => child !== null)
-      : []
-    return {
-      id: nextId(),
-      type: "group",
-      combinator: raw.combinator === "or" ? "or" : "and",
-      rules,
-    }
-  }
-  return null
-}
-
-/**
- * Consulta almacenada → consulta viva. Devuelve null si no hay nada legible
- * o si no queda ninguna regla de un campo conocido: en ese caso se parte sin
- * filtros y el almacenamiento se actualiza con el siguiente cambio real.
- */
-function reviveFilterQuery(
-  stored: unknown,
-  allowed: Set<string>
-): FilterQuery | null {
-  if (!stored || typeof stored !== "object") return null
-  const root = stored as {
-    type?: unknown
-    combinator?: unknown
-    rules?: unknown
-  }
-  if (root.type !== "group" || !Array.isArray(root.rules)) return null
-  let seq = 0
-  const nextId = () => `restored-${(seq += 1)}`
-  const rules = root.rules
-    .map((child) => reviveFilterNode(child, allowed, nextId))
-    .filter((child): child is FilterNode => child !== null)
-  return rules.length > 0
-    ? createFilterQuery(rules, root.combinator === "or" ? "or" : "and")
-    : null
-}
-
 /**
  * Aviso de retorno del checkout de Mercado Pago. El estado de display se
  * DERIVA: mientras hay orden de retorno sin resultado terminal, es
@@ -705,6 +609,8 @@ type PollStatus =
 interface ClientesAccordionProps {
   /** Reseller ligado a la cuenta (perfil distribuidor); null = sin alcance. */
   distribuidorName?: string | null
+  /** Perfil admin: habilita la opción Socio del «Agrupar por» y el campo Distribuidor. */
+  isAdmin?: boolean
   /** Precio MXN del mes de renovación (del .env del servidor); null = sin config. */
   priceMxn?: number | null
   /** Id de la orden de pago en el retorno del checkout (back_urls). */
@@ -728,6 +634,7 @@ interface ClientesAccordionProps {
 
 export function ClientesAccordion({
   distribuidorName = null,
+  isAdmin = false,
   priceMxn = null,
   returnOrder = null,
   returnState = null,
@@ -744,11 +651,29 @@ export function ClientesAccordion({
   const [searchInput, setSearchInput] = useState("")
   const [preset, setPreset] = useState<ClientPreset>("todos")
   /**
-   * Agrupar por estado (chip interruptor junto a las vistas): activado, el
-   * listado se parte en dos secciones con encabezado — «Activo» e «Inactivo».
+   * Agrupación viva del listado: «ninguno» (plano), «estado» (Activo /
+   * Inactivo) o «socio» (una sección por distribuidor, solo admin). La fija
+   * exclusivamente el filtro guardado activo — no hay chips sueltos.
    */
-  const [groupByStatus, setGroupByStatus] = useState(false)
-  const [query, setQuery] = useState<FilterQuery>(() => createFilterQuery())
+  const [grouping, setGrouping] = useState<ClientFilterGroupBy>("ninguno")
+  /**
+   * Filtros compuestos guardados en la cuenta del usuario (nombre + stack de
+   * reglas + modo de agrupación), servidos por /api/clientes/filters.
+   */
+  const [savedFilters, setSavedFilters] = useState<ClientSavedFilter[]>([])
+  /** Filtro guardado aplicado; null = vista sin filtro guardado. */
+  const [activeFilterId, setActiveFilterId] = useState<string | null>(null)
+  /** Bottom sheet de creación: nombre, stack de reglas y agrupación. */
+  const [builderOpen, setBuilderOpen] = useState(false)
+  /** Id del filtro que se está editando; null = el sheet crea uno nuevo. */
+  const [editingFilterId, setEditingFilterId] = useState<string | null>(null)
+  const [draftName, setDraftName] = useState("")
+  const [draftGroupBy, setDraftGroupBy] = useState<ClientFilterGroupBy>("ninguno")
+  const [draftRules, setDraftRules] = useState<ClientFilterRule[]>([])
+  const [savingFilter, setSavingFilter] = useState(false)
+  /** Filtro guardado pendiente de confirmar su eliminación. */
+  const [deleteTarget, setDeleteTarget] = useState<ClientSavedFilter | null>(null)
+  const [deletingFilter, setDeletingFilter] = useState(false)
   const [reloadCount, setReloadCount] = useState(0)
   const [syncOpen, setSyncOpen] = useState(false)
   const [syncing, setSyncing] = useState(false)
@@ -855,57 +780,27 @@ export function ClientesAccordion({
   const conceptRequestedKey = useRef("")
 
   /**
-   * Consulta con la que montó el componente: el efecto de persistencia la usa
-   * para no escribir nada mientras el estado siga sin cambios — así la
-   * restauración de abajo nunca pisa lo guardado con una consulta vacía.
-   */
-  const initialQueryRef = useRef(query)
-
-  /**
-   * Restauración de los filtros creados en la visita anterior: localStorage
-   * sobrevive a la recarga, así que los chips reaparecen tal cual quedaron.
-   * Los campos admitidos dependen del alcance (el distribuidor no ve el filtro
-   * de Distribuidor); todo lo demás se suelta al restaurar. La lectura corre
-   * en un microtask — el primer pintado no espera al almacenamiento y la
-   * actualización no entra en cascada de forma sincrónica con el montaje — y
-   * solo aplica si la consulta sigue siendo la del primer render.
+   * Filtros compuestos guardados de la cuenta: se cargan al montar. Un fallo
+   * de red los deja en silencio (la lista aparece vacía y la creación avisará
+   * con toast si el problema persiste); los setState ocurren al resolver la
+   * petición, nunca en el cuerpo del efecto.
    */
   useEffect(() => {
-    void Promise.resolve().then(() => {
-      let stored: unknown = null
-      try {
-        stored = JSON.parse(
-          window.localStorage.getItem(FILTERS_STORAGE_KEY) ?? "null"
-        ) as unknown
-      } catch {
-        return
-      }
-      const allowed = new Set(
-        distribuidorName ? ["estado", "dias"] : ["estado", "reseller", "dias"]
+    fetch("/api/clientes/filters", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then(
+        (
+          json:
+            | { ok?: boolean; data?: ClientSavedFilter[] }
+            | null
+        ) => {
+          if (json?.ok && Array.isArray(json.data)) setSavedFilters(json.data)
+        }
       )
-      const revived = reviveFilterQuery(stored, allowed)
-      if (revived) {
-        setQuery((current) =>
-          current === initialQueryRef.current ? revived : current
-        )
-      }
-    })
-  }, [distribuidorName])
-
-  /**
-   * Persistencia de los filtros creados: cada cambio de consulta — chips
-   * nuevos, edición de valores y también el limpiado de «Todos» — se guarda
-   * para la próxima recarga. Mientras la consulta siga siendo la del primer
-   * render no hay nada nuevo que escribir.
-   */
-  useEffect(() => {
-    if (query === initialQueryRef.current) return
-    try {
-      window.localStorage.setItem(FILTERS_STORAGE_KEY, JSON.stringify(query))
-    } catch {
-      // Cuota agotada o almacenamiento bloqueado: la sesión sigue en memoria.
-    }
-  }, [query])
+      .catch(() => {
+        // Sin filtros guardados legibles: la barra funciona igual.
+      })
+  }, [])
 
   /**
    * Restauración del bloqueo de renovación: si la pestaña se recargó o se
@@ -1584,8 +1479,13 @@ export function ClientesAccordion({
     return counts
   }, [clients, resellerOf])
 
-  /** Opciones de distribuidor: la lista real del panel, más "Sin distribuidor". */
-  const resellerOptions = useMemo<FilterOption[]>(
+  /**
+   * Opciones de distribuidor para el builder: la lista real del panel, más
+   * «Sin distribuidor» (valor vacío). El Select no usa la cadena vacía como
+   * valor de ítem, así que viaja con el centinela y se mapea al guardar.
+   */
+  const SIN_DISTRIBUIDOR_OPTION = "__sin_distribuidor__"
+  const resellerOptions = useMemo(
     () => [
       ...[...new Set(resellerNames)]
         .sort((a, b) => a.localeCompare(b, "es"))
@@ -1595,94 +1495,84 @@ export function ClientesAccordion({
           description: optionCount(resellerCounts.get(name)),
         })),
       {
-        value: "",
+        value: SIN_DISTRIBUIDOR_OPTION,
         label: "Sin distribuidor",
-        exclusive: true,
         description: optionCount(resellerCounts.get("")),
       },
     ],
     [resellerNames, resellerCounts]
   )
 
-  const filterFields = useMemo<FilterField[]>(() => {
-    const fields: FilterField[] = [
-      {
-        id: "estado",
-        label: "por estado",
-        type: "select",
-        options: (
-          [
-            { value: "activo", label: "Activo" },
-            { value: "vencido", label: "Vencido" },
-            { value: "pendiente", label: "Pendiente" },
-            { value: "prueba", label: "Prueba" },
-          ] as const
-        ).map((option) => ({
-          ...option,
-          description: optionCount(estadoCounts.get(option.value)),
-        })),
-      },
-    ]
-    // Con alcance de distribuidor todas las filas comparten el mismo
-    // reseller: el filtro no aporta nada y la lista de opciones del panel
-    // no le compete al perfil.
-    if (!distribuidorName) {
-      fields.push({
-        id: "reseller",
-        label: "por distribuidor",
-        type: "select",
-        options: resellerOptions,
-      })
-    }
-    fields.push({
-      id: "dias",
-      label: "por días para vencer",
-      type: "number",
-    })
-    return fields
-  }, [estadoCounts, resellerOptions, distribuidorName])
+  /** Filtro guardado aplicado (o null). */
+  const activeFilter =
+    savedFilters.find((filter) => filter.id === activeFilterId) ?? null
+
+  /** Accesores del motor de filtros sobre la fila de cliente. */
+  const filterAccessors = useMemo(
+    () => ({
+      estado: (row: FlujoClient) => row.statusLabel,
+      reseller: resellerOf,
+      dias: (row: FlujoClient) => row.daysRemaining,
+    }),
+    [resellerOf]
+  )
+
+  /** Las reglas del filtro activo como consulta del motor (grupo AND). */
+  const activeFilterQuery = useMemo(
+    () => (activeFilter ? buildClientFilterQuery(activeFilter.rules) : null),
+    [activeFilter]
+  )
 
   const filtered = useMemo(() => {
-    // El filtro «Días para vencer» solo considera clientes vigentes: cualquier
+    // El campo «días para vencer» solo considera clientes vigentes: cualquier
     // regla sobre días excluye a los vencidos, aunque el operador numérico
     // (p. ej. «menor que») los incluyera por sus días negativos.
-    const hasDiasRule = flattenFilterRules(query).some(
-      (rule) => rule.path[0] === "dias" && isFilterRuleComplete(rule)
-    )
+    const hasDiasRule =
+      activeFilter?.rules.some(
+        (rule) => rule.field === "dias" && isClientFilterRuleComplete(rule)
+      ) ?? false
     const eligible = hasDiasRule
       ? clients.filter((client) => client.statusLabel !== "vencido")
       : clients
-    // Vista preconfigurada: regla fija FUERA de la consulta editable, para
+    // Vista preconfigurada: regla fija FUERA de las reglas del usuario, para
     // que el operador no pueda desconfigurarla; «Por vencer» excluye vencidos.
     const withPreset =
       preset === "todos"
         ? eligible
         : eligible.filter((client) => matchesPreset(client, preset))
-    const byQuery = applyFilterQuery(withPreset, query, {
-      estado: (row) => row.statusLabel,
-      reseller: resellerOf,
-      dias: (row) => row.daysRemaining,
-    })
+    const byFilter = activeFilterQuery
+      ? applyFilterQuery(withPreset, activeFilterQuery, filterAccessors)
+      : withPreset
     const term = foldTerm(searchInput)
-    if (!term) return byQuery
-    return byQuery.filter(
+    if (!term) return byFilter
+    return byFilter.filter(
       (client) =>
         foldTerm(client.userName).includes(term) ||
         foldTerm(client.email ?? "").includes(term) ||
         foldTerm(clientName(client, clientNames)).includes(term)
     )
-  }, [clients, preset, query, searchInput, resellerOf, clientNames])
+  }, [
+    clients,
+    preset,
+    activeFilter,
+    activeFilterQuery,
+    filterAccessors,
+    searchInput,
+    clientNames,
+  ])
 
   const searching = searchInput.trim().length > 0
-  const hasFilters = query.rules.length > 0 || preset !== "todos"
-  const rules = useMemo(() => flattenFilterRules(query), [query])
+  const hasFilters =
+    (activeFilter?.rules.length ?? 0) > 0 ||
+    preset !== "todos" ||
+    grouping !== "ninguno"
 
   /**
    * Secciones de la agrupación por estado, calculadas sobre el listado ya
-   * filtrado (vista preconfigurada + consulta + búsqueda): «Activo» junta el
-   * semáforo en activo e «Inactivo» todo lo demás (vencidos, pendientes y
-   * pruebas). Las secciones sin clientes se omiten para no imprimir
-   * encabezados vacíos.
+   * filtrado (vista preconfigurada + filtro guardado + búsqueda): «Activo»
+   * junta el semáforo en activo e «Inactivo» todo lo demás (vencidos,
+   * pendientes y pruebas). Las secciones sin clientes se omiten para no
+   * imprimir encabezados vacíos.
    */
   const statusGroups = useMemo(
     () =>
@@ -1703,29 +1593,321 @@ export function ClientesAccordion({
     [filtered]
   )
 
-  /** Conteos en cascada: cada regla cuenta sobre el resultado de la anterior. */
-  const ruleCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-    let rows = clients
-    for (const rule of rules) {
-      const accessor =
-        rule.path[0] === "estado"
-          ? (row: FlujoClient) => row.statusLabel
-          : rule.path[0] === "reseller"
-            ? resellerOf
-            : rule.path[0] === "dias"
-              ? (row: FlujoClient) => row.daysRemaining
-              : null
-      if (!accessor) continue
-      rows = rows.filter((row) =>
-        rule.path[0] === "dias" && row.statusLabel === "vencido"
-          ? false
-          : matchesFilterRule(rule, row, accessor)
+  /**
+   * Secciones de la agrupación por socio (solo admin), sobre el listado ya
+   * filtrado: una sección por distribuidor asignado (`resellerOf`, la misma
+   * fuente del campo Distribuidor del builder), ordenadas alfabéticamente y
+   * con los clientes sin socio al final bajo «Sin socio». Cada sección lleva
+   * el par pastel estable del socio (la paleta de avatares, sembrada por su
+   * nombre) para el punto del encabezado. Las secciones vacías no existen:
+   * solo se crean con clientes.
+   */
+  const socioGroups = useMemo(() => {
+    const byReseller = new Map<string, FlujoClient[]>()
+    for (const client of filtered) {
+      const reseller = resellerOf(client)
+      const bucket = byReseller.get(reseller)
+      if (bucket) bucket.push(client)
+      else byReseller.set(reseller, [client])
+    }
+    return [...byReseller.entries()]
+      .sort(([a], [b]) => {
+        if (!a) return 1
+        if (!b) return -1
+        return a.localeCompare(b, "es")
+      })
+      .map(([reseller, groupClients]) => ({
+        key: reseller || "sin-socio",
+        label: reseller || "Sin socio",
+        dotStyle: pastelAvatarStyle(reseller || "sin-socio"),
+        clients: groupClients,
+      }))
+  }, [filtered, resellerOf])
+
+  /**
+   * Conteo de un filtro sobre el listado completo (lo que muestra su chip):
+   * mismas reglas de elegibilidad que la vista (días excluye vencidos).
+   */
+  const countFilterMatches = useCallback(
+    (filter: ClientSavedFilter): number => {
+      const hasDiasRule = filter.rules.some(
+        (rule) => rule.field === "dias" && isClientFilterRuleComplete(rule)
       )
-      counts.set(rule.id, rows.length)
+      const rows = hasDiasRule
+        ? clients.filter((client) => client.statusLabel !== "vencido")
+        : clients
+      return applyFilterQuery(
+        rows,
+        buildClientFilterQuery(filter.rules),
+        filterAccessors
+      ).length
+    },
+    [clients, filterAccessors]
+  )
+
+  /** Contador por filtro guardado, para el chip de cada uno. */
+  const savedFilterCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const filter of savedFilters) {
+      counts.set(filter.id, countFilterMatches(filter))
     }
     return counts
-  }, [clients, rules, resellerOf])
+  }, [savedFilters, countFilterMatches])
+
+  /**
+   * Conteos en cascada de las reglas del filtro activo: la primera cuenta
+   * sobre el listado completo y cada siguiente sobre el resultado de la
+   * anterior (igual que los chips de la consulta efímera que sustituyeron).
+   */
+  const activeRuleCounts = useMemo(() => {
+    if (!activeFilter) return []
+    const counts: number[] = []
+    let rows = clients
+    activeFilter.rules.forEach((rule, index) => {
+      const accessor =
+        rule.field === "estado"
+          ? filterAccessors.estado
+          : rule.field === "reseller"
+            ? filterAccessors.reseller
+            : filterAccessors.dias
+      const engineRule = {
+        id: `rule-${index + 1}`,
+        type: "rule" as const,
+        path: [rule.field],
+        operator: rule.operator,
+        value: rule.value ?? undefined,
+      }
+      rows = rows.filter((row) =>
+        rule.field === "dias" && row.statusLabel === "vencido"
+          ? false
+          : matchesFilterRule(engineRule, row, accessor)
+      )
+      counts.push(rows.length)
+    })
+    return counts
+  }, [activeFilter, clients, filterAccessors])
+
+  /**
+   * Aplica (o suelta) un filtro guardado: al aplicarlo fija también su modo
+   * de agrupación — la única vía de agrupar el listado —, al soltarlo la
+   * agrupación vuelve a plana y la vista vuelve a «Todos».
+   *
+   * SELECCIÓN ÚNICA: las vistas preconfiguradas y los filtros guardados son
+   * excluyentes entre sí. Se combinaban con AND y podían contradecirse (vista
+   * «Vencido» + filtro con «estado es Activo» = lista vacía), así que aplicar
+   * un filtro suelta la vista activa y elegir una vista suelta el filtro.
+   */
+  const applySavedFilter = useCallback((filter: ClientSavedFilter | null) => {
+    setActiveFilterId(filter?.id ?? null)
+    setGrouping(filter?.groupBy ?? "ninguno")
+    if (filter) setPreset("todos")
+  }, [])
+
+  /** Abre el builder con borrón y cuenta nueva (modo creación). */
+  const openBuilder = useCallback(() => {
+    setEditingFilterId(null)
+    setDraftName("")
+    setDraftGroupBy("ninguno")
+    setDraftRules([])
+    setBuilderOpen(true)
+  }, [])
+
+  /**
+   * Abre el builder precargado con el filtro a editar (menú settings-2 del
+   * chip): mismo formulario, mismo guardado validado, pero PATCH sobre la
+   * fila existente en vez de POST.
+   */
+  const openEditFilter = useCallback((filter: ClientSavedFilter) => {
+    setEditingFilterId(filter.id)
+    setDraftName(filter.name)
+    setDraftGroupBy(filter.groupBy)
+    setDraftRules(filter.rules.map((rule) => ({ ...rule })))
+    setBuilderOpen(true)
+  }, [])
+
+  const closeBuilder = useCallback(() => {
+    if (savingFilter) return
+    setBuilderOpen(false)
+    setEditingFilterId(null)
+    setDraftName("")
+    setDraftGroupBy("ninguno")
+    setDraftRules([])
+  }, [savingFilter])
+
+  const addDraftRule = useCallback(() => {
+    setDraftRules((rules) =>
+      rules.length >= CLIENT_FILTER_MAX_RULES
+        ? rules
+        : [...rules, { field: "estado", operator: "is", value: null }]
+    )
+  }, [])
+
+  const removeDraftRule = useCallback((index: number) => {
+    setDraftRules((rules) => rules.filter((_, i) => i !== index))
+  }, [])
+
+  /** Cambia el campo de una regla: operador y valor vuelven al default limpio. */
+  const changeDraftRuleField = useCallback(
+    (index: number, field: ClientFilterField) => {
+      setDraftRules((rules) =>
+        rules.map((rule, i) =>
+          i === index
+            ? field === "dias"
+              ? { field, operator: "lt", value: null }
+              : { field, operator: "is", value: null }
+            : rule
+        )
+      )
+    },
+    []
+  )
+
+  const updateDraftRule = useCallback(
+    (index: number, patch: Partial<ClientFilterRule>) => {
+      setDraftRules((rules) =>
+        rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule))
+      )
+    },
+    []
+  )
+
+  /** Nombre válido y sin duplicados en la cuenta (el propio filtro editado no cuenta). */
+  const draftNameTrim = draftName.trim()
+  const draftNameDuplicated = savedFilters.some(
+    (filter) =>
+      filter.id !== editingFilterId &&
+      filter.name.trim().toLowerCase() === draftNameTrim.toLowerCase()
+  )
+  const draftRulesComplete = draftRules.every(isClientFilterRuleComplete)
+  const draftDoesSomething =
+    draftRules.length > 0 || draftGroupBy !== "ninguno"
+  const draftValid =
+    draftNameTrim.length >= 1 &&
+    draftNameTrim.length <= CLIENT_FILTER_NAME_MAX &&
+    !draftNameDuplicated &&
+    draftRulesComplete &&
+    draftDoesSomething
+
+  /** Vista previa en vivo: cuántos clientes del listado cargado coinciden. */
+  const draftPreview = useMemo(() => {
+    const hasDiasRule = draftRules.some(
+      (rule) => rule.field === "dias" && isClientFilterRuleComplete(rule)
+    )
+    const rows = hasDiasRule
+      ? clients.filter((client) => client.statusLabel !== "vencido")
+      : clients
+    return applyFilterQuery(
+      rows,
+      buildClientFilterQuery(draftRules),
+      filterAccessors
+    ).length
+  }, [draftRules, clients, filterAccessors])
+
+  /**
+   * Guarda el filtro en la cuenta y lo deja aplicado: POST para uno nuevo,
+   * PATCH cuando el sheet se abrió en modo edición (menú del chip).
+   */
+  const saveDraftFilter = useCallback(async () => {
+    const normalized = normalizeClientFilterPayload(
+      { name: draftName, groupBy: draftGroupBy, rules: draftRules },
+      { isAdmin }
+    )
+    if (!normalized.ok) {
+      toast.error(normalized.error)
+      return
+    }
+    const editing = editingFilterId !== null
+    setSavingFilter(true)
+    try {
+      const response = await fetch(
+        editing
+          ? `/api/clientes/filters/${encodeURIComponent(editingFilterId)}`
+          : "/api/clientes/filters",
+        {
+          method: editing ? "PATCH" : "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(normalized.value),
+        }
+      )
+      const json = (await response.json().catch(() => null)) as {
+        ok?: boolean
+        data?: ClientSavedFilter
+        error?: { message?: string }
+      } | null
+      if (!response.ok || !json?.ok || !json.data) {
+        toast.error(
+          json?.error?.message ??
+            (editing
+              ? "No se pudo actualizar el filtro"
+              : "No se pudo guardar el filtro")
+        )
+        return
+      }
+      const saved = json.data
+      setSavedFilters((current) =>
+        editing
+          ? current.map((filter) =>
+              filter.id === saved.id ? saved : filter
+            )
+          : [...current, saved]
+      )
+      // Aplicar también re-sincroniza la agrupación y suelta la vista: si el
+      // filtro editado estaba activo, la vista refleja el cambio al instante.
+      applySavedFilter(saved)
+      setBuilderOpen(false)
+      setEditingFilterId(null)
+      setDraftName("")
+      setDraftGroupBy("ninguno")
+      setDraftRules([])
+      toast.success(
+        editing
+          ? `Filtro «${saved.name}» actualizado`
+          : `Filtro «${saved.name}» guardado en tu cuenta`
+      )
+    } catch {
+      toast.error(
+        editing
+          ? "No se pudo actualizar el filtro"
+          : "No se pudo guardar el filtro"
+      )
+    } finally {
+      setSavingFilter(false)
+    }
+  }, [
+    draftName,
+    draftGroupBy,
+    draftRules,
+    isAdmin,
+    editingFilterId,
+    applySavedFilter,
+  ])
+
+  /** Elimina un filtro guardado (tras confirmar en el AlertDialog). */
+  const runDeleteFilter = useCallback(async () => {
+    const target = deleteTarget
+    if (!target) return
+    setDeletingFilter(true)
+    try {
+      const response = await fetch(
+        `/api/clientes/filters/${encodeURIComponent(target.id)}`,
+        { method: "DELETE" }
+      )
+      if (!response.ok) {
+        toast.error("No se pudo eliminar el filtro")
+        return
+      }
+      setSavedFilters((current) =>
+        current.filter((filter) => filter.id !== target.id)
+      )
+      if (activeFilterId === target.id) applySavedFilter(null)
+      setDeleteTarget(null)
+      toast.success(`Filtro «${target.name}» eliminado`)
+    } catch {
+      toast.error("No se pudo eliminar el filtro")
+    } finally {
+      setDeletingFilter(false)
+    }
+  }, [deleteTarget, activeFilterId, applySavedFilter])
 
   /**
    * Renglón de un cliente en el listado (fila plegable + panel de detalle).
@@ -1948,51 +2130,43 @@ export function ClientesAccordion({
       {canReviewTransfers ? <RefundsReview /> : null}
 
       {fetchState === "success" && clients.length > 0 ? (
-        <Filters
-          fields={filterFields}
-          query={query}
-          onQueryChange={setQuery}
-          labels={LAB_FILTER_LABELS}
-          operatorLabels={CLIENT_FILTER_OPERATOR_LABELS}
-          size="sm"
-        >
-          <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-2">
             {/*
-             * Renglón 1: las vistas preconfiguradas, el interruptor «Agrupar
-             * por estado» y el botón «Añadir filtro», en una sola fila
-             * desplazable en horizontal con el scrollbar oculto. El «+» se
-             * queda arriba: los filtros que crea bajan al renglón de abajo.
-             * El `pr-10` reserva espacio al final del desplazamiento para que
-             * el «+» quede fuera de la zona del chevron y no se esconda debajo
-             * de él. En el margen derecho flota un chevron gris, pista visual
-             * de que la fila continúa: al hover o tap muestra el tooltip
-             * «deslizar» y el tap además recorre la fila hasta el final (y de
-             * vuelta al inicio si ya está al final) para demostrar que se
-             * puede deslizar.
+             * Renglón 1: las vistas preconfiguradas, los filtros guardados de
+             * la cuenta y el botón «+» que abre el bottom sheet de creación,
+             * en una sola fila desplazable en horizontal con el scrollbar
+             * oculto. El `pr-10` reserva espacio al final del desplazamiento
+             * para que el «+» quede fuera de la zona del chevron y no se
+             * esconda debajo de él. En el margen derecho flota un chevron
+             * gris, pista visual de que la fila continúa: al hover o tap
+             * muestra el tooltip «deslizar» y el tap además recorre la fila
+             * hasta el final (y de vuelta al inicio si ya está al final) para
+             * demostrar que se puede deslizar.
              */}
             <div className="relative">
               <div
                 ref={filterRowRef}
                 role="toolbar"
-                aria-label={LAB_FILTER_LABELS.filtersLabel}
+                aria-label="Filtros de clientes"
                 className="flex flex-nowrap items-center gap-2 overflow-x-auto pr-10 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
               >
                 <ToggleGroup
                   variant="outline"
                   size="sm"
-                  value={[preset]}
+                  value={activeFilter ? [] : [preset]}
                   onValueChange={(groupValue) => {
                     // Radio fijo: volver a pulsar la vista activa no la suelta.
-                    // «Todos» además limpia los filtros manuales: la vista muestra
-                    // el listado completo sin condiciones.
+                    // SELECCIÓN ÚNICA con los filtros guardados: elegir una
+                    // vista suelta el filtro activo (se combinaban con AND y
+                    // podían contradecirse — «Vencido» + «estado es Activo» =
+                    // lista vacía—); «Todos» además deja el listado sin
+                    // condiciones de ningún tipo.
                     const next =
                       PRESET_ITEMS.find((item) =>
                         groupValue.includes(item.value)
                       )?.value ?? preset
                     setPreset(next)
-                    if (next === "todos") {
-                      setQuery((current) => clearFilterQuery(current))
-                    }
+                    applySavedFilter(null)
                   }}
                   aria-label="Vistas preconfiguradas de clientes"
                 >
@@ -2010,40 +2184,114 @@ export function ClientesAccordion({
                   ))}
                 </ToggleGroup>
                 {/*
-                 * «Agrupar por estado»: interruptor independiente de las
-                 * vistas (no entra en el radio del grupo, así que combina con
-                 * cualquier vista). Comparte la cápsula y el estilo de activo
-                 * de las vistas (`PRESET_ACTIVE_CLASS`) para leerse como parte
-                 * de la misma fila; activado, parte el listado en dos
-                 * secciones con encabezado — «Activo» e «Inactivo».
+                 * Filtros guardados de la cuenta: cada chip aplica su stack de
+                 * reglas y su modo de agrupación (la única vía de agrupar el
+                 * listado); el contador es el resultado sobre el listado
+                 * completo.
                  */}
-                <Toggle
-                  variant="outline"
-                  size="sm"
-                  pressed={groupByStatus}
-                  onPressedChange={setGroupByStatus}
-                  aria-label="Agrupar los clientes por estado"
-                  className={`shrink-0 rounded-full ${PRESET_ACTIVE_CLASS}`}
-                >
-                  <GroupIcon aria-hidden="true" />
-                  Agrupar por estado
-                </Toggle>
-                <FiltersBuilder
-                /* El picker abre como una vista de «Crear filtro»: sin buscador
-                   de atributos (la fila de búsqueda se oculta desde el
-                   consumidor) y con el título impreso sobre la lista. */
-                className="before:text-foreground before:font-medium before:tracking-tight before:block before:content-['Crear_filtro'] before:px-3 before:pb-1 before:pt-2.5 [&_[data-slot=cascader-nav]]:hidden"
-                trigger={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    aria-label="Añadir filtro"
-                    className="size-7 rounded-full bg-foreground p-0 text-background hover:bg-foreground/80 [&_svg:not([class*='size-'])]:size-4"
+                {savedFilters.map((filter) => {
+                  const isActive = activeFilterId === filter.id
+                  return (
+                  <span
+                    key={filter.id}
+                    /*
+                     * BOTÓN PARTIDO: una sola cápsula donde la mitad izquierda
+                     * aplica el filtro y la derecha (settings-2, separada por
+                     * un divisor) abre su menú Editar/Borrar. El borde y el
+                     * fondo son del contenedor — nunca de los botones — para
+                     * que se lea como UN control y las opciones se entiendan
+                     * como de ESE filtro, no de todos. Invertido cuando está
+                     * activo (fondo foreground), igual que las vistas.
+                     */
+                    className={`flex shrink-0 items-center overflow-hidden rounded-full border transition-colors ${
+                      isActive
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-input bg-background"
+                    }`}
                   >
-                    <PlusIcon aria-hidden="true" />
-                  </Button>
-                }
-              />
+                    <Toggle
+                      variant="default"
+                      size="sm"
+                      pressed={isActive}
+                      onPressedChange={(next) => {
+                        applySavedFilter(next ? filter : null)
+                      }}
+                      aria-label={`Aplicar el filtro ${filter.name}`}
+                      className="rounded-none border-0 bg-transparent hover:bg-transparent hover:text-inherit aria-pressed:bg-transparent aria-pressed:text-inherit data-[state=on]:bg-transparent"
+                    >
+                      {filter.name}
+                      <Badge
+                        variant="outline"
+                        size="xs"
+                        className={PRESET_COUNT_CLASS}
+                      >
+                        {savedFilterCounts.get(filter.id) ?? 0}
+                      </Badge>
+                    </Toggle>
+                    {/*
+                     * Mitad derecha del botón partido: settings-2 abre el
+                     * menú (mismo patrón que el menú de acciones de /users)
+                     * con Editar (reabre el bottom sheet precargado, PATCH) y
+                     * Borrar (con confirmación). Vive FUERA del Toggle para
+                     * no anidar botones; el divisor marca la frontera de los
+                     * dos gestos dentro de la misma cápsula.
+                     */}
+                    <span
+                      aria-hidden="true"
+                      className={`h-4 w-px shrink-0 ${
+                        isActive ? "bg-background/40" : "bg-border"
+                      }`}
+                    />
+                    <DropdownMenu>
+                      <DropdownMenuTrigger
+                        render={
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            aria-label={`Opciones del filtro ${filter.name}`}
+                            className={`size-7 shrink-0 rounded-none ${
+                              isActive
+                                ? "text-background hover:bg-background/15 hover:text-background"
+                                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                            }`}
+                          />
+                        }
+                      >
+                        <Settings2Icon aria-hidden="true" className="size-4" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="w-40">
+                        <DropdownMenuItem
+                          onClick={() => openEditFilter(filter)}
+                        >
+                          <PencilIcon aria-hidden="true" />
+                          <span>Editar</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          variant="destructive"
+                          onClick={() => setDeleteTarget(filter)}
+                        >
+                          <Trash2Icon aria-hidden="true" />
+                          <span>Borrar</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </span>
+                  )
+                })}
+                {/*
+                 * «+»: abre el bottom sheet de creación de filtros compuestos
+                 * (nombre + stack de reglas + agrupar por) que se guardan en
+                 * la cuenta del usuario.
+                 */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Crear filtro"
+                  onClick={openBuilder}
+                  className="size-7 shrink-0 rounded-full bg-foreground p-0 text-background hover:bg-foreground/80 [&_svg:not([class*='size-'])]:size-4"
+                >
+                  <PlusIcon aria-hidden="true" />
+                </Button>
               </div>
               {/*
                * Pista de deslizamiento: chevron gris flotante sobre el borde
@@ -2081,43 +2329,39 @@ export function ClientesAccordion({
               </div>
             </div>
             {/*
-             * Renglón 2: el stack de filtros creados. Cada chip viaja con su
-             * contador en un paquete indivisible y el contenedor envuelve
-             * (`flex-wrap`): al no caber, el filtro baja al renglón siguiente
-             * y la pila crece hacia abajo, siempre legible en lugar de
-             * escaparse en el scroll horizontal.
+             * Renglón 2: las reglas del filtro guardado activo, como píldoras
+             * de solo lectura con su conteo en cascada (la primera regla
+             * cuenta sobre el listado completo y cada siguiente sobre el
+             * resultado de la anterior). Editar es crear un filtro nuevo; el
+             * contenedor envuelve (`flex-wrap`) y la pila crece hacia abajo.
              */}
-            {rules.length > 0 ? (
+            {activeFilter && activeFilter.rules.length > 0 ? (
               <div
                 role="group"
-                aria-label="Filtros creados"
-                className="flex flex-wrap items-center gap-2 [&_[data-slot=filter-chip]>[data-slot]:first-child]:rounded-l-full [&_[data-slot=filter-chip]>[data-slot]:last-child]:rounded-r-full!"
+                aria-label={`Reglas del filtro ${activeFilter.name}`}
+                className="flex flex-wrap items-center gap-2"
               >
-                {rules.map((rule, index) => {
-                  const count = ruleCounts.get(rule.id)
-                  return (
-                    <span
-                      key={rule.id}
-                      className="flex shrink-0 items-center gap-1.5"
-                    >
-                      <FilterChip rule={rule} index={index} />
-                      {count !== undefined ? (
-                        <Badge
-                          variant="outline"
-                          size="xl"
-                          className="rounded-full px-3 tabular-nums"
-                        >
-                          {count}
-                        </Badge>
-                      ) : null}
+                {activeFilter.rules.map((rule, index) => (
+                  <span
+                    key={`${rule.field}-${index}`}
+                    className="flex shrink-0 items-center gap-1.5"
+                  >
+                    <span className="inline-flex items-center rounded-full border border-input bg-background px-3 py-1 text-xs text-muted-foreground">
+                      {clientFilterRuleText(rule)}
                     </span>
-                  )
-                 })}
-               </div>
-             ) : null}
-           </div>
-         </Filters>
-       ) : null}
+                    <Badge
+                      variant="outline"
+                      size="xl"
+                      className="rounded-full px-3 tabular-nums"
+                    >
+                      {activeRuleCounts[index] ?? 0}
+                    </Badge>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            </div>
+        ) : null}
 
       {fetchState === "loading" ? (
         <div className="flex flex-col" aria-hidden="true">
@@ -2186,12 +2430,42 @@ export function ClientesAccordion({
           {/*
            * En modo agrupado se produce un solo arreglo plano (encabezado de
            * cada sección + sus filas): las filas conservan la key y el tipo
-           * que ya tenían en modo plano, así que al alternar el interruptor
+           * que ya tenían en modo plano, así que al alternar la agrupación
            * React solo monta los encabezados y reutiliza las filas vivas en
            * vez de remontar el listado completo.
            */}
-          {groupByStatus
-            ? statusGroups.flatMap((group) => [
+          {grouping === "socio"
+            ? socioGroups.flatMap((group) => [
+                <div
+                  key={`hdr-${group.key}`}
+                  className="flex items-center gap-2 px-1.5 pt-2 pb-1"
+                >
+                  {/*
+                   * Encabezado de sección por socio: punto con el par pastel
+                   * estable del socio (paleta de avatares) + nombre + contador
+                   * sobre el resultado ya filtrado; los clientes sin socio van
+                   * al final bajo «Sin socio».
+                   */}
+                  <span
+                    aria-hidden="true"
+                    className="size-2 shrink-0 rounded-full"
+                    style={group.dotStyle}
+                  />
+                  <span className="text-muted-foreground text-xs font-medium tracking-tight">
+                    {group.label}
+                  </span>
+                  <Badge
+                    variant="outline"
+                    size="xs"
+                    className="text-muted-foreground tabular-nums"
+                  >
+                    {group.clients.length}
+                  </Badge>
+                </div>,
+                ...group.clients.map(renderClientItem),
+              ])
+            : grouping === "estado"
+              ? statusGroups.flatMap((group) => [
                 <div
                   key={`hdr-${group.key}`}
                   className="flex items-center gap-2 px-1.5 pt-2 pb-1"
@@ -2254,6 +2528,386 @@ export function ClientesAccordion({
               disabled={syncing}
             >
               Sincronizar ahora
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/*
+       * Bottom sheet de creación/edición de filtros compuestos (mismo Drawer
+       * del pago, borde inferior con asa). Un filtro guardado = nombre + stack
+       * de reglas (todas se cumplen a la vez) + modo de agrupación opcional
+       * («Agrupar por» socio/estado); se guarda en la cuenta del usuario vía
+       * POST /api/clientes/filters (creación) o PATCH
+       * /api/clientes/filters/{id} (edición, abierta desde el menú settings-2
+       * del chip) y al guardar queda aplicado. El botón primario vive en el
+       * pie y solo se habilita con el borrador válido; la vista previa en
+       * vivo dice cuántos clientes coinciden antes de decidir. Mientras
+       * guarda no se cierra (Escape y swipe bloqueados).
+       */}
+      <Drawer
+        open={builderOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeBuilder()
+            return
+          }
+          setBuilderOpen(open)
+        }}
+        showSwipeHandle
+      >
+        <DrawerContent>
+          <DrawerHeader>
+            <DrawerTitle>
+              {editingFilterId ? "Editar filtro" : "Crear filtro"}
+            </DrawerTitle>
+            <DrawerDescription>
+              {editingFilterId
+                ? "Ajusta el nombre, las reglas o la agrupación; los cambios se guardan en tu cuenta."
+                : "Nómbralo, arma el stack de reglas y elige si agrupar. Se guarda en tu cuenta y queda a un toque en la barra."}
+            </DrawerDescription>
+          </DrawerHeader>
+          <div className="flex flex-col gap-5 overflow-y-auto px-4 pb-2">
+            {/*
+             * Nombre: lo único obligatorio. El contador de caracteres solo
+             * aparece cerca del tope; el duplicado se valida contra la lista
+             * cargada (el servidor vuelve a validar con 409).
+             */}
+            <Field>
+              <FieldLabel htmlFor="client-filter-name">Nombre</FieldLabel>
+              <Input
+                id="client-filter-name"
+                value={draftName}
+                onChange={(event) => setDraftName(event.target.value)}
+                maxLength={CLIENT_FILTER_NAME_MAX}
+                placeholder="Ej. Urgencias de mis socios"
+                aria-invalid={draftNameDuplicated || undefined}
+              />
+              {draftNameDuplicated ? (
+                <FieldDescription className="text-destructive">
+                  Ya tienes un filtro con ese nombre.
+                </FieldDescription>
+              ) : draftNameTrim.length > CLIENT_FILTER_NAME_MAX - 10 ? (
+                <FieldDescription>
+                  {CLIENT_FILTER_NAME_MAX - draftNameTrim.length} caracteres
+                  restantes.
+                </FieldDescription>
+              ) : null}
+            </Field>
+            {/*
+             * Stack de reglas: cada regla es una tarjeta con campo, operador
+             * y valor; todas se cumplen a la vez (AND). Sin reglas el filtro
+             * solo agrupa (si eligió agrupación).
+             */}
+            <Field>
+              <FieldLabel>Reglas</FieldLabel>
+              <FieldDescription>
+                El filtro muestra los clientes que cumplen todas las reglas.
+              </FieldDescription>
+              <div className="flex flex-col gap-2">
+                {draftRules.map((rule, index) => (
+                  <div
+                    key={index}
+                    className="flex flex-col gap-2 rounded-lg border p-2.5"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={rule.field}
+                        onValueChange={(value) => {
+                          if (
+                            value === "estado" ||
+                            value === "reseller" ||
+                            value === "dias"
+                          ) {
+                            changeDraftRuleField(index, value)
+                          }
+                        }}
+                      >
+                        <SelectTrigger
+                          className="flex-1"
+                          aria-label={`Campo de la regla ${index + 1}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="estado">Estado</SelectItem>
+                          {isAdmin ? (
+                            <SelectItem value="reseller">Distribuidor</SelectItem>
+                          ) : null}
+                          <SelectItem value="dias">Días para vencer</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeDraftRule(index)}
+                        aria-label={`Quitar la regla ${index + 1}`}
+                        className="text-muted-foreground size-8 shrink-0 rounded-full hover:text-destructive"
+                      >
+                        <XIcon aria-hidden="true" className="size-4" />
+                      </Button>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        value={rule.operator}
+                        onValueChange={(value) => {
+                          if (value) updateDraftRule(index, { operator: value })
+                        }}
+                      >
+                        <SelectTrigger
+                          className="flex-1"
+                          aria-label={`Condición de la regla ${index + 1}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CLIENT_FILTER_OPERATORS[rule.field].map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {/*
+                       * Valor: selector por campo (con el conteo como
+                       * subtítulo) o número de días; el operador «está
+                       * vacío» no lleva valor.
+                       */}
+                      {rule.field === "estado" ? (
+                        <Select
+                          value={
+                            rule.value === null ? null : String(rule.value)
+                          }
+                          onValueChange={(value) => {
+                            if (value) updateDraftRule(index, { value })
+                          }}
+                        >
+                          <SelectTrigger
+                            className="flex-1"
+                            aria-label={`Valor de la regla ${index + 1}`}
+                          >
+                            <SelectValue placeholder="Elige" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {CLIENT_FILTER_ESTADO_VALUES.map((value) => (
+                              <SelectItem key={value} value={value}>
+                                {clientEstadoLabel(value)}
+                                <span className="text-muted-foreground text-xs">
+                                  {estadoCounts.get(value) ?? 0}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : rule.field === "reseller" ? (
+                        <Select
+                          value={
+                            rule.value === null || rule.value === ""
+                              ? rule.value === ""
+                                ? SIN_DISTRIBUIDOR_OPTION
+                                : null
+                              : String(rule.value)
+                          }
+                          onValueChange={(value) => {
+                            if (value === null) return
+                            updateDraftRule(index, {
+                              value:
+                                value === SIN_DISTRIBUIDOR_OPTION
+                                  ? ""
+                                  : value,
+                            })
+                          }}
+                        >
+                          <SelectTrigger
+                            className="flex-1"
+                            aria-label={`Valor de la regla ${index + 1}`}
+                          >
+                            <SelectValue placeholder="Elige" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {resellerOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                                <span className="text-muted-foreground text-xs">
+                                  {option.description}
+                                </span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : rule.operator === "empty" ? null : (
+                        <Input
+                          type="number"
+                          inputMode="numeric"
+                          value={
+                            rule.value === null || rule.value === ""
+                              ? ""
+                              : String(rule.value)
+                          }
+                          onChange={(event) =>
+                            updateDraftRule(index, {
+                              value:
+                                event.target.value === ""
+                                  ? null
+                                  : event.target.value,
+                            })
+                          }
+                          placeholder="Días"
+                          aria-label={`Valor de la regla ${index + 1}`}
+                          className="h-8 flex-1"
+                        />
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {draftRules.length === 0 ? (
+                  <p className="text-muted-foreground text-xs">
+                    Sin reglas el filtro solo agrupa el listado.
+                  </p>
+                ) : null}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={addDraftRule}
+                  disabled={draftRules.length >= CLIENT_FILTER_MAX_RULES}
+                  className="self-start rounded-full"
+                >
+                  <PlusIcon aria-hidden="true" />
+                  Añadir regla
+                </Button>
+              </div>
+            </Field>
+            {/*
+             * Agrupar por: las mismas filas-tarjeta del selector de método de
+             * pago (radio al final, descripción de una línea). «Socio» solo
+             * para admin; sin las reglas compuestas del chip rápido: este
+             * agrupador agrupa y punto.
+             */}
+            <Field>
+              <FieldLabel>Agrupar por</FieldLabel>
+              <RadioGroup
+                value={draftGroupBy}
+                onValueChange={(value) =>
+                  setDraftGroupBy(value as ClientFilterGroupBy)
+                }
+                aria-label="Agrupar por"
+              >
+                <FieldGroup className="gap-0">
+                  <Field>
+                    <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <FieldContent className="min-w-0">
+                          <FieldTitle>Ninguno</FieldTitle>
+                          <FieldDescription className="text-xs">
+                            Lista plana, sin secciones
+                          </FieldDescription>
+                        </FieldContent>
+                      </span>
+                      <RadioGroupItem value="ninguno" />
+                    </FieldLabel>
+                  </Field>
+                  <Separator />
+                  <Field>
+                    <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <FieldContent className="min-w-0">
+                          <FieldTitle>Estado</FieldTitle>
+                          <FieldDescription className="text-xs">
+                            Secciones «Activo» e «Inactivo»
+                          </FieldDescription>
+                        </FieldContent>
+                      </span>
+                      <RadioGroupItem value="estado" />
+                    </FieldLabel>
+                  </Field>
+                  {isAdmin ? (
+                    <>
+                      <Separator />
+                      <Field>
+                        <FieldLabel className="w-full cursor-pointer justify-between gap-3 px-3 py-2.5">
+                          <span className="flex min-w-0 items-center gap-2.5">
+                            <FieldContent className="min-w-0">
+                              <FieldTitle>Socio</FieldTitle>
+                              <FieldDescription className="text-xs">
+                                Una sección por distribuidor asignado
+                              </FieldDescription>
+                            </FieldContent>
+                          </span>
+                          <RadioGroupItem value="socio" />
+                        </FieldLabel>
+                      </Field>
+                    </>
+                  ) : null}
+                </FieldGroup>
+              </RadioGroup>
+            </Field>
+            {/*
+             * Vista previa en vivo sobre el listado cargado: feedback
+             * inmediato antes de decidir (siempre visible, con o sin reglas).
+             */}
+            <p
+              className="text-muted-foreground text-xs"
+              role="status"
+              aria-live="polite"
+            >
+              Coinciden {draftPreview} de {clients.length} clientes
+            </p>
+          </div>
+          <DrawerFooter>
+            <DrawerClose
+              render={
+                <Button variant="ghost" onClick={closeBuilder}>
+                  Cancelar
+                </Button>
+              }
+            />
+            <Button
+              onClick={() => void saveDraftFilter()}
+              disabled={!draftValid || savingFilter}
+            >
+              {savingFilter ? (
+                <LoaderCircleIcon aria-hidden="true" className="animate-spin" />
+              ) : null}
+              {editingFilterId ? "Guardar cambios" : "Guardar filtro"}
+            </Button>
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
+
+      {/*
+       * Confirmación de borrado de un filtro guardado: destructiva, con el
+       * nombre del filtro y la consecuencia (si estaba activo, la vista
+       * vuelve a «Todos»).
+       */}
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deletingFilter) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              ¿Eliminar el filtro «{deleteTarget?.name}»?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Se quita de tu cuenta. Si estaba activo, el listado vuelve a la
+              vista «Todos».
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingFilter}>
+              Cancelar
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(event) => {
+                event.preventDefault()
+                void runDeleteFilter()
+              }}
+              disabled={deletingFilter}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              {deletingFilter ? "Eliminando…" : "Eliminar"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
