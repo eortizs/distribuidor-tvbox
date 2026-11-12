@@ -129,7 +129,8 @@
  * clientes vencidos, aunque el operador numérico los incluyera por sus días
  * negativos.
  *
- * La barra abre con **vistas preconfiguradas** (ToggleGroup outline, radio
+ * La barra abre con **vistas preconfiguradas** (Toggles outline en cápsula,
+ * radio
  * fijo), cada una con su contador: «Todos» — deja el listado sin condiciones
  * de ningún tipo —, «Por vencer» (regla fija hardcoded de menos de 3 días
  * solo sobre clientes vigentes), «Activo» y «Vencido» (parten el
@@ -188,11 +189,17 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
 } from "react"
 import { useRouter } from "next/navigation"
 import { REGEXP_ONLY_DIGITS } from "input-otp"
 import {
+  ArrowDownAZIcon,
+  ArrowUpAZIcon,
+  ArrowUpDownIcon,
   CheckIcon,
+  ChevronsDownUpIcon,
+  ChevronsUpDownIcon,
   ChevronRightIcon,
   CircleCheckIcon,
   CopyIcon,
@@ -214,7 +221,26 @@ import {
   Settings2Icon,
   PencilIcon,
   Trash2Icon,
+  GripVerticalIcon,
 } from "lucide-react"
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core"
+import { restrictToVerticalAxis } from "@dnd-kit/modifiers"
+import {
+  SortableContext,
+  arrayMove,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable"
+import { CSS } from "@dnd-kit/utilities"
 import { toast } from "sonner"
 
 import { useRealtimeEvent } from "@/hooks/use-realtime"
@@ -242,6 +268,15 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import {
   Empty,
   EmptyContent,
@@ -282,10 +317,6 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
-import {
-  ToggleGroup,
-  ToggleGroupItem,
-} from "@/components/ui/toggle-group"
 import { Toggle } from "@/components/ui/toggle"
 import {
   Tooltip,
@@ -379,6 +410,78 @@ const TICKET_MAX_BYTES = 10 * 1024 * 1024
 
 /** Longitud del código de cupón. */
 const COUPON_CODE_LENGTH = 4
+
+/**
+ * Catálogos «valor → etiqueta» para los Select del builder de filtros. En
+ * Base UI, sin la prop `items` el trigger muestra el valor crudo («lt»,
+ * «estado», «__sin_distribuidor__») en vez de la etiqueta del ítem elegido,
+ * lo que se lee como un error.
+ */
+const CLIENT_FILTER_FIELD_ITEMS = [
+  { value: "estado", label: "Estado" },
+  { value: "reseller", label: "Distribuidor" },
+  { value: "dias", label: "Días para vencer" },
+]
+
+const CLIENT_FILTER_ESTADO_ITEMS = CLIENT_FILTER_ESTADO_VALUES.map((value) => ({
+  value,
+  label: clientEstadoLabel(value),
+}))
+
+/**
+ * Renglón arrastrable del bottom sheet «Reordenar» (dnd-kit sortable): asa
+ * de agarre + título (vista o filtro) + descripción + posición. El propio
+ * dnd-kit mueve el renglón con transform/transition; al arrastrar sube el
+ * borde para que se vea qué fila sostiene el dedo.
+ */
+function SortableChipRow({ chip, index }: { chip: ClientChip; index: number }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: chip.key })
+  const title = chip.kind === "preset" ? chip.item.label : chip.filter.name
+  const description =
+    chip.kind === "preset"
+      ? "Vista preconfigurada"
+      : chip.filter.rules.length > 0
+        ? chip.filter.rules.map(clientFilterRuleText).join(" · ")
+        : "Solo agrupa el listado"
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+      className={`flex select-none items-center gap-2 rounded-lg border px-2 py-2 ${
+        isDragging
+          ? "border-ring bg-background shadow-md"
+          : "bg-background"
+      }`}
+    >
+      <button
+        type="button"
+        aria-label={`Arrastrar para reordenar ${title}`}
+        {...attributes}
+        {...listeners}
+        className="text-muted-foreground hover:text-foreground flex size-8 shrink-0 cursor-grab touch-none select-none items-center justify-center rounded-full [-webkit-touch-callout:none] active:cursor-grabbing"
+      >
+        <GripVerticalIcon aria-hidden="true" className="size-4" />
+      </button>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{title}</p>
+        <p className="text-muted-foreground truncate text-xs">{description}</p>
+      </div>
+      <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+        {index + 1}
+      </span>
+    </div>
+  )
+}
 
 /**
  * Bloqueo de renovación por transferencia: la renovación depende del panel
@@ -508,6 +611,16 @@ const PRESET_ACTIVE_CLASS =
 /** Contador dentro de una vista: se invierte sobre el fondo activo. */
 const PRESET_COUNT_CLASS =
   "rounded-full tabular-nums group-aria-pressed/toggle:border-background/40 group-aria-pressed/toggle:bg-transparent dark:group-aria-pressed/toggle:border-background/40 dark:group-aria-pressed/toggle:bg-transparent"
+
+/**
+ * Un chip de la hilera de filtros: vista preconfigurada (fija de la app) o
+ * filtro guardado de la cuenta. La clave es la identidad del chip en el
+ * layout guardado (`preset:<valor>` / `filter:<id>`), el idioma común entre
+ * la barra y el bottom sheet «Reordenar».
+ */
+type ClientChip =
+  | { key: string; kind: "preset"; item: { value: ClientPreset; label: string } }
+  | { key: string; kind: "filter"; filter: ClientSavedFilter }
 
 function expiryProgress(days: number | null): number {
   if (days === null || days <= 0) return 0
@@ -657,14 +770,137 @@ export function ClientesAccordion({
    */
   const [grouping, setGrouping] = useState<ClientFilterGroupBy>("ninguno")
   /**
+   * Grupos cuyo orden interno quedó invertido por su botón de orden (Z→A).
+   * Por defecto cada sección se ordena ascendente (A→Z); la ausencia en el
+   * conjunto ES el estado ascendente, sin inicialización por grupo.
+   */
+  const [descendingGroups, setDescendingGroups] = useState<Set<string>>(
+    () => new Set()
+  )
+  /** Alterna el orden interno de una sección: A→Z ↔ Z→A. */
+  const toggleGroupSort = useCallback((key: string) => {
+    setDescendingGroups((previous) => {
+      const next = new Set(previous)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+  /**
+   * Secciones expandidas del modo agrupado: vacío = todas colapsadas (el
+   * estado por defecto). El acordeón de cada grupo es controlado con este
+   * conjunto para que los botones globales (expandir/colapsar todos) y el
+   * toque individual compartan la misma fuente de verdad.
+   */
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+    () => new Set()
+  )
+  /**
    * Filtros compuestos guardados en la cuenta del usuario (nombre + stack de
    * reglas + modo de agrupación), servidos por /api/clientes/filters.
    */
   const [savedFilters, setSavedFilters] = useState<ClientSavedFilter[]>([])
+  /**
+   * Orden manual de TODA la hilera de chips (vistas + filtros guardados),
+   * como lista de claves `preset:<valor>` / `filter:<id>`; null = la hilera
+   * usa su orden natural (vistas primero, filtros por creación).
+   */
+  const [chipLayout, setChipLayout] = useState<string[] | null>(null)
   /** Filtro guardado aplicado; null = vista sin filtro guardado. */
   const [activeFilterId, setActiveFilterId] = useState<string | null>(null)
   /** Bottom sheet de creación: nombre, stack de reglas y agrupación. */
   const [builderOpen, setBuilderOpen] = useState(false)
+  /** Ventana flotante «Reordenar»: drag & drop del orden de la hilera. */
+  const [reorderOpen, setReorderOpen] = useState(false)
+  /**
+   * Sensores del reorden: puntero unificado (mouse/touch/lápiz) que activa
+   * el arrastre tras 6px de recorrido — RESPUESTA INMEDIATA, sin pulsación
+   * larga que se sienta muerta — y teclado (foco + espacio/flechas) como
+   * vía accesible. El asa tiene `touch-action: none`, así el gesto vertical
+   * sobre ella nunca compite con el scroll del listado.
+   */
+  const reorderSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+
+  /**
+   * Suelta un renglón del reorden: mueve el filtro en el estado (optimista,
+   * los chips se reordenan al instante) y persiste el orden completo en la
+   * cuenta; si la API falla, revierte y avisa.
+   */
+  /**
+   * Chips de la hilera de filtros en su orden final: vistas preconfiguradas
+   * y filtros guardados unificados, con el layout guardado del usuario por
+   * delante y los chips nuevos (no conocidos por el layout) al final en su
+   * orden natural.
+   */
+  const chips = useMemo<ClientChip[]>(() => {
+    const natural: ClientChip[] = [
+      ...PRESET_ITEMS.map((item) => ({
+        key: `preset:${item.value}`,
+        kind: "preset" as const,
+        item,
+      })),
+      ...savedFilters.map((filter) => ({
+        key: `filter:${filter.id}`,
+        kind: "filter" as const,
+        filter,
+      })),
+    ]
+    if (!chipLayout || chipLayout.length === 0) return natural
+    const byKey = new Map(natural.map((chip) => [chip.key, chip]))
+    const ordered: ClientChip[] = []
+    const seen = new Set<string>()
+    for (const key of chipLayout) {
+      const chip = byKey.get(key)
+      if (chip && !seen.has(key)) {
+        ordered.push(chip)
+        seen.add(key)
+      }
+    }
+    for (const chip of natural) {
+      if (!seen.has(chip.key)) ordered.push(chip)
+    }
+    return ordered
+  }, [chipLayout, savedFilters])
+
+  /**
+   * Suelta un renglón del reorden de la HILERA COMPLETA (vistas + filtros):
+   * fija el orden nuevo de los chips (optimista, la barra se reordena al
+   * instante) y persiste la lista de claves en la cuenta; si la API falla,
+   * revierte y avisa.
+   */
+  const handleReorderDragEnd = useCallback(
+    async (event: DragEndEvent) => {
+      const { active, over } = event
+      if (!over || active.id === over.id) return
+      const oldIndex = chips.findIndex((chip) => chip.key === active.id)
+      const newIndex = chips.findIndex((chip) => chip.key === over.id)
+      if (oldIndex < 0 || newIndex < 0) return
+      const previous = chipLayout
+      const next = arrayMove(chips, oldIndex, newIndex).map(
+        (chip) => chip.key
+      )
+      setChipLayout(next)
+      try {
+        const response = await fetch("/api/clientes/chips", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ order: next }),
+        })
+        if (!response.ok) throw new Error("reorden_rechazado")
+      } catch {
+        setChipLayout(previous)
+        toast.error("No se pudo guardar el nuevo orden", {
+          description: "Inténtalo de nuevo en unos segundos.",
+        })
+      }
+    },
+    [chips, chipLayout]
+  )
   /** Id del filtro que se está editando; null = el sheet crea uno nuevo. */
   const [editingFilterId, setEditingFilterId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState("")
@@ -799,6 +1035,20 @@ export function ClientesAccordion({
       )
       .catch(() => {
         // Sin filtros guardados legibles: la barra funciona igual.
+      })
+    fetch("/api/clientes/chips", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then(
+        (
+          json: { ok?: boolean; data?: { order?: string[] | null } } | null
+        ) => {
+          if (json?.ok && Array.isArray(json.data?.order)) {
+            setChipLayout(json.data.order as string[])
+          }
+        }
+      )
+      .catch(() => {
+        // Sin orden guardado legible: la hilera usa su orden natural.
       })
   }, [])
 
@@ -1987,6 +2237,127 @@ export function ClientesAccordion({
     </AccordionItem>
   )
 
+  /**
+   * Sección colapsable del modo agrupado: el encabezado (punto + etiqueta +
+   * contador + botón de orden) es el trigger de un acordeón propio CONTROLADO
+   * por `expandedGroups` (cerrado por defecto), y el panel contiene las filas
+   * de sus clientes en otro acordeón anidado (una fila abierta a la vez por
+   * sección, igual que el modo plano). Las filas se ordenan por usuario,
+   * ascendente por defecto y Z→A al pulsar el botón; el botón no abre la
+   * sección (corta la propagación del click del trigger). Las keys de las
+   * filas no cambian, así que colapsar y expandir reutiliza las filas vivas
+   * en vez de remontarlas.
+   */
+  const renderGroup = (group: {
+    key: string
+    label: string
+    dotStyle?: CSSProperties
+    dotClass?: string
+    clients: FlujoClient[]
+  }) => {
+    const descending = descendingGroups.has(group.key)
+    const sortedClients = [...group.clients].sort((a, b) => {
+      const comparison = a.userName.localeCompare(b.userName, "es")
+      return descending ? -comparison : comparison
+    })
+    const groupValue = `grp-${group.key}`
+    return (
+      <Accordion
+        key={groupValue}
+        value={expandedGroups.has(group.key) ? [groupValue] : []}
+        onValueChange={(values) => {
+          setExpandedGroups((previous) => {
+            const next = new Set(previous)
+            if (values.includes(groupValue)) next.add(group.key)
+            else next.delete(group.key)
+            return next
+          })
+        }}
+        className="gap-0"
+      >
+        <AccordionItem value={groupValue} className="border-b-0">
+          <AccordionTrigger className="justify-start items-center gap-2 rounded-lg bg-muted/60 px-1.5 pt-2 pb-1 text-xs font-medium tracking-tight text-muted-foreground hover:bg-muted hover:no-underline [&_[data-slot=accordion-trigger-icon]]:ml-0">
+            {/*
+             * Punto del encabezado: par pastel estable del socio (paleta de
+             * avatares) en la agrupación por socio o semáforo por estado;
+             * «Inactivo» lleva punto neutro porque junta estados varios
+             * (vencidos, pendientes y pruebas); el detalle vive en cada fila.
+             */}
+            <span
+              aria-hidden="true"
+              className={`size-2 shrink-0 rounded-full ${group.dotClass ?? ""}`}
+              style={group.dotStyle}
+            />
+            <span className="truncate">{group.label}</span>
+            <Badge
+              variant="outline"
+              size="xs"
+              className="text-muted-foreground tabular-nums"
+            >
+              {group.clients.length}
+            </Badge>
+            {/*
+             * Orden interno de la sección: A→Z por defecto, Z→A al pulsar.
+             * Vive DENTRO del trigger pero no debe abrir ni cerrar el grupo:
+             * corta la propagación del click antes de que llegue al trigger.
+             * El ml-auto es el ÚNICO margen flexible del renglón (el chevron
+             * lo pierde con ml-0), así que el botón queda anclado al margen
+             * derecho, inmediatamente a la izquierda del chevron. size-8 por
+             * el área táctil mínima en móvil.
+             */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground ml-auto size-8 shrink-0 rounded-full hover:bg-background/60"
+              aria-pressed={descending}
+              aria-label={
+                descending
+                  ? `Ordenar ${group.label} en ascendente`
+                  : `Ordenar ${group.label} en descendente`
+              }
+              onClick={(event) => {
+                event.stopPropagation()
+                toggleGroupSort(group.key)
+              }}
+            >
+              {descending ? (
+                <ArrowDownAZIcon aria-hidden="true" className="size-4" />
+              ) : (
+                <ArrowUpAZIcon aria-hidden="true" className="size-4" />
+              )}
+            </Button>
+          </AccordionTrigger>
+          <AccordionContent className="pb-1">
+            <Accordion multiple={false}>
+              {sortedClients.map(renderClientItem)}
+            </Accordion>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    )
+  }
+
+  /**
+   * Estado global de las secciones (solo modo agrupado): las keys visibles
+   * ahora y si TODAS comparten orden descendente o están expandidas. Manda
+   * el icono de los botones globales: muestran la acción que van a ejecutar
+   * sobre el conjunto.
+   */
+  const groupedKeys =
+    grouping === "socio"
+      ? socioGroups.map((group) => group.key)
+      : grouping === "estado"
+        ? statusGroups.map((group) => group.key)
+        : null
+  const allGroupsDescending =
+    groupedKeys !== null &&
+    groupedKeys.length > 0 &&
+    groupedKeys.every((key) => descendingGroups.has(key))
+  const allGroupsExpanded =
+    groupedKeys !== null &&
+    groupedKeys.length > 0 &&
+    groupedKeys.every((key) => expandedGroups.has(key))
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-2">
@@ -2150,50 +2521,51 @@ export function ClientesAccordion({
                 aria-label="Filtros de clientes"
                 className="flex flex-nowrap items-center gap-2 overflow-x-auto pr-10 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
               >
-                <ToggleGroup
-                  variant="outline"
-                  size="sm"
-                  value={activeFilter ? [] : [preset]}
-                  onValueChange={(groupValue) => {
-                    // Radio fijo: volver a pulsar la vista activa no la suelta.
-                    // SELECCIÓN ÚNICA con los filtros guardados: elegir una
-                    // vista suelta el filtro activo (se combinaban con AND y
-                    // podían contradecirse — «Vencido» + «estado es Activo» =
-                    // lista vacía—); «Todos» además deja el listado sin
-                    // condiciones de ningún tipo.
-                    const next =
-                      PRESET_ITEMS.find((item) =>
-                        groupValue.includes(item.value)
-                      )?.value ?? preset
-                    setPreset(next)
-                    applySavedFilter(null)
-                  }}
-                  aria-label="Vistas preconfiguradas de clientes"
-                >
-                  {PRESET_ITEMS.map((item) => (
-                    <ToggleGroupItem
-                      key={item.value}
-                      value={item.value}
-                      className={`rounded-full ${PRESET_ACTIVE_CLASS}`}
-                    >
-                      {item.label}
-                      <Badge variant="outline" size="xs" className={PRESET_COUNT_CLASS}>
-                        {presetCounts[item.value]}
-                      </Badge>
-                    </ToggleGroupItem>
-                  ))}
-                </ToggleGroup>
                 {/*
-                 * Filtros guardados de la cuenta: cada chip aplica su stack de
-                 * reglas y su modo de agrupación (la única vía de agrupar el
-                 * listado); el contador es el resultado sobre el listado
-                 * completo.
+                 * Hilera de chips en su orden final (layout guardado del
+                 * usuario o natural): vistas preconfiguradas y filtros
+                 * guardados conviven y se reordenan entre sí con «Reordenar»
+                 * (drag & drop). Las vistas mantienen su radio fijo.
                  */}
-                {savedFilters.map((filter) => {
+                {chips.map((chip) => {
+                  if (chip.kind === "preset") {
+                    return (
+                      <Toggle
+                        key={chip.key}
+                        variant="outline"
+                        size="sm"
+                        pressed={!activeFilter && preset === chip.item.value}
+                        onPressedChange={(next) => {
+                          // Radio fijo: volver a pulsar la vista activa no
+                          // la suelta. SELECCIÓN ÚNICA con los filtros
+                          // guardados: elegir una vista suelta el filtro
+                          // activo (se combinaban con AND y podían
+                          // contradecirse — «Vencido» + «estado es Activo» =
+                          // lista vacía—); «Todos» además deja el listado
+                          // sin condiciones de ningún tipo.
+                          if (!next) return
+                          setPreset(chip.item.value)
+                          applySavedFilter(null)
+                        }}
+                        aria-label={`Vista ${chip.item.label}`}
+                        className={`rounded-full ${PRESET_ACTIVE_CLASS}`}
+                      >
+                        {chip.item.label}
+                        <Badge
+                          variant="outline"
+                          size="xs"
+                          className={PRESET_COUNT_CLASS}
+                        >
+                          {presetCounts[chip.item.value]}
+                        </Badge>
+                      </Toggle>
+                    )
+                  }
+                  const filter = chip.filter
                   const isActive = activeFilterId === filter.id
                   return (
                   <span
-                    key={filter.id}
+                    key={chip.key}
                     /*
                      * BOTÓN PARTIDO: una sola cápsula donde la mitad izquierda
                      * aplica el filtro y la derecha (settings-2, separada por
@@ -2260,6 +2632,17 @@ export function ClientesAccordion({
                         <Settings2Icon aria-hidden="true" className="size-4" />
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end" className="w-40">
+                        {/*
+                         * Reordenar: abre el bottom sheet con la lista
+                         * arrastrable (drag & drop) de TODA la hilera:
+                         * vistas y filtros.
+                         */}
+                        <DropdownMenuItem
+                          onClick={() => setReorderOpen(true)}
+                        >
+                          <ArrowUpDownIcon aria-hidden="true" />
+                          <span>Reordenar</span>
+                        </DropdownMenuItem>
                         <DropdownMenuItem
                           onClick={() => openEditFilter(filter)}
                         >
@@ -2426,75 +2809,76 @@ export function ClientesAccordion({
           Ningún cliente coincide con la búsqueda o los filtros.
         </p>
       ) : (
-        <Accordion multiple={false}>
+        <>
           {/*
-           * En modo agrupado se produce un solo arreglo plano (encabezado de
-           * cada sección + sus filas): las filas conservan la key y el tipo
-           * que ya tenían en modo plano, así que al alternar la agrupación
-           * React solo monta los encabezados y reutiliza las filas vivas en
-           * vez de remontar el listado completo.
+           * Barra global del modo agrupado (margen derecho, sobre los
+           * grupos): orden de TODAS las secciones y expandir/colapsar todas.
+           * El icono muestra la acción a ejecutar según el estado del
+           * conjunto; size-8 por el área táctil móvil.
            */}
-          {grouping === "socio"
-            ? socioGroups.flatMap((group) => [
-                <div
-                  key={`hdr-${group.key}`}
-                  className="flex items-center gap-2 px-1.5 pt-2 pb-1"
-                >
-                  {/*
-                   * Encabezado de sección por socio: punto con el par pastel
-                   * estable del socio (paleta de avatares) + nombre + contador
-                   * sobre el resultado ya filtrado; los clientes sin socio van
-                   * al final bajo «Sin socio».
-                   */}
-                  <span
-                    aria-hidden="true"
-                    className="size-2 shrink-0 rounded-full"
-                    style={group.dotStyle}
-                  />
-                  <span className="text-muted-foreground text-xs font-medium tracking-tight">
-                    {group.label}
-                  </span>
-                  <Badge
-                    variant="outline"
-                    size="xs"
-                    className="text-muted-foreground tabular-nums"
-                  >
-                    {group.clients.length}
-                  </Badge>
-                </div>,
-                ...group.clients.map(renderClientItem),
-              ])
-            : grouping === "estado"
-              ? statusGroups.flatMap((group) => [
-                <div
-                  key={`hdr-${group.key}`}
-                  className="flex items-center gap-2 px-1.5 pt-2 pb-1"
-                >
-                  {/*
-                   * Encabezado de sección: punto del semáforo + etiqueta +
-                   * contador sobre el resultado ya filtrado. «Inactivo» lleva
-                   * punto neutro porque junta estados varios (vencidos,
-                   * pendientes y pruebas); el detalle vive en cada fila.
-                   */}
-                  <span
-                    aria-hidden="true"
-                    className={`size-2 shrink-0 rounded-full ${group.dotClass}`}
-                  />
-                  <span className="text-muted-foreground text-xs font-medium tracking-tight">
-                    {group.label}
-                  </span>
-                  <Badge
-                    variant="outline"
-                    size="xs"
-                    className="text-muted-foreground tabular-nums"
-                  >
-                    {group.clients.length}
-                  </Badge>
-                </div>,
-                ...group.clients.map(renderClientItem),
-              ])
-            : filtered.map(renderClientItem)}
-        </Accordion>
+          {groupedKeys ? (
+            <div className="flex items-center justify-end gap-1 px-1.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-foreground size-8 shrink-0 rounded-full hover:bg-muted"
+                aria-label={
+                  allGroupsDescending
+                    ? "Ordenar todos los grupos en ascendente"
+                    : "Ordenar todos los grupos en descendente"
+                }
+                onClick={() =>
+                  setDescendingGroups(
+                    allGroupsDescending
+                      ? new Set()
+                      : new Set(groupedKeys)
+                  )
+                }
+              >
+                {allGroupsDescending ? (
+                  <ArrowDownAZIcon aria-hidden="true" className="size-4" />
+                ) : (
+                  <ArrowUpAZIcon aria-hidden="true" className="size-4" />
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-foreground size-8 shrink-0 rounded-full hover:bg-muted"
+                aria-label={
+                  allGroupsExpanded
+                    ? "Colapsar todos los grupos"
+                    : "Expandir todos los grupos"
+                }
+                onClick={() =>
+                  setExpandedGroups(
+                    allGroupsExpanded ? new Set() : new Set(groupedKeys)
+                  )
+                }
+              >
+                {allGroupsExpanded ? (
+                  <ChevronsDownUpIcon aria-hidden="true" className="size-4" />
+                ) : (
+                  <ChevronsUpDownIcon aria-hidden="true" className="size-4" />
+                )}
+              </Button>
+            </div>
+          ) : null}
+          <Accordion multiple={false}>
+            {/*
+             * En modo agrupado cada sección es un acordeón colapsable propio
+             * (cerrado por defecto) con sus filas dentro; en modo plano las
+             * filas van directamente. Las filas conservan la key y el tipo
+             * que ya tenían, así que alternar la agrupación solo monta los
+             * encabezados y reutiliza las filas vivas.
+             */}
+            {grouping === "socio"
+              ? socioGroups.map(renderGroup)
+              : grouping === "estado"
+                ? statusGroups.map(renderGroup)
+                : filtered.map(renderClientItem)}
+          </Accordion>
+        </>
       )}
 
       {fetchState === "success" && clients.length > 0 ? (
@@ -2613,6 +2997,7 @@ export function ClientesAccordion({
                     <div className="flex items-center gap-2">
                       <Select
                         value={rule.field}
+                        items={CLIENT_FILTER_FIELD_ITEMS}
                         onValueChange={(value) => {
                           if (
                             value === "estado" ||
@@ -2650,6 +3035,7 @@ export function ClientesAccordion({
                     <div className="flex items-center gap-2">
                       <Select
                         value={rule.operator}
+                        items={CLIENT_FILTER_OPERATORS[rule.field]}
                         onValueChange={(value) => {
                           if (value) updateDraftRule(index, { operator: value })
                         }}
@@ -2678,6 +3064,7 @@ export function ClientesAccordion({
                           value={
                             rule.value === null ? null : String(rule.value)
                           }
+                          items={CLIENT_FILTER_ESTADO_ITEMS}
                           onValueChange={(value) => {
                             if (value) updateDraftRule(index, { value })
                           }}
@@ -2708,6 +3095,7 @@ export function ClientesAccordion({
                                 : null
                               : String(rule.value)
                           }
+                          items={resellerOptions}
                           onValueChange={(value) => {
                             if (value === null) return
                             updateDraftRule(index, {
@@ -2873,6 +3261,49 @@ export function ClientesAccordion({
           </DrawerFooter>
         </DrawerContent>
       </Drawer>
+
+      {/*
+       * Ventana flotante «Reordenar» (menú settings-2 del chip): la HILERA
+       * COMPLETA de chips (vistas preconfiguradas + filtros guardados) con
+       * drag & drop (dnd-kit). Es un Dialog y NO un bottom sheet a propósito:
+       * el gesto de swipe del sheet se peleaba con el arrastre de las filas
+       * y movía el panel. Superficie fija, X de cierre arriba a la derecha
+       * (incluida en DialogContent), Escape y toque fuera también cierran.
+       * Cada drop persiste el orden de claves en la cuenta vía PUT
+       * /api/clientes/chips de forma optimista; sin botón de guardar.
+       */}
+      <Dialog open={reorderOpen} onOpenChange={setReorderOpen}>
+        <DialogContent className="max-w-[calc(100%-2rem)] sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reordenar filtros</DialogTitle>
+            <DialogDescription>
+              Arrastra las vistas y los filtros con el asa para cambiar el
+              orden de la hilera; el primero queda en el margen izquierdo. El
+              orden se guarda en tu cuenta al soltar.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex max-h-[50dvh] flex-col gap-2 overflow-y-auto pr-0.5">
+            <DndContext
+              sensors={reorderSensors}
+              collisionDetection={closestCenter}
+              modifiers={[restrictToVerticalAxis]}
+              onDragEnd={(event) => void handleReorderDragEnd(event)}
+            >
+              <SortableContext
+                items={chips.map((chip) => chip.key)}
+                strategy={verticalListSortingStrategy}
+              >
+                {chips.map((chip, index) => (
+                  <SortableChipRow key={chip.key} chip={chip} index={index} />
+                ))}
+              </SortableContext>
+            </DndContext>
+          </div>
+          <DialogFooter>
+            <DialogClose render={<Button className="w-full sm:w-auto">Listo</Button>} />
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/*
        * Confirmación de borrado de un filtro guardado: destructiva, con el
