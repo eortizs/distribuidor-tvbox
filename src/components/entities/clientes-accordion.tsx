@@ -787,6 +787,13 @@ export function ClientesAccordion({
     })
   }, [])
   /**
+   * Orden del listado plano (vistas y filtros sin agrupación): A→Z por
+   * defecto y Z→A al pulsar el botón de orden bajo la línea de filtros,
+   * el mismo control del modo agrupado para que el gesto sea idéntico
+   * sin importar el filtro activo.
+   */
+  const [flatDescending, setFlatDescending] = useState(false)
+  /**
    * Secciones expandidas del modo agrupado: vacío = todas colapsadas (el
    * estado por defecto). El acordeón de cada grupo es controlado con este
    * conjunto para que los botones globales (expandir/colapsar todos) y el
@@ -1875,6 +1882,20 @@ export function ClientesAccordion({
   }, [filtered, resellerOf])
 
   /**
+   * Listado plano ordenado por usuario, A→Z por defecto y Z→A al pulsar el
+   * botón de orden bajo la línea de filtros (mismo gesto que el orden
+   * interno de las secciones del modo agrupado). Sin agrupación este botón
+   * es la única vía de orden del panel, así que no depende del orden crudo
+   * en que el listado llega del panel de FlujoTV.
+   */
+  const sortedFlat = useMemo(() => {
+    const rows = [...filtered].sort((a, b) =>
+      a.userName.localeCompare(b.userName, "es")
+    )
+    return flatDescending ? rows.reverse() : rows
+  }, [filtered, flatDescending])
+
+  /**
    * Conteo de un filtro sobre el listado completo (lo que muestra su chip):
    * mismas reglas de elegibilidad que la vista (días excluye vencidos).
    */
@@ -2811,10 +2832,12 @@ export function ClientesAccordion({
       ) : (
         <>
           {/*
-           * Barra global del modo agrupado (margen derecho, sobre los
-           * grupos): orden de TODAS las secciones y expandir/colapsar todas.
-           * El icono muestra la acción a ejecutar según el estado del
-           * conjunto; size-8 por el área táctil móvil.
+           * Barra global sobre el listado (margen derecho): en modo agrupado
+           * ordena TODAS las secciones y expande/colapsa todas; en modo plano
+           * (vistas y filtros sin «Agrupar por») muestra solo el botón de
+           * orden, el mismo control A→Z ↔ Z→A de las secciones. El icono
+           * muestra la acción a ejecutar según el estado del conjunto;
+           * size-8 por el área táctil móvil.
            */}
           {groupedKeys ? (
             <div className="flex items-center justify-end gap-1 px-1.5">
@@ -2863,7 +2886,28 @@ export function ClientesAccordion({
                 )}
               </Button>
             </div>
-          ) : null}
+          ) : (
+            <div className="flex items-center justify-end px-1.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-muted-foreground hover:text-foreground size-8 shrink-0 rounded-full hover:bg-muted"
+                aria-pressed={flatDescending}
+                aria-label={
+                  flatDescending
+                    ? "Ordenar clientes en ascendente"
+                    : "Ordenar clientes en descendente"
+                }
+                onClick={() => setFlatDescending((previous) => !previous)}
+              >
+                {flatDescending ? (
+                  <ArrowDownAZIcon aria-hidden="true" className="size-4" />
+                ) : (
+                  <ArrowUpAZIcon aria-hidden="true" className="size-4" />
+                )}
+              </Button>
+            </div>
+          )}
           <Accordion multiple={false}>
             {/*
              * En modo agrupado cada sección es un acordeón colapsable propio
@@ -2876,7 +2920,7 @@ export function ClientesAccordion({
               ? socioGroups.map(renderGroup)
               : grouping === "estado"
                 ? statusGroups.map(renderGroup)
-                : filtered.map(renderClientItem)}
+                : sortedFlat.map(renderClientItem)}
           </Accordion>
         </>
       )}
