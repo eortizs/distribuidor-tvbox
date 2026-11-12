@@ -140,7 +140,13 @@
  * (parten el listado por el estado del semáforo: inactivo = todo lo que no
  * está activo). Las reglas fijas viven fuera de la consulta editable para
  * que el operador no pueda desconfigurarlas. La vista activa se pinta con
- * el foreground del tema (negro en claro, blanco en oscuro). Las vistas y el
+ * el foreground del tema (negro en claro, blanco en oscuro). Junto a las
+ * vistas va el interruptor **«Agrupar por estado»** (independiente del radio
+ * de vistas, combina con cualquiera): activado, el listado se parte en dos
+ * secciones con encabezado y contador — «Activo» (semáforo en activo) e
+ * «Inactivo» (todo lo demás: vencidos, pendientes y pruebas) — calculadas
+ * sobre el resultado de la vista, los filtros y la búsqueda ya aplicados; las
+ * secciones vacías se omiten. Las vistas, el interruptor y el
  * botón «Añadir filtro» — un círculo «+» con el mismo fondo del tema — van en
  * el renglón superior, desplazable en horizontal con el scrollbar oculto;
  * un chevron gris flotante en el margen derecho solo sugiere que la fila
@@ -194,6 +200,7 @@ import {
   CircleCheckIcon,
   CopyIcon,
   FileTextIcon,
+  GroupIcon,
   HashIcon,
   ImageIcon,
   LandmarkIcon,
@@ -280,6 +287,7 @@ import {
   ToggleGroup,
   ToggleGroupItem,
 } from "@/components/ui/toggle-group"
+import { Toggle } from "@/components/ui/toggle"
 import {
   Tooltip,
   TooltipContent,
@@ -735,6 +743,11 @@ export function ClientesAccordion({
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [searchInput, setSearchInput] = useState("")
   const [preset, setPreset] = useState<ClientPreset>("todos")
+  /**
+   * Agrupar por estado (chip interruptor junto a las vistas): activado, el
+   * listado se parte en dos secciones con encabezado — «Activo» e «Inactivo».
+   */
+  const [groupByStatus, setGroupByStatus] = useState(false)
   const [query, setQuery] = useState<FilterQuery>(() => createFilterQuery())
   const [reloadCount, setReloadCount] = useState(0)
   const [syncOpen, setSyncOpen] = useState(false)
@@ -1664,6 +1677,32 @@ export function ClientesAccordion({
   const hasFilters = query.rules.length > 0 || preset !== "todos"
   const rules = useMemo(() => flattenFilterRules(query), [query])
 
+  /**
+   * Secciones de la agrupación por estado, calculadas sobre el listado ya
+   * filtrado (vista preconfigurada + consulta + búsqueda): «Activo» junta el
+   * semáforo en activo e «Inactivo» todo lo demás (vencidos, pendientes y
+   * pruebas). Las secciones sin clientes se omiten para no imprimir
+   * encabezados vacíos.
+   */
+  const statusGroups = useMemo(
+    () =>
+      [
+        {
+          key: "activo",
+          label: "Activo",
+          dotClass: "bg-success",
+          clients: filtered.filter((client) => client.statusLabel === "activo"),
+        },
+        {
+          key: "inactivo",
+          label: "Inactivo",
+          dotClass: "bg-muted-foreground/40",
+          clients: filtered.filter((client) => client.statusLabel !== "activo"),
+        },
+      ].filter((group) => group.clients.length > 0),
+    [filtered]
+  )
+
   /** Conteos en cascada: cada regla cuenta sobre el resultado de la anterior. */
   const ruleCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -1687,6 +1726,84 @@ export function ClientesAccordion({
     }
     return counts
   }, [clients, rules, resellerOf])
+
+  /**
+   * Renglón de un cliente en el listado (fila plegable + panel de detalle).
+   * Extraído del mapa original para reutilizarlo tal cual en el modo plano y
+   * dentro de cada sección de la agrupación por estado.
+   */
+  const renderClientItem = (client: FlujoClient) => (
+    <AccordionItem
+      key={client.id}
+      value={client.id}
+      className="not-last:border-b-0 bg-transparent p-0"
+    >
+      <div className="relative">
+        <AccordionTrigger className="items-center gap-3 rounded-lg px-1.5 py-2.5 hover:bg-muted hover:no-underline focus-visible:border-transparent focus-visible:ring-0 dark:hover:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden">
+          <Avatar className="size-12">
+            <AvatarFallback
+              style={pastelAvatarStyle(client.id || client.userName)}
+            >
+              {initials(client.userName)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 pr-14">
+            <span className="truncate text-base font-semibold tracking-tight">
+              {client.userName}
+            </span>
+            {clientName(client, clientNames) ? (
+              <span className="line-clamp-2 text-muted-foreground text-xs">
+                {clientName(client, clientNames)}
+              </span>
+            ) : null}
+            {client.expiresAt || client.daysRemaining !== null ? (
+              <div className="flex items-center gap-2">
+                <Progress
+                  value={expiryProgress(client.daysRemaining)}
+                  aria-label={`Días restantes de ${client.userName}`}
+                  className={`w-24 max-w-full shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
+                />
+                <span className="text-muted-foreground text-xs tabular-nums">
+                  {formatDaysCompact(client.daysRemaining)}
+                </span>
+              </div>
+            ) : null}
+          </div>
+          <div className="flex w-4 shrink-0 items-center justify-center">
+            <span
+              role="img"
+              aria-label={client.statusLabel}
+              className={`size-2.5 rounded-full ${statusDotClass(client.status)}`}
+            />
+          </div>
+        </AccordionTrigger>
+        <div className="pointer-events-none absolute inset-y-0 right-8 z-10 flex items-center">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => openPurchase(client)}
+            disabled={purchasing || submittingTransfer || submittingCoupon}
+            aria-label={`Comprar 1 mes para ${client.userName}`}
+            className="pointer-events-auto h-9 w-9 shrink-0 rounded-full text-black dark:text-white transition-[transform,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-90 active:bg-primary/15 active:text-primary motion-reduce:active:scale-100"
+          >
+            <ShoppingCartPlusIcon aria-hidden="true" className="size-5" />
+          </Button>
+        </div>
+      </div>
+      <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
+        <div className="flex flex-col gap-1 pb-1 text-xs">
+          <span className="truncate">
+            vence {formatFlujoDate(client.expiresAt)}
+          </span>
+          {resellerOf(client) ? (
+            <span className="truncate">
+              socio: {resellerOf(client)}
+            </span>
+          ) : null}
+        </div>
+      </AccordionContent>
+    </AccordionItem>
+  )
 
   return (
     <div className="flex flex-col gap-4">
@@ -1841,16 +1958,17 @@ export function ClientesAccordion({
         >
           <div className="flex flex-col gap-2">
             {/*
-             * Renglón 1: las vistas preconfiguradas y el botón «Añadir
-             * filtro», en una sola fila desplazable en horizontal con el
-             * scrollbar oculto. El «+» se queda arriba: los filtros que crea
-             * bajan al renglón de abajo. El `pr-10` reserva espacio al final
-             * del desplazamiento para que el «+» quede fuera de la zona del
-             * chevron y no se esconda debajo de él. En el margen derecho flota
-             * un chevron gris, pista visual de que la fila continúa: al hover
-             * o tap muestra el tooltip «deslizar» y el tap además recorre la
-             * fila hasta el final (y de vuelta al inicio si ya está al final)
-             * para demostrar que se puede deslizar.
+             * Renglón 1: las vistas preconfiguradas, el interruptor «Agrupar
+             * por estado» y el botón «Añadir filtro», en una sola fila
+             * desplazable en horizontal con el scrollbar oculto. El «+» se
+             * queda arriba: los filtros que crea bajan al renglón de abajo.
+             * El `pr-10` reserva espacio al final del desplazamiento para que
+             * el «+» quede fuera de la zona del chevron y no se esconda debajo
+             * de él. En el margen derecho flota un chevron gris, pista visual
+             * de que la fila continúa: al hover o tap muestra el tooltip
+             * «deslizar» y el tap además recorre la fila hasta el final (y de
+             * vuelta al inicio si ya está al final) para demostrar que se
+             * puede deslizar.
              */}
             <div className="relative">
               <div
@@ -1891,6 +2009,25 @@ export function ClientesAccordion({
                     </ToggleGroupItem>
                   ))}
                 </ToggleGroup>
+                {/*
+                 * «Agrupar por estado»: interruptor independiente de las
+                 * vistas (no entra en el radio del grupo, así que combina con
+                 * cualquier vista). Comparte la cápsula y el estilo de activo
+                 * de las vistas (`PRESET_ACTIVE_CLASS`) para leerse como parte
+                 * de la misma fila; activado, parte el listado en dos
+                 * secciones con encabezado — «Activo» e «Inactivo».
+                 */}
+                <Toggle
+                  variant="outline"
+                  size="sm"
+                  pressed={groupByStatus}
+                  onPressedChange={setGroupByStatus}
+                  aria-label="Agrupar los clientes por estado"
+                  className={`shrink-0 rounded-full ${PRESET_ACTIVE_CLASS}`}
+                >
+                  <GroupIcon aria-hidden="true" />
+                  Agrupar por estado
+                </Toggle>
                 <FiltersBuilder
                 /* El picker abre como una vista de «Crear filtro»: sin buscador
                    de atributos (la fila de búsqueda se oculta desde el
@@ -2046,83 +2183,43 @@ export function ClientesAccordion({
         </p>
       ) : (
         <Accordion multiple={false}>
-          {filtered.map((client) => (
-            <AccordionItem
-              key={client.id}
-              value={client.id}
-              className="not-last:border-b-0 bg-transparent p-0"
-            >
-              <div className="relative">
-                <AccordionTrigger className="items-center gap-3 rounded-lg px-1.5 py-2.5 hover:bg-muted hover:no-underline focus-visible:border-transparent focus-visible:ring-0 dark:hover:bg-muted/50 [&_[data-slot=accordion-trigger-icon]]:hidden">
-                  <Avatar className="size-12">
-                    <AvatarFallback
-                      style={pastelAvatarStyle(client.id || client.userName)}
-                    >
-                      {initials(client.userName)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 pr-14">
-                    <span className="truncate text-base font-semibold tracking-tight">
-                      {client.userName}
-                    </span>
-                    {clientName(client, clientNames) ? (
-                      <span className="line-clamp-2 text-muted-foreground text-xs">
-                        {clientName(client, clientNames)}
-                      </span>
-                    ) : null}
-                    {client.expiresAt || client.daysRemaining !== null ? (
-                      <div className="flex items-center gap-2">
-                        <Progress
-                          value={expiryProgress(client.daysRemaining)}
-                          aria-label={`Días restantes de ${client.userName}`}
-                          className={`w-24 max-w-full shrink-0 ${expiryProgressClass(client.daysRemaining)}`}
-                        />
-                        <span className="text-muted-foreground text-xs tabular-nums">
-                          {formatDaysCompact(client.daysRemaining)}
-                        </span>
-                      </div>
-                    ) : null}
-                  </div>
-                  <div className="flex w-4 shrink-0 items-center justify-center">
-                    <span
-                      role="img"
-                      aria-label={client.statusLabel}
-                      className={`size-2.5 rounded-full ${statusDotClass(client.status)}`}
-                    />
-                  </div>
-                </AccordionTrigger>
-                <div className="pointer-events-none absolute inset-y-0 right-8 z-10 flex items-center">
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => openPurchase(client)}
-                    disabled={
-                      purchasing || submittingTransfer || submittingCoupon
-                    }
-                    aria-label={`Comprar 1 mes para ${client.userName}`}
-                    className="pointer-events-auto h-9 w-9 shrink-0 rounded-full text-black dark:text-white transition-[transform,background-color,color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] active:scale-90 active:bg-primary/15 active:text-primary motion-reduce:active:scale-100"
-                  >
-                    <ShoppingCartPlusIcon
-                      aria-hidden="true"
-                      className="size-5"
-                    />
-                  </Button>
-                </div>
-              </div>
-              <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
-                <div className="flex flex-col gap-1 pb-1 text-xs">
-                  <span className="truncate">
-                    vence {formatFlujoDate(client.expiresAt)}
+          {/*
+           * En modo agrupado se produce un solo arreglo plano (encabezado de
+           * cada sección + sus filas): las filas conservan la key y el tipo
+           * que ya tenían en modo plano, así que al alternar el interruptor
+           * React solo monta los encabezados y reutiliza las filas vivas en
+           * vez de remontar el listado completo.
+           */}
+          {groupByStatus
+            ? statusGroups.flatMap((group) => [
+                <div
+                  key={`hdr-${group.key}`}
+                  className="flex items-center gap-2 px-1.5 pt-2 pb-1"
+                >
+                  {/*
+                   * Encabezado de sección: punto del semáforo + etiqueta +
+                   * contador sobre el resultado ya filtrado. «Inactivo» lleva
+                   * punto neutro porque junta estados varios (vencidos,
+                   * pendientes y pruebas); el detalle vive en cada fila.
+                   */}
+                  <span
+                    aria-hidden="true"
+                    className={`size-2 shrink-0 rounded-full ${group.dotClass}`}
+                  />
+                  <span className="text-muted-foreground text-xs font-medium tracking-tight">
+                    {group.label}
                   </span>
-                  {resellerOf(client) ? (
-                    <span className="truncate">
-                      socio: {resellerOf(client)}
-                    </span>
-                  ) : null}
-                </div>
-              </AccordionContent>
-            </AccordionItem>
-          ))}
+                  <Badge
+                    variant="outline"
+                    size="xs"
+                    className="text-muted-foreground tabular-nums"
+                  >
+                    {group.clients.length}
+                  </Badge>
+                </div>,
+                ...group.clients.map(renderClientItem),
+              ])
+            : filtered.map(renderClientItem)}
         </Accordion>
       )}
 
