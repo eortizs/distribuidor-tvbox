@@ -311,7 +311,7 @@ export function AppNotifications() {
             </div>
           ) : items.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-              Sin notificaciones. Los resultados de tus renovaciones aparecerán
+              Sin notificaciones. Los resultados de las operaciones aparecerán
               aquí.
             </p>
           ) : (

@@ -1,9 +1,12 @@
 -- Notificaciones persistentes del panel: resultados de renovaciones de
 -- licencias (Mercado Pago, transferencia aprobada/rechazada, cupón y
 -- paquetes) dirigidas al comprador de la orden (`mp_orders.buyer_user_id`).
--- Cuando la validación automática rechaza un comprobante de transferencia,
--- además se inserta una copia en la cuenta de cada administrador para que
--- la campana le avise de la orden pendiente de revisión.
+-- Cada aviso al comprador se replica en la cuenta de cada administrador con
+-- la atribución al distribuidor que ejecutó la operación (exitosas y
+-- fallidas; fan-out en `fanoutAdminCopies`). Además, cuando la validación
+-- automática rechaza un comprobante de transferencia, se inserta una copia
+-- con los motivos en la cuenta de cada administrador para que la campana le
+-- avise de la orden pendiente de revisión.
 --
 -- Una fila por evento; el comprador las consulta en cualquier momento desde
 -- la campana de la cabecera. `kind` distingue el resultado para el icono y el

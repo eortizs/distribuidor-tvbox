@@ -8,14 +8,18 @@ import { formatMxn } from "@/lib/finanzas"
 /**
  * Notificaciones persistentes del comprador y de los administradores:
  * resultados de renovaciones de licencias (Mercado Pago, transferencia,
- * cupón y paquetes de `/modulos/paquetes-flujotv`). Cuando la validación
- * automática rechaza un comprobante de transferencia, además del aviso al
- * comprador se inserta una copia en la cuenta de cada admin (función
- * `createAdminTransferRejectedNotification`) para que la campana le avise
+ * cupón y paquetes de `/modulos/paquetes-flujotv`) y de abonos de saldo.
+ * Cada aviso al comprador se replica en la cuenta de cada admin
+ * (`fanoutAdminCopies`) con la atribución al distribuidor que ejecutó la
+ * operación —exitosas y fallidas— para que el admin siempre se entere del
+ * resultado sin depender del comprador. Cuando la validación automática
+ * rechaza un comprobante de transferencia, además del aviso al comprador se
+ * inserta una copia en la cuenta de cada admin
+ * (`createAdminTransferRejectedNotification`) para que la campana le avise
  * de la orden pendiente de revisión. La creación es mejor esfuerzo — una
  * notificación que falla nunca revierte ni retrasa la renovación que la
  * originó; el resto de operaciones (listar, leer, borrar) sí son exigentes
- * porque las pide directamente la UI de la campana.
+ * porque las piden directamente la UI de la campana.
  */
 
 export type NotificationKind =
@@ -154,9 +158,11 @@ export interface RenewalNotificationInput {
 }
 
 /**
- * Crea la notificación de resultado de renovación para el comprador. Nunca
- * lanza: el flujo de cobro/renovación que la invoca no debe enterarse de un
- * fallo de aviso (se registra y se sigue).
+ * Crea la notificación de resultado de renovación para el comprador y, con
+ * `fanoutAdminCopies`, replica el resultado en la campana de cada admin con
+ * la atribución al distribuidor. Nunca lanza: el flujo de cobro/renovación
+ * que la invoca no debe enterarse de un fallo de aviso (se registra y se
+ * sigue).
  */
 export function createRenewalNotification(
   input: RenewalNotificationInput
@@ -200,6 +206,7 @@ export function createRenewalNotification(
       expiresAt: null,
       orderId,
     }).catch((error: unknown) => logError("create", error))
+    fanoutAdminCopies(input)
     return
   }
 
@@ -245,6 +252,127 @@ export function createRenewalNotification(
     expiresAt,
     orderId,
   }).catch((error: unknown) => logError("create", error))
+  fanoutAdminCopies(input)
+}
+
+/**
+ * Textos de la copia para admins: mismos `kind` (badges e iconos de la
+ * campana) pero en tercera persona y atribuidos al distribuidor que ejecutó
+ * la operación, para que el admin distinga de un vistazo quién la hizo.
+ */
+function adminCopyTexts(
+  input: RenewalNotificationInput,
+  distributor: string
+): { title: string; body: string } {
+  const reason = (input.error ?? "").trim()
+
+  // Abono de saldo (months = 0): la copia habla del abono del distribuidor.
+  if (input.months === 0) {
+    const amount =
+      typeof input.amountMxn === "number" && input.amountMxn > 0
+        ? formatMxn(input.amountMxn)
+        : ""
+    const billetera =
+      input.saldoTipo === "tokens" ? "su saldo en tokens" : "su saldo en cupones"
+    if (input.kind === "renewal_success") {
+      return {
+        title: "Abono aplicado",
+        body: `Distribuidor ${distributor} abonó ${
+          amount || "un monto"
+        } a ${billetera}.`,
+      }
+    }
+    return {
+      title: "Abono no acreditado",
+      body:
+        `El pago de ${distributor} quedó registrado pero el abono no se pudo acreditar en ${billetera}.` +
+        (reason ? ` Motivo: ${reason.slice(0, 200)}` : "") +
+        " Queda marcada para reintento automático.",
+    }
+  }
+
+  const bonusMonths =
+    Number.isInteger(input.bonusMonths) && (input.bonusMonths as number) > 0
+      ? (input.bonusMonths as number)
+      : 0
+  const paqueteLabel =
+    bonusMonths > 0
+      ? ` +${bonusMonths} mes${bonusMonths === 1 ? "" : "es"} de regalo`
+      : ""
+
+  if (input.kind === "renewal_success") {
+    return {
+      title: "Renovación exitosa",
+      body: `Distribuidor ${distributor} renovó +${input.months} mes${
+        input.months === 1 ? "" : "es"
+      }${paqueteLabel} para ${input.userName}.`,
+    }
+  }
+  if (input.kind === "renewal_failed") {
+    return {
+      title: "Renovación fallida",
+      body:
+        `Distribuidor ${distributor} no pudo renovar la licencia de ${input.userName} (+${input.months} mes${
+          input.months === 1 ? "" : "es"
+        }).` +
+        (reason ? ` Motivo: ${reason.slice(0, 200)}` : "") +
+        " Puedes reintentar desde Clientes.",
+    }
+  }
+  return {
+    title: "Transferencia rechazada",
+    body:
+      `Se rechazó el comprobante de ${distributor} para renovar a ${input.userName}.` +
+      (reason ? ` Motivo: ${reason.slice(0, 200)}` : ""),
+  }
+}
+
+/**
+ * Replica el resultado de la operación del distribuidor en la campana de
+ * cada administrador (exitosas y fallidas): el admin se entera de lo que ya
+ * le llegó al comprador, con la atribución de quién la ejecutó. Sin buyer no
+ * hay operación que atribuir (legado). El admin que ES el comprador no
+ * recibe copia (ya tiene la notificación propia; duplicar sería ruido). El
+ * índice único parcial (user_id, order_id) para fallos/rechazos deduplica
+ * contra la copia de revisión de `createAdminTransferRejectedNotification`.
+ * Nunca lanza: mismo contrato de mejor esfuerzo que el aviso al comprador.
+ */
+function fanoutAdminCopies(input: RenewalNotificationInput): void {
+  const { buyerUserId, orderId } = input
+  if (!buyerUserId) return
+
+  void Promise.all([
+    pool.query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin'`),
+    pool.query<{ username: string }>(
+      `SELECT username FROM users WHERE id = $1::uuid`,
+      [buyerUserId]
+    ),
+  ])
+    .then(([admins, buyer]) => {
+      const distributor = (buyer.rows[0]?.username ?? "").trim() ||
+        "un distribuidor"
+      const { title, body } = adminCopyTexts(input, distributor)
+      const targets = admins.rows
+        .map((row) => String(row.id))
+        .filter((adminId) => adminId !== buyerUserId)
+      return Promise.all(
+        targets.map((adminId) =>
+          insertNotification({
+            userId: adminId,
+            kind: input.kind,
+            title,
+            body,
+            userName: input.userName,
+            expiresAt:
+              input.kind === "renewal_success" && input.months > 0
+                ? (input.verifiedExpiresAt ?? null)
+                : null,
+            orderId,
+          })
+        )
+      )
+    })
+    .catch((error: unknown) => logError("create_admin_copies", error))
 }
 
 export interface AdminTransferRejectedNotificationInput {
