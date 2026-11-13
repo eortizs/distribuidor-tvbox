@@ -2,6 +2,7 @@ import {
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
+  MonitorDownIcon,
   PackageIcon,
   PiggyBankIcon,
   PlugZapIcon,
@@ -41,6 +42,12 @@ export interface Modulo {
    * queda servida detrás de `requireRole("admin")`.
    */
   adminOnly?: boolean
+  /**
+   * El botón «Configurar» del hub abre la herramienta en modo configuración
+   * (`href` + `?editar=1`). Sin esta marca, «Configurar» sigue siendo
+   * maqueta sin funcionalidad.
+   */
+  configurable?: boolean
 }
 
 export const MODULOS: Modulo[] = [
@@ -85,6 +92,14 @@ export const MODULOS: Modulo[] = [
       "Renueva licencias en paquetes de 3, 6 y 12 meses con meses de regalo y los mismos métodos de pago.",
     href: "/modulos/paquetes-flujotv",
     icon: PackageIcon,
+  },
+  {
+    title: "Actualización FlujoTV",
+    description:
+      "Versión de la app, código de downloader y enlaces de descarga para TV, tablet, PC y celular, listos para copiar.",
+    href: "/modulos/actualizacion-flujotv",
+    icon: MonitorDownIcon,
+    configurable: true,
   },
   {
     title: "Alta de tickets",

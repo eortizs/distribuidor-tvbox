@@ -21,7 +21,7 @@ Este proyecto **siempre se publica en el subdominio**: https://distribuidor-tvbo
 ### Procedimiento de despliegue (obligatorio tras cada cambio)
 
 ```bash
-node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs && node db/apply-mp-orders-renewal-verify.mjs && node db/apply-mp-refunds.mjs && node db/apply-shopping-list.mjs && node db/apply-coupon-limit.mjs && node db/apply-coupon-monthly-limit.mjs && node db/apply-tickets.mjs && node db/apply-paquetes.mjs && node db/apply-transfer-receipt-scan.mjs && node db/apply-transfer-concept.mjs && node db/apply-notifications.mjs && node db/apply-saldo.mjs && node db/apply-saldo-tipos.mjs && node db/apply-auth-google.mjs && node db/apply-renewal-attempts.mjs && node db/apply-mp-renewal-retries.mjs && node db/apply-conectores.mjs && node db/apply-client-filters.mjs && node db/apply-client-chip-layout.mjs
+node db/apply-mp-orders-cupon.mjs && node db/apply-mp-orders-transfer.mjs && node db/apply-mp-orders-renewal-verify.mjs && node db/apply-mp-refunds.mjs && node db/apply-shopping-list.mjs && node db/apply-coupon-limit.mjs && node db/apply-coupon-monthly-limit.mjs && node db/apply-tickets.mjs && node db/apply-paquetes.mjs && node db/apply-transfer-receipt-scan.mjs && node db/apply-transfer-concept.mjs && node db/apply-notifications.mjs && node db/apply-saldo.mjs && node db/apply-saldo-tipos.mjs && node db/apply-auth-google.mjs && node db/apply-renewal-attempts.mjs && node db/apply-mp-renewal-retries.mjs && node db/apply-conectores.mjs && node db/apply-client-filters.mjs && node db/apply-client-chip-layout.mjs && node db/apply-flujotv-app.mjs
 npm run build && pm2 reload distribuidor-tvbox
 ```
 
@@ -81,5 +81,27 @@ Al crear o modificar cualquier componente, se debe buscar ofrecer la **mejor UX 
 - **Estados y feedback**: todo elemento interactivo debe tener estados hover/focus/active/disabled; feedback inmediato para acciones del usuario (loading, toasts, mensajes de error cerca del campo).
 - **Accesibilidad**: contraste suficiente, área táctil mínima, foco visible, labels asociados a inputs, navegación por teclado.
 - **Carga cognitiva**: formularios cortos, opciones limitadas, texto de ayuda solo donde haga falta, iconos con etiqueta de texto cuando el significado no es universal.
+
+### Directrices de tamaños: botones, iconos y tipografía (obligatorio)
+
+Métricas concretas de legibilidad y toque, además de las prácticas generales de arriba. Referencia aplicada: `src/components/herramientas/actualizacion-flujotv/actualizacion-flujotv-view.tsx`.
+
+**Áreas táctiles y botones:**
+
+- **Área táctil mínima (hit target)**: 44×44 px (estándar Apple; 48 dp Google) en todo elemento interactivo. Los botones de solo icono pequeños NO se agrandan visualmente: se extiende su zona de toque con un margen invisible por pseudo-elemento, p. ej. botón `size="icon-sm"` (28 px) + `className="relative after:content-[''] after:absolute after:-inset-2"` → 44×44 px sin cambiar el aspecto.
+- **Botones estándar con texto**: altura entre 36 y 48 px (p. ej. `size="lg"`, 36 px) con relleno lateral de 12 a 16 px (p. ej. `px-4`).
+- **Separación entre elementos clicables**: mínimo 8 px de espacio libre entre dos controles adyacentes (filas con enlace + botón de copia, chips, iconos de acción): usar `gap-2` como mínimo en esos contenedores.
+
+**Tipografía:**
+
+- **Títulos de tarjeta o sección**: 18–20 px (`text-lg`–`text-xl`) con peso SemiBold o Medium para fijar jerarquía.
+- **Texto principal y datos**: 16 px (`text-base`) como base ideal en móviles (valores, cifras, enlaces).
+- **Etiquetas secundarias**: nunca bajar de 14 px (`text-sm`).
+- **Texto de botones**: 14 px con peso Medium (el estándar de `Button` ya lo cumple).
+
+**Iconos informativos y enlaces largos:**
+
+- Iconos informativos (no de acción) a 20×20 px (`size-5`) o 24×24 px (`size-6`), con `aria-hidden="true"`.
+- Enlaces largos (URLs): mostrar un texto claro como «Enlace directo» en vez de truncar con puntos suspensivos; el `href` real va en el anchor y el botón de copia de la fila manda al portapapeles el renglón completo (etiqueta + URL).
 
 Antes de entregar UI, verificar que el resultado cumple estas prácticas (usar `reui_get_audit_checklist` y el skill de ReUI como referencia de calidad).

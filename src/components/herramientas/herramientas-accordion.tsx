@@ -11,9 +11,11 @@
  * - Al margen derecho, la estrella de favoritos y el botón settings-2 de
  *   lucide: este último es el trigger del acordeón y, al pulsarlo,
  *   despliega las opciones de la herramienta.
- * - Contenido expandido: dos botones en lista, **maquetas sin
- *   funcionalidad por ahora** — «Configurar» (fantasma, con icono de
- *   controles) y «Eliminar» (variante destructive, separada del resto).
+ * - Contenido expandido: dos botones en lista — «Configurar» (fantasma, con
+ *   icono de controles) navega a la herramienta en modo configuración
+ *   (`href` + `?editar=1`) cuando el módulo lo declara `configurable` en el
+ *   catálogo; el resto siguen siendo maquetas sin funcionalidad por ahora.
+ *   «Eliminar» (variante destructive, separada del resto) es maqueta.
  *
  * **Buscador** (`/clientes` como referencia): píldora con lupa encima de
  * los filtros; filtra por nombre y descripción (sin acentos) y suma una X
@@ -547,7 +549,18 @@ export function HerramientasAccordion({
                 </div>
                 <AccordionContent className="text-muted-foreground py-0 pr-1.5 pl-16.5">
                   <div className="flex flex-col items-stretch gap-1 pb-1">
-                    <Button type="button" variant="ghost" size="lg" className="w-full max-w-56 justify-start">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="lg"
+                      className="w-full max-w-56 justify-start"
+                      {...(tool.configurable
+                        ? {
+                            render: <Link href={`${tool.href}?editar=1`} />,
+                            nativeButton: false,
+                          }
+                        : {})}
+                    >
                       <SlidersHorizontalIcon aria-hidden="true" />
                       Configurar
                     </Button>
