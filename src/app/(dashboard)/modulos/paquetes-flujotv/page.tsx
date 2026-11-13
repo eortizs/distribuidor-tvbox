@@ -5,6 +5,7 @@ import {
   licensePriceMxnOrNull,
   transferBankDataOrNull,
 } from "@/server/mercadopago/config"
+import { getSaldosActual } from "@/server/saldo/service"
 
 export const metadata = {
   title: "Paquetes FlujoTV",
@@ -16,6 +17,9 @@ export const metadata = {
  * listado con alcance por perfil (el distribuidor solo ve sus clientes),
  * precio unitario y datos bancarios desde `.env`, y el retorno del checkout
  * de Mercado Pago por query (`orden` + `estado`) para el aviso y el sondeo.
+ * `saldoCupones` es el saldo en cupones actual del comprador (la billetera
+ * que el cupón debita para pagar licencias de FlujoTV): la ventana de pago
+ * lo muestra y el servidor exige saldo suficiente antes de aceptar el canje.
  */
 export default async function PaquetesFlujoTvPage({
   searchParams,
@@ -23,7 +27,10 @@ export default async function PaquetesFlujoTvPage({
   searchParams: Promise<{ orden?: string; estado?: string }>
 }) {
   const [user, params] = await Promise.all([requireUser(), searchParams])
-  const scope = await resolveClientScope(user)
+  const [scope, saldos] = await Promise.all([
+    resolveClientScope(user),
+    getSaldosActual(user.id),
+  ])
   const distribuidorName = scope.kind === "distributor" ? scope.name : null
 
   return (
@@ -35,6 +42,7 @@ export default async function PaquetesFlujoTvPage({
         returnOrder={params.orden?.trim() || null}
         returnState={params.estado?.trim() || null}
         transferBank={transferBankDataOrNull()}
+        saldoCupones={saldos.cupones}
       />
     </div>
   )

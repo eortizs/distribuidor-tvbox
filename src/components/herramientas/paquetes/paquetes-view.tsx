@@ -29,7 +29,10 @@
  *   - **Cupón**: el código está **asignado** por el sistema (`1010`, único
  *     código válido para cualquiera de los paquetes): no se teclea, se
  *     muestra y el servidor lo valida. `POST /api/paquetes/cupones` crea la
- *     orden pagada y renueva al instante, idempotente por request_id.
+ *     orden pagada, debita el saldo en cupones del comprador (su billetera
+ *     exclusiva de licencias FlujoTV: la ventana lo muestra y exige saldo
+ *     suficiente — sin él el canje se bloquea en la UI y el servidor responde
+ *     422) y renueva al instante, idempotente por request_id.
  *
  * - Tras una renovación confirmada la fila se refresca con la lectura en
  *   vivo del panel (`GET /api/flujotv/clients/{usuario}`), como en
@@ -278,6 +281,12 @@ interface PaquetesViewProps {
     account: string
     holder: string
   } | null
+  /**
+   * Saldo en cupones actual del comprador (server-rendered): la billetera
+   * que el cupón debita para pagar la licencia. La ventana de pago lo
+   * muestra y bloquea el canje si no alcanza; el servidor lo revalida igual.
+   */
+  saldoCupones?: number | null
 }
 
 export function PaquetesView({
@@ -286,6 +295,7 @@ export function PaquetesView({
   returnOrder = null,
   returnState = null,
   transferBank = null,
+  saldoCupones = null,
 }: PaquetesViewProps) {
   const [clients, setClients] = useState<FlujoClient[]>([])
   const [clientNames, setClientNames] = useState<Record<string, string>>({})
@@ -305,6 +315,25 @@ export function PaquetesView({
   const [payMethod, setPayMethod] = useState<PayMethod>("mercadopago")
   const [submittingTransfer, setSubmittingTransfer] = useState(false)
   const [submittingCoupon, setSubmittingCoupon] = useState(false)
+  /**
+   * Saldo en cupones vigente en la sesión: nace del dato server-rendered y
+   * se ajusta en local con cada canje aceptado (la orden ya debita el saldo
+   * en el servidor), para que un segundo paquete en la misma sesión valide
+   * contra el saldo real y no contra el de la carga de la página. El espejo
+   * `saldoCuponesServidor` distingue «llegó dato nuevo del servidor» de
+   * «solo hay descuento optimista local»: sin él, el render reiniciaría el
+   * saldo descontado.
+   */
+  const [saldoCuponesServidor, setSaldoCuponesServidor] =
+    useState(saldoCupones)
+  const [saldoCuponesVigente, setSaldoCuponesVigente] =
+    useState(saldoCupones)
+  if (saldoCuponesServidor !== saldoCupones) {
+    // Sincronización durante el render — patrón React «ajustar el estado
+    // cuando cambia una prop».
+    setSaldoCuponesServidor(saldoCupones)
+    setSaldoCuponesVigente(saldoCupones)
+  }
   /**
    * Orden con renovación fallida pendiente de recuperación en este canje: el
    * botón principal pasa de «Aplicar cupón 1010» a «Reintentar renovación»
@@ -431,6 +460,16 @@ export function PaquetesView({
     payMethod === "mercadopago" && paqueteAmount !== null
       ? mpProcessingFeeMxn(paqueteAmount)
       : null
+
+  /**
+   * El cupón debita el saldo en cupones: sin saldo suficiente para el
+   * paquete elegido el canje se bloquea en la ventana (y el servidor lo
+   * revalida igual antes de aceptar).
+   */
+  const couponSaldoInsuficiente =
+    saldoCuponesVigente !== null &&
+    paqueteAmount !== null &&
+    saldoCuponesVigente < paqueteAmount
 
   const submitPurchase = useCallback(async () => {
     if (!purchaseTarget) return
@@ -568,6 +607,13 @@ export function PaquetesView({
         months: paqueteMonths,
         requestId,
       })
+      // El canje quedó registrado y el servidor YA debió el saldo en
+      // cupones (renovada, `renewal_failed` o `pending` por igual):
+      // reflejarlo en local para que la próxima apertura del sheet valide
+      // contra el saldo real sin recargar la página.
+      setSaldoCuponesVigente((saldo) =>
+        saldo !== null ? Math.round((saldo - result.amount) * 100) / 100 : null
+      )
       // Etiqueta SIEMPRE desde la orden del servidor (meses pagados + gratis):
       // un replay con otra selección en pantalla anunciaría el paquete equivocado.
       const label = paqueteOrderLabel(result.months, result.bonusMonths)
@@ -1177,6 +1223,24 @@ export function PaquetesView({
             ) : null}
 
             {/*
+             * Saldo en cupones del comprador: la billetera exclusiva para
+             * licencias de FlujoTV (el pago con cupón la debita). Renglón
+             * fijo del resumen: visible en TODO el checkout — desde la
+             * elección del paquete y el método — para decidir con el saldo
+             * a la vista.
+             */}
+            <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+              <span className="text-muted-foreground text-xs">
+                Saldo en cupones
+              </span>
+              <span className="text-sm font-medium tabular-nums">
+                {saldoCuponesVigente !== null
+                  ? formatMxn(saldoCuponesVigente)
+                  : "—"}
+              </span>
+            </div>
+
+            {/*
              * Selector de paquete: filas-tarjeta con radio al final; la
              * elegida se resalta sola (has-data-checked del FieldLabel).
              * Cada fila muestra los meses de servicio que quedan aplicados
@@ -1300,8 +1364,13 @@ export function PaquetesView({
                       <FieldContent className="min-w-0">
                         <FieldTitle>Cupón</FieldTitle>
                         <FieldDescription className="text-xs">
-                          Cupón {PAQUETE_COUPON_CODE} asignado · activación
-                          inmediata
+                          Cupón {PAQUETE_COUPON_CODE} asignado · debita tu
+                          saldo:{" "}
+                          <span className="font-medium tabular-nums">
+                            {saldoCuponesVigente !== null
+                              ? formatMxn(saldoCuponesVigente)
+                              : "—"}
+                          </span>
                         </FieldDescription>
                       </FieldContent>
                     </span>
@@ -1314,6 +1383,9 @@ export function PaquetesView({
             {/*
              * Panel del método activo: los datos bancarios para copiar y el
              * ticket a subir con transferencia; el cupón asignado con cupón.
+             * El cupón debita el saldo en cupones (la billetera exclusiva de
+             * licencias FlujoTV), así que la ventana muestra el saldo vigente
+             * y bloquea el canje si no alcanza para el paquete elegido.
              */}
             {transferBank && payMethod === "transferencia" ? (
               <div className="flex flex-col gap-3">
@@ -1416,21 +1488,44 @@ export function PaquetesView({
             ) : null}
 
             {payMethod === "cupon" ? (
-              <Field>
-                <FieldLabel>Cupón asignado</FieldLabel>
-                <div className="flex items-center gap-2 pt-1">
-                  <Badge variant="secondary" radius="full" className="gap-1.5">
-                    <TicketPercentIcon className="size-3" />
-                    <span className="font-mono tabular-nums">
-                      {PAQUETE_COUPON_CODE}
-                    </span>
-                  </Badge>
-                  <p className="text-muted-foreground text-xs">
-                    Válido para cualquiera de los paquetes; el sistema lo
-                    asigna por ti.
-                  </p>
-                </div>
-              </Field>
+              <div className="flex flex-col gap-3">
+                <Field>
+                  <FieldLabel>Cupón asignado</FieldLabel>
+                  <div className="flex items-center gap-2 pt-1">
+                    <Badge variant="secondary" radius="full" className="gap-1.5">
+                      <TicketPercentIcon className="size-3" />
+                      <span className="font-mono tabular-nums">
+                        {PAQUETE_COUPON_CODE}
+                      </span>
+                    </Badge>
+                    <p className="text-muted-foreground text-xs">
+                      Válido para cualquiera de los paquetes; el sistema lo
+                      asigna por ti y debita tu saldo en cupones.
+                    </p>
+                  </div>
+                </Field>
+                {couponSaldoInsuficiente ? (
+                  <Alert variant="warning">
+                    <TriangleAlertIcon aria-hidden="true" />
+                    <AlertTitle>Saldo en cupones insuficiente</AlertTitle>
+                    <AlertDescription>
+                      <p>
+                        El cupón debita tu saldo en cupones: el paquete{" "}
+                        {paqueteLabel(paqueteMonths)} cuesta{" "}
+                        {paqueteAmount !== null
+                          ? formatMxn(paqueteAmount)
+                          : "—"}{" "}
+                        y tu saldo es{" "}
+                        {saldoCuponesVigente !== null
+                          ? formatMxn(saldoCuponesVigente)
+                          : "—"}
+                        . Abona saldo en cupones desde el módulo «Abonar
+                        saldo» e inténtalo de nuevo.
+                      </p>
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+              </div>
             ) : null}
 
             {priceMxn === null ? (
@@ -1479,7 +1574,10 @@ export function PaquetesView({
                 size="lg"
                 onClick={() => void submitCoupon()}
                 disabled={
-                  submittingCoupon || couponPolling || priceMxn === null
+                  submittingCoupon ||
+                  couponPolling ||
+                  priceMxn === null ||
+                  couponSaldoInsuficiente
                 }
               >
                 {submittingCoupon || couponPolling ? (

@@ -6,6 +6,7 @@ import {
   licensePriceMxnOrNull,
   transferBankDataOrNull,
 } from "@/server/mercadopago/config"
+import { getSaldosActual } from "@/server/saldo/service"
 
 export const metadata = {
   title: "Clientes",
@@ -24,6 +25,9 @@ export const metadata = {
  * el estado del cupón de QA salen del servidor porque viven en `.env` y nunca
  * llegan al cliente por otra vía; sin datos bancarios la opción de
  * transferencia no se ofrece y sin `COUPON_QA_ENABLED=1` la de cupón tampoco.
+ * `saldoCupones` es el saldo en cupones actual del comprador (la billetera
+ * que el cupón debita para pagar licencias de FlujoTV): la ventana de pago
+ * lo muestra y el servidor exige saldo suficiente antes de aceptar el canje.
  */
 export default async function EntitiesPage({
   searchParams,
@@ -31,7 +35,10 @@ export default async function EntitiesPage({
   searchParams: Promise<{ orden?: string; estado?: string }>
 }) {
   const [user, params] = await Promise.all([requireUser(), searchParams])
-  const scope = await resolveClientScope(user)
+  const [scope, saldos] = await Promise.all([
+    resolveClientScope(user),
+    getSaldosActual(user.id),
+  ])
   const distribuidorName = scope.kind === "distributor" ? scope.name : null
 
   return (
@@ -45,6 +52,7 @@ export default async function EntitiesPage({
         transferBank={transferBankDataOrNull()}
         couponEnabled={isCouponQaEnabled()}
         canReviewTransfers={scope.kind === "all"}
+        saldoCupones={saldos.cupones}
       />
     </div>
   )

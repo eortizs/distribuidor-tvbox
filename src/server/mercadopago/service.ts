@@ -1626,6 +1626,7 @@ export async function rejectTransferOrder(
  * defecto: un código de prueba permanente sería una fuente ilimitada de
  * renovaciones gratis). Cuando exista un catálogo de cupones autorizados se
  * sustituye por la consulta correspondiente (código → descuento/vigencia).
+ * Todo canje debita la billetera «saldo en cupones» del comprador.
  */
 const ACTIVE_COUPON_CODES = new Set(["0000"])
 
@@ -1701,16 +1702,18 @@ export async function couponMonthlyLimitForBuyer(
 }
 
 /**
- * Renovación pagada con cupón: valida el código, crea la orden ya `paid`
- * (el cupón ES el pago) y ejecuta la renovación con la clave determinista
- * `mp-<orderId>`. Sin checkout ni revisión: si la renovación contra el panel
- * falla la orden queda `renewal_failed` para el reintento, igual que en los
- * otros métodos.
+ * Renovación pagada con cupón: valida el código, debita el saldo en cupones
+ * del comprador (su billetera exclusiva para licencias de FlujoTV) y crea la
+ * orden ya `paid` (el cupón ES el pago); después ejecuta la renovación con la
+ * clave determinista `mp-<orderId>`. Sin checkout ni revisión: si la
+ * renovación contra el panel falla la orden queda `renewal_failed` para el
+ * reintento, igual que en los otros métodos (el saldo ya quedó debitado en
+ * la creación de la orden y el reintento no vuelve a cobrar).
  *
  * Idempotente por `requestId`: el cliente genera un id por intención de
  * canje y lo conserva entre reintentos (respuesta perdida, doble clic), así
  * que repetir la solicitud devuelve la orden original en lugar de sumar
- * otro mes.
+ * otro mes ni debitar otra vez.
  *
  * Canjes individuales (0000, 1 mes): renovación SINCRÓNICA con el presupuesto
  * de compras (60 s) — cabe en la paciencia de Cloudflare y su UI depende de
@@ -1830,6 +1833,58 @@ export async function createCouponOrder(params: {
       ]
     )
     insertedId = inserted.rows[0]?.id ?? null
+    if (insertedId) {
+      // El cupón ES la forma de pago y su billetera es «saldo en cupones»
+      // (la cuenta que paga exclusivamente licencias de FlujoTV): el canje
+      // debita el importe de la orden. El cargo vive en la MISMA transacción
+      // del INSERT: sin saldo suficiente la orden no se crea (ROLLBACK) y el
+      // movimiento queda trazado en `saldo_movimientos` con `order_id`, cuya
+      // clave única es la segunda cerradura contra un débito doble. El
+      // advisory lock del comprador ya serializa contra abonos y ajustes de
+      // saldo (`applySaldoCredit` / `ajustarSaldoAdmin` usan la misma llave),
+      // así que la lectura y el débito no tienen carrera. Los reintentos con
+      // el mismo request_id caen en el ON CONFLICT de arriba (`insertedId`
+      // null) y NO vuelven a debitar.
+      const debited = await tx.query<{ saldo: string }>(
+        `UPDATE users SET saldo_cupones = saldo_cupones - $2
+          WHERE id = $1::uuid AND saldo_cupones >= $2
+          RETURNING saldo_cupones AS saldo`,
+        [params.buyerUserId, amount]
+      )
+      if ((debited.rowCount ?? 0) === 0) {
+        const current = await tx.query<{ saldo_cupones: string }>(
+          "SELECT saldo_cupones FROM users WHERE id = $1::uuid",
+          [params.buyerUserId]
+        )
+        const mxn = (value: number) =>
+          value.toLocaleString("es-MX", { style: "currency", currency: "MXN" })
+        throw new MercadoPagoError(
+          422,
+          "saldo_insuficiente",
+          `Saldo en cupones insuficiente: el cupón debita ese saldo y esta compra cuesta ${mxn(amount)}, pero tu saldo es ${mxn(Number(current.rows[0]?.saldo_cupones ?? 0))}. Abona saldo en cupones desde «Abonar saldo» e inténtalo de nuevo.`
+        )
+      }
+      const balanceAfter = Number(debited.rows[0]?.saldo ?? Number.NaN)
+      if (!Number.isFinite(balanceAfter)) {
+        throw new MercadoPagoError(
+          500,
+          "saldo_lectura_invalida",
+          "La base no devolvió el saldo en cupones actualizado del comprador."
+        )
+      }
+      await tx.query(
+        `INSERT INTO saldo_movimientos
+            (user_id, order_id, kind, tipo, amount, balance_after, note)
+          VALUES ($1::uuid, $2::uuid, 'cargo', 'cupones', $3, $4, $5)`,
+        [
+          params.buyerUserId,
+          insertedId,
+          amount,
+          balanceAfter,
+          `Pago de licencia FlujoTV con cupón ${code} — ${params.userName}`,
+        ]
+      )
+    }
     await tx.query("COMMIT")
   } catch (error) {
     await tx.query("ROLLBACK").catch(() => {})
@@ -2218,7 +2273,7 @@ export async function refundOrder(params: {
     throw new MercadoPagoError(
       409,
       "invalid_order_method",
-      "Solo se reembolsan cobros de Mercado Pago: las transferencias se rechazan antes de mover dinero y los cupones no cobran."
+      "Solo se reembolsan cobros de Mercado Pago: las transferencias se rechazan antes de mover dinero y los cupones pagan con saldo en cupones (su devolución es un re-abono de billetera sin flujo automático)."
     )
   }
   if (order.payment_id === null) {

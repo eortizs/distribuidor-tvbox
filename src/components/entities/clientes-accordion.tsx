@@ -101,8 +101,11 @@
  *   - **Cupón**: pantalla propia con el código de 4 dígitos en InputOTP
  *     (ejemplo `c-input-otp-2` de ReUI); «Aplicar cupón» llama
  *     `POST /api/cupones/orders`, que valida
- *     el código contra los cupones activos (por ahora solo `0000`, compra
- *     directa sin validaciones) y renueva la licencia al instante. El código
+ *     el código contra los cupones activos (por ahora solo `0000`), debita
+ *     el saldo en cupones del comprador (su billetera exclusiva de licencias
+ *     FlujoTV, mostrada en la ventana y exigida con saldo suficiente: sin
+ *     él el canje se bloquea en la UI y el servidor responde 422) y renueva
+ *     la licencia al instante. El código
  *     queda en la orden (`coupon_code`) para la futura conciliación con el
  *     catálogo de cupones autorizados.
  *
@@ -743,6 +746,12 @@ interface ClientesAccordionProps {
   couponEnabled?: boolean
   /** Perfil admin: muestra la sección de transferencias por revisar. */
   canReviewTransfers?: boolean
+  /**
+   * Saldo en cupones actual del comprador (server-rendered): la billetera
+   * que el cupón debita para pagar la licencia. La ventana de pago lo
+   * muestra y bloquea el canje si no alcanza; el servidor lo revalida igual.
+   */
+  saldoCupones?: number | null
 }
 
 export function ClientesAccordion({
@@ -754,6 +763,7 @@ export function ClientesAccordion({
   transferBank = null,
   couponEnabled = false,
   canReviewTransfers = false,
+  saldoCupones = null,
 }: ClientesAccordionProps) {
   const [clients, setClients] = useState<FlujoClient[]>([])
   const [clientNames, setClientNames] = useState<Record<string, string>>({})
@@ -975,6 +985,33 @@ export function ClientesAccordion({
   const [nowTick, setNowTick] = useState(() => Date.now())
   const [submittingCoupon, setSubmittingCoupon] = useState(false)
   const [couponCode, setCouponCode] = useState("")
+  /**
+   * Saldo en cupones vigente en la sesión: nace del dato server-rendered y
+   * se ajusta en local con cada canje aceptado (la orden ya debita el saldo
+   * en el servidor), para que una segunda compra en la misma sesión valide
+   * contra el saldo real y no contra el de la carga de la página. El espejo
+   * `saldoCuponesServidor` distingue «llegó dato nuevo del servidor» de
+   * «solo hay descuento optimista local»: sin él, el render reiniciaría el
+   * saldo descontado.
+   */
+  const [saldoCuponesServidor, setSaldoCuponesServidor] =
+    useState(saldoCupones)
+  const [saldoCuponesVigente, setSaldoCuponesVigente] =
+    useState(saldoCupones)
+  if (saldoCuponesServidor !== saldoCupones) {
+    // Sincronización durante el render — patrón React «ajustar el estado
+    // cuando cambia una prop».
+    setSaldoCuponesServidor(saldoCupones)
+    setSaldoCuponesVigente(saldoCupones)
+  }
+  /**
+   * El cupón debita el saldo en cupones: sin saldo suficiente el canje se
+   * bloquea en la ventana (y el servidor lo revalida igual antes de aceptar).
+   */
+  const couponSaldoInsuficiente =
+    saldoCuponesVigente !== null &&
+    priceMxn !== null &&
+    saldoCuponesVigente < priceMxn
   /**
    * Orden con renovación fallida pendiente de recuperación en este canje: el
    * botón principal pasa de «Aplicar cupón» a «Reintentar renovación» (sin
@@ -1521,10 +1558,11 @@ export function ClientesAccordion({
 
   /**
    * Canjea el cupón: el servidor valida el código contra los cupones activos
-   * (0000 con `COUPON_QA_ENABLED`) y, si es válido, renueva la licencia al
-   * instante. El canje es idempotente por `couponRequestIdRef`: un reintento
+   * (0000 con `COUPON_QA_ENABLED`), exige saldo suficiente y debita el saldo
+   * en cupones; si el código es válido renueva la licencia al instante. El
+   * canje es idempotente por `couponRequestIdRef`: un reintento
    * tras una respuesta perdida devuelve la orden original en lugar de sumar
-   * otro mes.
+   * otro mes ni debitar de nuevo.
    */
   const submitCoupon = useCallback(async () => {
     if (!purchaseTarget || couponCode.length !== COUPON_CODE_LENGTH) return
@@ -1540,6 +1578,15 @@ export function ClientesAccordion({
         code: couponCode,
         requestId,
       })
+      // El canje quedó registrado y el servidor YA debió el saldo en
+      // cupones (renovada o `renewal_failed` por igual): reflejarlo en
+      // local para que la próxima apertura del sheet valide contra el
+      // saldo real sin recargar la página.
+      setSaldoCuponesVigente((saldo) =>
+        saldo !== null
+          ? Math.round((saldo - result.amount) * 100) / 100
+          : null
+      )
       if (result.status === "renewal_failed") {
         // El canje quedó registrado pero la renovación no se confirmó contra
         // el panel (vencimiento sin cambio o lectura imposible): el botón
@@ -3472,6 +3519,23 @@ export function ClientesAccordion({
             ) : null}
 
             {/*
+             * Saldo en cupones del comprador: la billetera exclusiva para
+             * licencias de FlujoTV (el pago con cupón la debita). Renglón
+             * fijo del resumen: visible en TODO el checkout — desde la
+             * elección del método — para decidir con el saldo a la vista.
+             */}
+            <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+              <span className="text-muted-foreground text-xs">
+                Saldo en cupones
+              </span>
+              <span className="text-sm font-medium tabular-nums">
+                {saldoCuponesVigente !== null
+                  ? formatMxn(saldoCuponesVigente)
+                  : "—"}
+              </span>
+            </div>
+
+            {/*
              * Mercado Pago: pantalla propia — la lista desaparece y solo
              * queda el desglose del cargo. El total es el precio engrosado
              * (`mpTotalMxn`): la comisión (3.49% + $4) y su IVA se
@@ -3616,8 +3680,13 @@ export function ClientesAccordion({
                           <FieldContent className="min-w-0">
                             <FieldTitle>Cupón</FieldTitle>
                             <FieldDescription className="text-xs">
-                              Código de {COUPON_CODE_LENGTH} dígitos ·
-                              activación inmediata
+                              Código de {COUPON_CODE_LENGTH} dígitos · debita
+                              tu saldo:{" "}
+                              <span className="font-medium tabular-nums">
+                                {saldoCuponesVigente !== null
+                                  ? formatMxn(saldoCuponesVigente)
+                                  : "—"}
+                              </span>
                             </FieldDescription>
                           </FieldContent>
                         </span>
@@ -3866,10 +3935,13 @@ export function ClientesAccordion({
 
              {/*
               * Pantalla propia del cupón: la lista de métodos desaparece y
-              * queda el canje. Código de 4 dígitos con InputOTP (un dígito
-              * por celda); el servidor valida el código contra los cupones
-              * activos al aplicar y renueva al instante; un código inválido
-              * avisa con el Alert de error compartido de abajo.
+              * queda el canje. El cupón debita el saldo en cupones (la
+              * billetera exclusiva de licencias FlujoTV), así que la ventana
+              * muestra el saldo vigente y bloquea el canje si no alcanza.
+              * Código de 4 dígitos con InputOTP (un dígito por celda); el
+              * servidor valida el código, exige saldo suficiente y renueva
+              * al instante; un código inválido avisa con el Alert de error
+              * compartido de abajo.
               */}
              {payMethod === "cupon" ? (
                <div className="flex flex-col gap-3">
@@ -3899,11 +3971,30 @@ export function ClientesAccordion({
                    </div>
                  </Field>
                  <p className="text-muted-foreground text-center text-xs">
-                   El cupón se valida en el servidor y la renovación se aplica
-                   al instante.
+                   El cupón debita tu saldo en cupones; el servidor valida el
+                   código y la renovación se aplica al instante.
                  </p>
+                 {couponSaldoInsuficiente ? (
+                   <Alert variant="warning">
+                     <TriangleAlertIcon aria-hidden="true" />
+                     <AlertTitle>Saldo en cupones insuficiente</AlertTitle>
+                     <AlertDescription>
+                       <p>
+                         El cupón debita tu saldo en cupones: la renovación
+                         cuesta{" "}
+                         {priceMxn !== null ? formatMxn(priceMxn) : "—"} y tu
+                         saldo es{" "}
+                         {saldoCuponesVigente !== null
+                           ? formatMxn(saldoCuponesVigente)
+                           : "—"}
+                         . Abona saldo en cupones desde el módulo «Abonar
+                         saldo» e inténtalo de nuevo.
+                       </p>
+                     </AlertDescription>
+                   </Alert>
+                 ) : null}
                </div>
-              ) : null}
+             ) : null}
 
              {/*
               * Volver a la lista de métodos desde la pantalla del método
@@ -3979,7 +4070,8 @@ export function ClientesAccordion({
                 disabled={
                   submittingCoupon ||
                   couponCode.length !== COUPON_CODE_LENGTH ||
-                  priceMxn === null
+                  priceMxn === null ||
+                  couponSaldoInsuficiente
                 }
               >
                 {submittingCoupon ? (
