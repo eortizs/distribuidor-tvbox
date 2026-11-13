@@ -26,10 +26,12 @@ export function ProfileForm({
   email,
   fullName,
   phone,
+  whatsappPhone,
 }: {
   email: string
   fullName: string
   phone: string
+  whatsappPhone: string
 }) {
   const router = useRouter()
   const [state, formAction, isPending] = useActionState(
@@ -91,6 +93,24 @@ export function ProfileForm({
               autoComplete="tel"
               placeholder="+34 600 123 456"
             />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="profile-whatsapp">WhatsApp (agente)</Label>
+            <Input
+              id="profile-whatsapp"
+              name="whatsappPhone"
+              type="tel"
+              inputMode="numeric"
+              defaultValue={whatsappPhone}
+              maxLength={20}
+              placeholder="525540049353"
+              aria-describedby="profile-whatsapp-hint"
+            />
+            <p id="profile-whatsapp-hint" className="text-muted-foreground text-xs">
+              Tu número con código de país, solo dígitos (11 a 15; p. ej.
+              525540049353). Regístralo para recibir las notificaciones del
+              panel y consultar tu cuenta con el agente de WhatsApp.
+            </p>
           </div>
           {state.error ? (
             <p className="text-destructive text-sm" role="alert">

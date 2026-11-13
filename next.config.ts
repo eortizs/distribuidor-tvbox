@@ -5,6 +5,12 @@ const nextConfig: NextConfig = {
   cacheComponents: true,
   partialPrefetching: true,
   /*
+   * Baileys (gateway WhatsApp) es un paquete de Node con requires dinámicos
+   * (pino, protobufjs): fuera del bundle del servidor para que se cargue
+   * desde node_modules tal cual.
+   */
+  serverExternalPackages: ["@whiskeysockets/baileys", "pino"],
+  /*
    * Soporte dejó de ser un menú y ahora es una página con pestañas bajo
    * /soporte: las rutas antiguas redirigen para no romper accesos guardados.
    */

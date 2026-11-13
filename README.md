@@ -34,6 +34,7 @@ Dashboard de administración para distribuidores TVBox construido con Next.js 16
 - **Notificaciones de renovación** (campana de la cabecera, a la izquierda del avatar): feed **persistente** por comprador con el resultado de cada renovación — **éxito** (con el vencimiento nuevo verificado en el panel) o **fallo** (con el motivo y la sugerencia de reintento), el usuario FlujoTV renovado y el tiempo relativo de creación — para las compras de `/clientes` y los paquetes de `/modulos/paquetes-flujotv` (Mercado Pago, transferencia aprobada o rechazada, cupón, reintentos y conciliación). **Cada resultado que llega a un comprador se replica en la campana de cada admin** con la atribución al distribuidor que ejecutó la operación (exitosas y fallidas), y cuando la validación automática rechaza un comprobante de transferencia los admins reciben además la copia con los motivos en detalle para agilizar la revisión manual. Insignia con el contador de no leídas, refresco en vivo por el evento SSE `notifications` (solo-propietario) y acciones estándar: *Marcar leídas* (una fila o todas) y *Borrar* (una fila o todas, con confirmación). Ver [Notificaciones de renovación](#notificaciones-de-renovación).
 - **Conectores** (`/modulos/conectores`, herramienta del hub de Módulos, `PlugZapIcon`): catálogo de integraciones **por proveedor** con conexiones OAuth **por usuario** — Google Calendar disponible y Google Drive / Outlook Calendar como *Próximamente* para marcar la estructura. Tokens cifrados AES-256-GCM en reposo, flujo OAuth propio con estado anti-CSRF y revocación en Google al desconectar. Ver [Conectores](#conectores).
 - **Distribuidores** (`/modulos/distribuidores`, herramienta del hub de Módulos, `UserCogIcon`, **solo admin**): las cuentas con rol `distribuidor` de `/users` listadas con las filas de `/clientes` (avatar pastel de iniciales, panel FlujoTV ligado con punto de estado, clientes asignados, saldos al expandir) y gestionadas con el mismo menú contextual de `/users` (Saldo, Permisos, **Módulos**, Editar, Eliminar) tras el botón settings-2 que ocupa el lugar del carrito de compra. Primera entrada `adminOnly` del catálogo de módulos: el hub la oculta a cuentas no admin y la ruta redirige. Ver [Distribuidores](#distribuidores).
+- **WhatsApp: agente IA y espejo de notificaciones** (`/modulos/whatsapp`, herramienta del hub de Módulos, `MessageCircleIcon`, **solo admin** para su gestión): el número del agente IA se vincula a WhatsApp con [Baileys](https://baileys.wiki) como dispositivo enlazado y vive en el mismo proceso del servidor. Toda notificación de la campana (renovaciones, transferencias, abonos, alertas y recordatorios) se **espeja al WhatsApp registrado** de cada usuario, y las cuentas registradas pueden **consultar al agente por chat** (saldo, clientes y vencimientos de su alcance, órdenes y perfil; solo lectura). Ver [WhatsApp: agente IA y espejo de notificaciones](#whatsapp-agente-ia-y-espejo-de-notificaciones).
 
 ## Requisitos
 
@@ -395,6 +396,58 @@ Herramienta en `/modulos/alertas` (hub de Módulos, `BellRingIcon`): el usuario 
 - **Suscripción Web Push por dispositivo** (card «Avisos en este dispositivo» del tab *Mis alertas*): switch que registra `public/sw.js` (service worker mínimo: solo `push` y `notificationclick` con deep link al módulo; **sin cacheo de chunks**), pide permiso, suscribe y guarda en `push_subscriptions` (upsert por endpoint que solo cambia de dueño con la misma cuenta — otro usuario → 409 —, para que un dispositivo no sea secuestrado). Botón *Probar aviso* (`POST /api/push/test`, 3/min) para validar el canal sin esperar una alerta real. Estados degradados explicados: navegador sin soporte, permiso bloqueado (guía para rehabilitarlo) o servidor sin llaves VAPID (campana-sola). **Ojo de despliegue**: `sw.js` debe seguir **excluido del matcher del proxy** (está desde el alta del módulo); si el gate lo redirige a `/login`, el registro del service worker falla en todos los dispositivos. En iOS el push solo funciona con la PWA instalada (≥ 16.4): la card degrada con explicación en vez de fallar.
 - **Degradación por configuración**: sin `GEMINI_API_KEY` el módulo se despliega pero la creación queda bloqueada (`alertas_llm_not_configured`); sin llaves VAPID queda en modo campana-sola con el switch deshabilitado (`push_not_configured`). Las llaves viven en `.env` (`ALERTS_MODEL`, `GEMINI_API_KEY`, `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT`); rotar las VAPID invalida todas las suscripciones.
 - **Tiempo real**: el listado (tab *Mis alertas*) y el historial expandido se refrescan con el evento `alerts` del bus (ver [Sincronización en tiempo real](#sincronización-en-tiempo-real)); la creación desde web aparece al instante en el móvil sin recargar.
+
+## WhatsApp: agente IA y espejo de notificaciones
+
+Módulo en `/modulos/whatsapp` (herramienta *WhatsApp* del hub de Módulos, `MessageCircleIcon`, **solo admin**): el **número del agente IA** se vincula a WhatsApp con [Baileys](https://baileys.wiki) —el mismo mecanismo de WhatsApp Web, cuenta como *dispositivo enlazado*— y vive **en el mismo proceso** del servidor (`src/instrumentation.ts` → `src/server/whatsapp/`, como los schedulers). Dos funciones:
+
+1. **Espejo 1:1 de la campana**: toda notificación que entra por `insertNotification` (renovación exitosa/fallida, transferencia rechazada, abono de saldo, alertas y recordatorios — comprador y copias admin incluidas vía el fan-out existente) encola una copia en `wa_outbox` para cada destinatario con WhatsApp registrado y la entrega con reintentos.
+2. **Agente de consultas por chat** (solo lectura): las cuentas registradas escriben al agente y consultan saldo, clientes y vencimientos de su propio alcance, sus últimas órdenes y su perfil, con tool-calling del AI Gateway.
+
+Distribución del código: config en `src/server/whatsapp/config.ts`, socket y ciclo de vida en `socket.ts`, agente LLM en `agent.ts`, cola de salida en `outbox.ts` y persistencia en `service.ts`; APIs admin en `src/app/api/whatsapp/*`; UI en `src/components/herramientas/whatsapp/whatsapp-view.tsx`; migración `db/whatsapp-schema.sql` + `db/apply-whatsapp.mjs` (columna `users.whatsapp_phone` con índice único parcial, tablas `wa_outbox` y `wa_message_log`) en la cadena obligatoria de [AGENTS.md](AGENTS.md). Registrado en el catálogo del hub (`MODULOS` en `src/lib/modulos.ts`, `adminOnly`).
+
+### Vinculación y sesión
+
+- El número del agente llega por `WHATSAPP_AGENT_NUMBER` (solo dígitos con código de país, p. ej. `525540049353`); sin él el módulo queda deshabilitado y nada del canal arranca (log `whatsapp.disabled`). El modelo del agente llega por `WHATSAPP_AGENT_MODEL` vía AI Gateway con `AI_GATEWAY_API_KEY` (p. ej. `openai/gpt-6-luna`); sin modelo el módulo funciona como espejo puro y el chat responde que no está configurado.
+- **Primer vínculo** (una sola vez): en `/modulos/whatsapp`, botón **«Generar código de emparejamiento»** (código de 8 dígitos que se entra en el teléfono con WhatsApp → Ajustes → Dispositivos vinculados → *Vincular con número de teléfono*) o **«Mostrar QR»** (se refresca solo cada 5 s mientras dura el emparejamiento). Al confirmar, el estado pasa a **Conectado** y la sesión persiste en `storage/whatsapp-session/` (gitignored: contiene llaves; perderla obliga a re-vincular).
+- **Cada deploy corta el socket y reconecta solo** con la sesión persistida; los envíos quedan en `wa_outbox` y salen al reconectar, y WhatsApp entrega los entrantes atrasados al volver. Sin acción del operador.
+- **Revocación**: si el dispositivo se desvincula desde el teléfono (`loggedOut`), el módulo muestra **«Sesión revocada»** y no reconecta en bucle; el botón *Reestablecer sesión* (`POST /api/whatsapp/reset`) borra la sesión vieja y habilita QR/código de nuevo.
+- **Operación continua**: el teléfono del titular debe conectar a WhatsApp al menos cada ~14 días para mantener viva la sesión enlazada. `markOnlineOnConnect: false` para que el teléfono del agente siga recibiendo sus propias notificaciones; `syncFullHistory: false` y grupos/broadcast/newsletters ignorados.
+
+### Registro de números (`users.whatsapp_phone`)
+
+El número **ES la identidad** del canal: los mensajes entrantes se resuelven teléfono → cuenta (índice único parcial `users_whatsapp_phone_uidx`: un número = una cuenta). Se registra de dos vías:
+
+- **Admin**: `/users` (o `/modulos/distribuidores`) → menú de acciones → **Editar** → campo *WhatsApp (agente)* — vacío lo quita; duplicado responde 409.
+- **Auto-servicio**: `/profile` → pestaña *Información* → campo *WhatsApp (agente)*.
+
+Formato: solo dígitos **con código de país**, 11–15 (México = 12, p. ej. `525540049353`). Un número sin código de país se rechaza en el alta: los JIDs entrantes siempre lo traen y un registro de 10 dígitos jamás matchearía.
+
+### Espejo de notificaciones (`wa_outbox`)
+
+- **Un solo punto**: el hook vive en `insertNotification` (`src/server/notifications/service.ts`), el escritor único de la campana — comprador y copias admin ya cubiertos sin tocar ningún call-site. Se encola solo si el destinatario tiene número registrado y **solo cuando la fila realmente se insertó** (el dedup por índice único no repite espejos). Best-effort y detached: un fallo del canal se registra y **jamás bloquea ni revierte** la notificación original.
+- **Dispatcher** (timer de 5 s, guard `ticking`): reclama lotes de 10 con `FOR UPDATE SKIP LOCKED` fijando el lease (`next_attempt_at = now()`), envía `*Título*
+Cuerpo
+
+Panel: <SITE_URL>` y registra la salida en `wa_message_log`. Fallo → backoff 1 min/5 min/15 min/1 h; al quinto intento queda `failed` para reencolar desde el módulo. Filas `sending` varadas > 5 min (proceso muerto a mitad de envío) vuelven a `pending`.
+- **Retención**: `wa_message_log` a 90 días y `wa_outbox` entregados a 30 días, podados como máximo una vez por hora (corren aunque el socket esté caído). Índice parcial `wa_outbox_open_created_idx (created_at DESC) WHERE status <> 'sent'` para el listado que la UI consulta cada 15 s.
+
+### Agente de consultas (solo lectura)
+
+- **Identidad y alcance**: el teléfono de WhatsApp resuelto desde el JID (los `@lid` de cuentas migradas se traducen con el LID-mapping store de Baileys) determina la cuenta; las herramientas (`consultar_saldos`, `buscar_clientes`, `proximos_vencimientos`, `ultimas_ordenes`, `mi_perfil` en `src/server/whatsapp/agent.ts`) reciben el `userId` del servidor — **el modelo nunca elige sobre quién consulta** — y el listado de clientes pasa por el mismo scoping por reseller del panel (`resolveClientScope` + `scopeFlujoClients`). No hay herramientas de escritura: el agente no mueve dinero ni toca licencias, y lo dice explícitamente cuando se le pide.
+- **Memoria conversacional** por `userId:teléfono` (16 turnos, TTL 2 h, en memoria): re-vincular un número a otra cuenta no hereda el chat del dueño anterior. El texto del usuario es **dato, no instrucción** (regla del prompt).
+- **Riesgo acotado**: rate limit de 20 mensajes/min por teléfono; los números no registrados reciben **una sola respuesta de cortesía cada 24 h**; timeout del LLM de 45 s y hasta 4 pasos de herramienta por turno; sin conexión el agente no corre (los mensajes quedan sin responder hasta que vuelva).
+- **Bitácora** (`wa_message_log`, retención 90 días): entrantes y salientes con usuario, teléfono, texto y metadatos; visible en el módulo con la cola de salida.
+
+### Módulo admin y APIs
+
+`/modulos/whatsapp` muestra estado en vivo (sondeo cada 15 s; 5 s durante el emparejamiento), vinculación (QR + código), **números registrados**, **cola de salida** con botón reencolar y **bitácora**. APIs solo-admin (401 sin sesión, 403 sin rol; `await connection()` por `cacheComponents`): `GET /api/whatsapp/status`, `GET /api/whatsapp/qr`, `POST /api/whatsapp/pairing`, `POST /api/whatsapp/reset`, `GET /api/whatsapp/outbox`, `POST /api/whatsapp/outbox/[id]/retry` y `GET /api/whatsapp/log`.
+
+### Riesgos y límites
+
+- **Baileys es no oficial**: riesgo de restricción del número. Mitigado con tráfico bajo (solo espejo + soporte, cero marketing/bulk), `markOnlineOnConnect: false` y número **dedicado** al agente (no el personal del admin).
+- **Degradación limpia**: sin `WHATSAPP_AGENT_NUMBER` nada arranca; sin `WHATSAPP_AGENT_MODEL` el espejo funciona y el chat contesta que no está configurado; sin sesión vinculada los espejos se acumulan en `wa_outbox` hasta volver.
+- **Arranque blindado**: un fallo del gateway en el boot se registra y el servidor sigue arriba — el panel nunca depende del canal.
 
 ## Control de gastos
 

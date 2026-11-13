@@ -4,6 +4,7 @@ import { requireUser } from "@/server/auth/guards"
 import { hashPassword, verifyPassword } from "@/server/auth/password"
 import { saveProfile } from "@/server/auth/profile"
 import { findUserById, updatePassword } from "@/server/auth/users"
+import { setWhatsAppPhone } from "@/server/whatsapp/service"
 import { AppError } from "@/server/umejson/types"
 
 export interface UpdateProfileState {
@@ -29,6 +30,7 @@ export async function updateProfileAction(
     .trim()
     .replace(/\s+/g, " ")
   const phone = String(formData.get("phone") ?? "").trim()
+  const whatsappPhone = String(formData.get("whatsappPhone") ?? "").trim()
 
   if (fullName.length > FULL_NAME_MAX) {
     return {
@@ -45,16 +47,34 @@ export async function updateProfileAction(
 
   try {
     const { changed } = await saveProfile(user, { fullName, phone })
+    // WhatsApp registrado del canal agente: columna propia en `users`
+    // (índice único: un número = una cuenta). Solo se escribe si cambió y
+    // cuenta en el mensaje de resultado (antes decía «Sin cambios» aunque
+    // el número se hubiera guardado).
+    const stored = await findUserById(user.id)
+    const whatsappChanged = (stored?.whatsappPhone ?? "") !== whatsappPhone
+    if (whatsappChanged) {
+      await setWhatsAppPhone(
+        user.id,
+        whatsappPhone === "" ? null : whatsappPhone
+      )
+    }
     return {
       error: null,
-      success: changed ? "Perfil actualizado" : "Sin cambios que guardar",
+      success:
+        changed || whatsappChanged
+          ? "Perfil actualizado"
+          : "Sin cambios que guardar",
     }
   } catch (error) {
-    if (error instanceof AppError && error.code === "version_conflict") {
-      return {
-        error: "Los datos se modificaron en otra sesión. Recarga la página e inténtalo de nuevo.",
-        success: null,
+    if (error instanceof AppError) {
+      if (error.code === "version_conflict") {
+        return {
+          error: "Los datos se modificaron en otra sesión. Recarga la página e inténtalo de nuevo.",
+          success: null,
+        }
       }
+      return { error: error.message, success: null }
     }
     throw error
   }

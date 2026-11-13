@@ -37,6 +37,7 @@ export default async function UsersPage() {
           role: user.role,
           entityCount: user.entityCount,
           distribuidorName: user.distribuidorName,
+          whatsappPhone: user.whatsappPhone,
           deniedSections: deniedByUser.get(user.id) ?? [],
           hiddenModules: [],
           couponDailyLimit: user.couponDailyLimit,

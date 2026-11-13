@@ -13,6 +13,11 @@ export interface UserRow {
   /** URL de la foto de perfil de Google; null si no hay o es cuenta local. */
   googlePicture: string | null
   role: AuthUser["role"]
+  /**
+   * WhatsApp registrado para el agente/agenda del módulo WhatsApp (dígitos
+   * con código de país); null si la cuenta no usa el canal.
+   */
+  whatsappPhone: string | null
   createdAt: Date
 }
 
@@ -24,12 +29,13 @@ function mapUserRow(row: Record<string, unknown>): UserRow {
     googleSub: (row.google_sub as string | null) ?? null,
     googlePicture: (row.google_picture as string | null) ?? null,
     role: row.role as AuthUser["role"],
+    whatsappPhone: (row.whatsapp_phone as string | null) ?? null,
     createdAt: row.created_at as Date,
   }
 }
 
 const USER_SELECT = `
-  SELECT id, username, password_hash, google_sub, google_picture, role, created_at
+  SELECT id, username, password_hash, google_sub, google_picture, role, whatsapp_phone, created_at
     FROM users`
 
 export async function findUserByUsername(
@@ -74,6 +80,7 @@ export async function listUsers(): Promise<
 > {
   const result = await pool.query(
     `SELECT u.id, u.username, u.role, u.created_at, u.google_sub,
+            u.whatsapp_phone,
             u.coupon_daily_limit, u.coupon_monthly_limit,
             u.saldo_cupones, u.saldo_tokens,
             count(DISTINCT e.id) FILTER (WHERE e.deleted_at IS NULL) AS entity_count,
@@ -98,6 +105,7 @@ export async function listUsers(): Promise<
     id: row.id as string,
     username: row.username as string,
     role: row.role as AuthUser["role"],
+    whatsappPhone: (row.whatsapp_phone as string | null) ?? null,
     createdAt: row.created_at as Date,
     entityCount: Number(row.entity_count),
     distribuidorName:
@@ -128,7 +136,7 @@ export async function insertUser(
   const result = await executor.query(
     `INSERT INTO users (id, username, password_hash, role, google_sub, google_picture)
      VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, username, password_hash, google_sub, google_picture, role, created_at`,
+     RETURNING id, username, password_hash, google_sub, google_picture, role, whatsapp_phone, created_at`,
     [
       crypto.randomUUID(),
       input.username,
@@ -209,7 +217,7 @@ export async function updateUser(
   values.push(id)
   const result = await executor.query(
     `UPDATE users SET ${sets.join(", ")} WHERE id = $${values.length}
-     RETURNING id, username, password_hash, google_sub, google_picture, role, created_at`,
+     RETURNING id, username, password_hash, google_sub, google_picture, role, whatsapp_phone, created_at`,
     values
   )
   if (result.rowCount === 0) {
@@ -224,7 +232,7 @@ async function findUserByIdIn(
   executor: PoolClientLike
 ): Promise<UserRow | null> {
   const result = await executor.query(
-    "SELECT id, username, password_hash, google_sub, role, created_at FROM users WHERE id = $1",
+    "SELECT id, username, password_hash, google_sub, role, whatsapp_phone, created_at FROM users WHERE id = $1",
     [id]
   )
   return result.rowCount ? mapUserRow(result.rows[0]) : null

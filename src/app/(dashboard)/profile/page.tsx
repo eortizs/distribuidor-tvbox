@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/tabs"
 import { requireUser } from "@/server/auth/guards"
 import { getProfile } from "@/server/auth/profile"
+import { findUserById } from "@/server/auth/users"
 
 export const instant = false
 
@@ -53,7 +54,10 @@ function Fact({
 
 export default async function ProfilePage() {
   const sessionUser = await requireUser()
-  const profile = await getProfile(sessionUser.id)
+  const [profile, userRow] = await Promise.all([
+    getProfile(sessionUser.id),
+    findUserById(sessionUser.id),
+  ])
   if (!profile) {
     redirect("/login")
   }
@@ -109,6 +113,7 @@ export default async function ProfilePage() {
             email={email}
             fullName={account?.fullName ?? ""}
             phone={account?.phone ?? ""}
+            whatsappPhone={userRow?.whatsappPhone ?? ""}
           />
         </TabsContent>
 

@@ -16,6 +16,7 @@ import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
 import { parseAbonoAmount, parseSaldoTipo } from "@/lib/saldo"
 import { formatMxn } from "@/lib/finanzas"
 import { ajustarSaldoAdmin } from "@/server/saldo/service"
+import { setWhatsAppPhone } from "@/server/whatsapp/service"
 import { AppError } from "@/server/umejson/types"
 
 export interface CreateUserState {
@@ -136,7 +137,15 @@ export async function updateUserAction(
     patch.distribuidorName = distribuidorName
   }
 
-  if (Object.keys(patch).length === 0) {
+  // WhatsApp registrado del canal agente (users.whatsapp_phone): vacío =
+  // quitar el registro. La normalización/validación/unicidad viven en
+  // setWhatsAppPhone (dígitos con código de país, número = una cuenta).
+  // Se aplica DESPUÉS de updateAccount para no dejar un cambio parcial si la
+  // edición compuesta falla (email duplicado, entidad Cuenta ausente...).
+  const whatsappRaw = String(formData.get("whatsappPhone") ?? "").trim()
+  const whatsappChanged = whatsappRaw !== (target.whatsappPhone ?? "")
+
+  if (Object.keys(patch).length === 0 && !whatsappChanged) {
     return { error: "No changes to save", success: null }
   }
 
@@ -160,6 +169,17 @@ export async function updateUserAction(
     throw error
   }
 
+  if (whatsappChanged) {
+    try {
+      await setWhatsAppPhone(target.id, whatsappRaw === "" ? null : whatsappRaw)
+    } catch (error) {
+      if (error instanceof AppError) {
+        return { error: error.message, success: null }
+      }
+      throw error
+    }
+  }
+
   revalidatePath("/users")
   const finalUsername = patch.username ?? target.username
   const changes = [
@@ -170,6 +190,11 @@ export async function updateUserAction(
       ? patch.distribuidorName === ""
         ? "reseller unlinked"
         : `reseller '${patch.distribuidorName}'`
+      : null,
+    whatsappChanged
+      ? whatsappRaw === ""
+        ? "whatsapp removed"
+        : "whatsapp updated"
       : null,
   ].filter(Boolean)
   return {

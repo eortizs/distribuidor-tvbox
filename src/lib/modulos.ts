@@ -3,6 +3,7 @@ import {
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
+  MessageCircleIcon,
   MonitorDownIcon,
   PackageIcon,
   PiggyBankIcon,
@@ -129,6 +130,14 @@ export const MODULOS: Modulo[] = [
       "Gestiona las cuentas de distribuidores: saldo, permisos, edición y baja, con el mismo menú de Usuarios.",
     href: "/modulos/distribuidores",
     icon: UserCogIcon,
+    adminOnly: true,
+  },
+  {
+    title: "WhatsApp",
+    description:
+      "Vincula el número del agente IA, espeja las notificaciones del panel y atiende consultas de las cuentas registradas.",
+    href: "/modulos/whatsapp",
+    icon: MessageCircleIcon,
     adminOnly: true,
   },
 ]

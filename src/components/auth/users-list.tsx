@@ -123,6 +123,8 @@ export interface UserListItem {
   entityCount: number
   /** Reseller FlujoTV ligado a esta cuenta; null si todavía no tiene. */
   distribuidorName: string | null
+  /** WhatsApp registrado del canal agente; null si la cuenta no lo usa. */
+  whatsappPhone: string | null
   /** Claves de sección de la barra inferior que esta cuenta no ve. */
   deniedSections: string[]
   /** Hrefs de módulos del hub que esta cuenta no ve (ajustable desde Módulos). */
@@ -217,6 +219,19 @@ export function UsersManager({
         cell: ({ row }) => (
           <span className="text-muted-foreground text-xs">
             {row.original.distribuidorName ?? "—"}
+          </span>
+        ),
+        size: 150,
+      },
+      {
+        accessorKey: "whatsappPhone",
+        id: "whatsappPhone",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="WhatsApp" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-xs">
+            {row.original.whatsappPhone ?? "—"}
           </span>
         ),
         size: 150,
@@ -885,6 +900,24 @@ function EditUserForm({
               type="password"
               placeholder="Leave blank to keep current"
             />
+          </Field>
+          <Field>
+            <FieldLabel htmlFor={`edit-whatsapp-${user.id}`}>
+              WhatsApp (agente)
+            </FieldLabel>
+            <Input
+              id={`edit-whatsapp-${user.id}`}
+              name="whatsappPhone"
+              type="tel"
+              inputMode="numeric"
+              defaultValue={user.whatsappPhone ?? ""}
+              placeholder="525540049353"
+            />
+            <p className="text-muted-foreground text-xs">
+              Número con código de país, solo dígitos (11 a 15; p. ej.
+              525540049353). Habilita el espejo de notificaciones y el agente
+              de consultas por WhatsApp.
+            </p>
           </Field>
           {state.error ? (
             <p className="text-destructive text-sm" role="alert">

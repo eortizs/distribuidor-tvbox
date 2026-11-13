@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 
 import { pool } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
+import { enqueueWhatsAppForUserDetached } from "@/server/whatsapp/service"
 import { AppError } from "@/server/umejson/types"
 import { formatMxn } from "@/lib/finanzas"
 
@@ -480,6 +481,7 @@ interface NotificationInsert {
  * re-escaneo de la misma orden).
  */
 function insertNotification(insert: NotificationInsert): Promise<boolean> {
+  const notificationId = randomUUID()
   return pool
     .query(
       `INSERT INTO notifications
@@ -490,7 +492,7 @@ function insertNotification(insert: NotificationInsert): Promise<boolean> {
            AND kind IN ('renewal_failed', 'transfer_rejected')
        DO NOTHING`,
       [
-        randomUUID(),
+        notificationId,
         insert.userId,
         insert.kind,
         insert.title,
@@ -506,6 +508,15 @@ function insertNotification(insert: NotificationInsert): Promise<boolean> {
           kind: "notifications",
           entityId: insert.orderId ?? undefined,
           distribuidorId: insert.userId,
+        })
+        // Espejo WhatsApp (1:1 con la campana): solo si el destinatario
+        // tiene número registrado; nunca lanza ni bloquea el canal original.
+        enqueueWhatsAppForUserDetached({
+          userId: insert.userId,
+          notificationId,
+          kind: insert.kind,
+          title: insert.title,
+          body: insert.body,
         })
         return true
       }
