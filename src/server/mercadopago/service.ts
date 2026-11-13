@@ -11,6 +11,10 @@ import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
 import { mpTotalMxn } from "@/lib/mp-pricing"
 import { applySaldoCredit } from "@/server/saldo/service"
+import {
+  newTransactionId,
+  recordOrderEventDetached,
+} from "@/server/telemetry/order-events"
 
 import {
   resolveMercadoPagoConfig,
@@ -38,6 +42,19 @@ export type MpOrderStatus =
   | "refunded"
 
 export type MpOrderMethod = "mercadopago" | "transferencia" | "cupon"
+
+/**
+ * Vía que disparó un intento de renovación: viaja en cada evento de la
+ * bitácora (`mp_order_events`) y en el log JSON para reconstruir la cadena
+ * completa de una transacción al seguir un caso.
+ */
+export type RenewalTrigger =
+  | "webhook"
+  | "coupon"
+  | "scheduler"
+  | "reconcile"
+  | "admin_retry"
+  | "transfer"
 
 export interface MpOrderRow {
   id: string
@@ -712,8 +729,14 @@ async function verifyRenewalApplied(
 async function attemptOrderRenewal(
   order: MpOrderRow,
   paymentId: string | null,
-  renewalTimeoutMs?: number
+  renewalTimeoutMs?: number,
+  opts: { transactionId?: string; trigger?: RenewalTrigger } = {}
 ): Promise<PaymentOutcome> {
+  // Transacción de monitoreo: un id por intento, viaja en el log JSON y en la
+  // bitácora `mp_order_events` — el que llama puede aportar el suyo (el canje
+  // de cupón lo devuelve al comprador para el seguimiento del caso).
+  const transactionId = opts.transactionId ?? newTransactionId()
+  const trigger = opts.trigger ?? "webhook"
   // Cerrojo por orden (lock de sesión de Postgres): serializa webhook,
   // conciliación, reintento admin y canje de cupón que intentan renovar la
   // MISMA orden a la vez. Con claves rotadas, dos llamadas en paralelo que
@@ -733,7 +756,16 @@ async function attemptOrderRenewal(
   }
   if (!locked) {
     lockClient.release()
+    recordOrderEventDetached({
+      orderId: order.id,
+      transactionId,
+      event: "renewal_skipped_busy",
+      outcome: "in_process",
+      attempt: order.renewal_retry_count + 1,
+      detail: { trigger, reason: "otra renovación de la misma orden sigue en curso" },
+    })
     log("mercadopago.payment", {
+      transaction_id: transactionId,
       order_id: order.id,
       payment_id: paymentId,
       outcome: "in_progress",
@@ -742,7 +774,10 @@ async function attemptOrderRenewal(
     return "in_process"
   }
   try {
-    return await runOrderRenewal(order, paymentId, renewalTimeoutMs)
+    return await runOrderRenewal(order, paymentId, renewalTimeoutMs, {
+      transactionId,
+      trigger,
+    })
   } finally {
     await lockClient
       .query(`SELECT pg_advisory_unlock(hashtext($1))`, [
@@ -758,8 +793,13 @@ async function attemptOrderRenewal(
 async function runOrderRenewal(
   order: MpOrderRow,
   paymentId: string | null,
-  renewalTimeoutMs?: number
+  renewalTimeoutMs?: number,
+  ctx: { transactionId: string; trigger: RenewalTrigger } = {
+    transactionId: newTransactionId(),
+    trigger: "webhook",
+  }
 ): Promise<PaymentOutcome> {
+  const { transactionId, trigger } = ctx
   try {
     // Abono de saldo (months = 0): el cumplimiento NO renueva una licencia,
     // acredita el monto en el saldo de la cuenta del comprador
@@ -803,7 +843,24 @@ async function runOrderRenewal(
         idempotencyKey: `mp-${order.id}-b${index + 1}`,
       })),
     ]
+    const baselineStartedAt = Date.now()
     const baseline = await resolveRenewalBaseline(order)
+    recordOrderEventDetached({
+      orderId: order.id,
+      transactionId,
+      event: "renewal_started",
+      attempt: order.renewal_retry_count + 1,
+      detail: {
+        trigger,
+        months: order.months,
+        bonus_months: bonusMonths,
+        idempotency_key: renewalSteps[0]?.idempotencyKey ?? null,
+        key_attempts: order.renewal_key_attempts,
+        baseline: baseline.raw,
+        baseline_read_ms: Date.now() - baselineStartedAt,
+      },
+    })
+    const panelStartedAt = Date.now()
     for (const step of renewalSteps) {
       await renewFlujoLicense({
         userName: order.user_name,
@@ -812,6 +869,15 @@ async function runOrderRenewal(
         timeoutMs: renewalTimeoutMs,
       })
     }
+    recordOrderEventDetached({
+      orderId: order.id,
+      transactionId,
+      event: "renewal_panel_ok",
+      detail: {
+        steps: renewalSteps.map((step) => step.idempotencyKey),
+        panel_ms: Date.now() - panelStartedAt,
+      },
+    })
     // Comprobación: releer el vencimiento y exigir que sea distinto al
     // original. Sin esto, un 200 del panel sin renovación real se reportaba
     // como éxito (falso positivo).
@@ -820,6 +886,15 @@ async function runOrderRenewal(
       baseline.ts
     )
     if (!verification.ok) {
+      recordOrderEventDetached({
+        orderId: order.id,
+        transactionId,
+        event: "renewal_verification_inconclusive",
+        detail: {
+          baseline: baseline.raw,
+          last_read: verification.lastRaw,
+        },
+      })
       throw new MercadoPagoError(
         502,
         "renewal_not_applied",
@@ -841,7 +916,15 @@ async function runOrderRenewal(
       [order.id, verification.verifiedAt]
     )
     if (renewalClaim.rowCount === 0) {
+      recordOrderEventDetached({
+        orderId: order.id,
+        transactionId,
+        event: "renewal_ignored",
+        outcome: "ignored",
+        detail: { reason: "order_claimed_by_refund" },
+      })
       log("mercadopago.payment", {
+        transaction_id: transactionId,
         order_id: order.id,
         payment_id: paymentId,
         outcome: "ignored",
@@ -861,7 +944,19 @@ async function runOrderRenewal(
       verifiedExpiresAt: verification.verifiedAt,
       orderId: order.id,
     })
+    recordOrderEventDetached({
+      orderId: order.id,
+      transactionId,
+      event: "renewal_renewed",
+      outcome: "renewed",
+      detail: {
+        verified_expires_at: verification.verifiedAt,
+        months: order.months,
+        bonus_months: bonusMonths,
+      },
+    })
     log("mercadopago.payment", {
+      transaction_id: transactionId,
       order_id: order.id,
       payment_id: paymentId,
       user_name: order.user_name,
@@ -888,7 +983,16 @@ async function runOrderRenewal(
     // «está en curso» = panel de licencias; «operación en curso» = servicio
     // de licencias con otra compra del mismo usuario en vuelo.
     if (/(?:está|operaci[oó]n) en curso/i.test(message)) {
+      recordOrderEventDetached({
+        orderId: order.id,
+        transactionId,
+        event: "renewal_in_progress",
+        outcome: "in_process",
+        attempt: order.renewal_retry_count + 1,
+        detail: { trigger, reason: message },
+      })
       log("mercadopago.payment", {
+        transaction_id: transactionId,
         order_id: order.id,
         payment_id: paymentId,
         outcome: "in_progress",
@@ -955,7 +1059,20 @@ async function runOrderRenewal(
           return null
         })
       if (scheduled !== null && (scheduled.rowCount ?? 0) > 0) {
+        recordOrderEventDetached({
+          orderId: order.id,
+          transactionId,
+          event: "renewal_retry_scheduled",
+          outcome: "retry_scheduled",
+          attempt: order.renewal_retry_count + 1,
+          detail: {
+            trigger,
+            retry_in_ms: delayMs,
+            reason: message,
+          },
+        })
         log("mercadopago.payment", {
+          transaction_id: transactionId,
           order_id: order.id,
           payment_id: paymentId,
           user_name: order.user_name,
@@ -997,7 +1114,15 @@ async function runOrderRenewal(
         })
       }
     }
+    recordOrderEventDetached({
+      orderId: order.id,
+      transactionId,
+      event: "renewal_failed",
+      outcome: "renewal_failed",
+      detail: { trigger, reason: message },
+    })
     log("mercadopago.payment", {
+      transaction_id: transactionId,
       order_id: order.id,
       payment_id: paymentId,
       user_name: order.user_name,
@@ -1150,7 +1275,9 @@ export async function processPaymentNotification(params: {
       current &&
       (current.status === "paid" || current.status === "renewal_failed")
     ) {
-      return attemptOrderRenewal(current, params.paymentId)
+      return attemptOrderRenewal(current, params.paymentId, undefined, {
+        trigger: "webhook",
+      })
     }
     log("mercadopago.payment", {
       order_id: order.id,
@@ -1162,7 +1289,9 @@ export async function processPaymentNotification(params: {
 
   // Cobro confirmado: renovar.
   const claimed = (await getMpOrder(order.id)) ?? order
-  return attemptOrderRenewal(claimed, params.paymentId)
+  return attemptOrderRenewal(claimed, params.paymentId, undefined, {
+    trigger: "webhook",
+  })
 }
 
 /* -------------------------------------------------------------------------- */
@@ -1204,7 +1333,9 @@ export async function reconcilePendingOrder(
     try {
       await attemptOrderRenewal(
         order,
-        order.payment_id === null ? null : String(order.payment_id)
+        order.payment_id === null ? null : String(order.payment_id),
+        undefined,
+        { trigger: "reconcile" }
       )
     } catch (error) {
       logError(`reconcile_stuck_paid_${order.id}`, error)
@@ -1256,7 +1387,9 @@ export async function retryOrderRenewal(orderId: string): Promise<MpOrderRow> {
 
   const outcome = await attemptOrderRenewal(
     order,
-    order.payment_id === null ? null : String(order.payment_id)
+    order.payment_id === null ? null : String(order.payment_id),
+    undefined,
+    { trigger: "admin_retry" }
   )
 
   log("mercadopago.order_retry", {
@@ -1301,10 +1434,27 @@ export async function listRenewalDueOrders(limit = 5): Promise<MpOrderRow[]> {
 }
 
 /**
+ * Retención de la bitácora de transacciones (`mp_order_events`): los eventos
+ * más viejos que esto se podan. La bitácora es de seguimiento (soporte y
+ * monitoreo), no de auditoría contable: 90 días cubre con holgura cualquier
+ * caso en revisión y evita el crecimiento sin límite.
+ */
+const ORDER_EVENTS_RETENTION_DAYS = 90
+
+/**
+ * Poda de la bitácora al menos una vez por hora (el tick del scheduler corre
+ * cada 30 s): throttle en memoria — válido porque el servidor es un único
+ * Node bajo pm2, igual que el propio scheduler.
+ */
+let lastOrderEventsPruneAt = 0
+const ORDER_EVENTS_PRUNE_EVERY_MS = 60 * 60_000
+
+/**
  * Una pasada del scheduler: ejecuta el cumplimiento vencido, secuencial a
  * propósito (el panel es lento; sin stampede). Cada intento exitoso sella
  * `renewed`; uno transitorio re-agenda con backoff; uno permanente (o con
- * presupuesto agotado) sella `renewal_failed` y notifica como hoy.
+ * presupuesto agotado) sella `renewal_failed` y notifica como hoy. De paso,
+ * como máximo una vez por hora, poda los eventos de bitácora vencidos.
  */
 export async function renewalSchedulerTick(): Promise<number> {
   const orders = await listRenewalDueOrders()
@@ -1312,11 +1462,23 @@ export async function renewalSchedulerTick(): Promise<number> {
     try {
       await attemptOrderRenewal(
         order,
-        order.payment_id === null ? null : String(order.payment_id)
+        order.payment_id === null ? null : String(order.payment_id),
+        undefined,
+        { trigger: "scheduler" }
       )
     } catch (error) {
       logError(`renewal_scheduler_${order.id}`, error)
     }
+  }
+  if (Date.now() - lastOrderEventsPruneAt >= ORDER_EVENTS_PRUNE_EVERY_MS) {
+    lastOrderEventsPruneAt = Date.now()
+    await pool
+      .query(
+        `DELETE FROM mp_order_events
+          WHERE created_at < now() - ($1::double precision * interval '1 day')`,
+        [ORDER_EVENTS_RETENTION_DAYS]
+      )
+      .catch((error: unknown) => logError("prune_order_events", error))
   }
   return orders.length
 }
@@ -1537,7 +1699,9 @@ export async function approveTransferOrder(orderId: string): Promise<MpOrderRow>
   )
 
   const claimed = (await getMpOrder(order.id)) ?? order
-  const outcome = await attemptOrderRenewal(claimed, null)
+  const outcome = await attemptOrderRenewal(claimed, null, undefined, {
+    trigger: "transfer",
+  })
 
   log("mercadopago.transfer_review", {
     order_id: order.id,
@@ -1645,11 +1809,13 @@ export interface CreatedCouponOrder {
   amount: number
   currency: string
   /**
-   * `renewed` = renovación confirmada; `renewal_failed` = canje registrado
-   * pero renovación no confirmada (reintento seguro); `pending` = canje
-   * registrado y renovación EN CURSO en el servidor (solo paquetes: el
-   * cliente debe sondear el estado de la orden en lugar de esperar la
-   * respuesta HTTP).
+   * `renewed` = renovación confirmada (solo replays de un canje ya aplicado);
+   * `pending` = canje registrado y renovación EN CURSO en el servidor: el
+   * cliente sondea `GET /api/mercadopago/orders/{id}` hasta el estado final
+   * (los fallos transitorios del panel se reintentan solos con backoff).
+   * `renewal_failed` ya NO se devuelve en la creación: reportar fallo mientras
+   * la renovación seguía en curso o agendada era la causa de los falsos
+   * negativos «El pago no se completó» con la renovación aplicada después.
    */
   status: MpOrderStatus
   /** Razón del fallo de renovación tal como quedó en la orden; null si éxitó. */
@@ -1663,6 +1829,18 @@ export interface CreatedCouponOrder {
   months: number
   /** Meses gratis de la orden (para etiquetas fieles en el cliente). */
   bonusMonths: number
+  /**
+   * Id de la transacción de renovación disparada (null si no se disparó):
+   * correla la respuesta del comprador con la bitácora `mp_order_events` y
+   * el log JSON para el seguimiento del caso.
+   */
+  transactionId: string | null
+  /**
+   * true = replay con el mismo `requestId`: la orden ya existía y el saldo
+   * en cupones NO se volvió a debitar — el cliente no debe repetir la resta
+   * local del saldo.
+   */
+  replayed: boolean
 }
 
 /**
@@ -1715,12 +1893,13 @@ export async function couponMonthlyLimitForBuyer(
  * que repetir la solicitud devuelve la orden original en lugar de sumar
  * otro mes ni debitar otra vez.
  *
- * Canjes individuales (0000, 1 mes): renovación SINCRÓNICA con el presupuesto
- * de compras (60 s) — cabe en la paciencia de Cloudflare y su UI depende de
- * la respuesta. Canjes de paquete (bonusMonths > 0): el plan completo no
- * cabe, así que la renovación se dispara desacoplada y la respuesta devuelve
- * `pending` para que el cliente sondee la orden; el resultado se sella igual
- * (verified / renewal_failed) en la orden.
+ * Canjes individuales y de paquete: la renovación se dispara DESACOPLADA de
+ * la respuesta — el plan completo (línea base + panel + verificación) puede
+ * tardar más que el presupuesto ~100 s de Cloudflare y sostener la respuesta
+ * producía falsos negativos (respuesta perdida o `retry_scheduled`
+ * reportado como fallo con la renovación aplicada después). La respuesta
+ * devuelve `pending` + `transactionId` y el cliente sondea la orden; el
+ * resultado se sella igual (verified / renewal_failed) en la orden.
  */
 export async function createCouponOrder(params: {
   userName: string
@@ -1923,23 +2102,72 @@ export async function createCouponOrder(params: {
     )
   }
 
-  // Renovación de paquetes DESACOPLADA de la respuesta: el plan de un paquete
-  // (línea base + hasta 3 renovaciones + verificación) excede de largo el
-  // presupuesto ~100 s de Cloudflare cuando el panel está lento, así que
-  // sostener la respuesta haría perderla SIEMPRE en el caso típico. La orden
-  // queda `paid` y el cliente sondea `GET /api/mercadopago/orders/{id}`; la
-  // conciliación de `paid` varado (10 min) y el reintento cubren un proceso
-  // cortado a mitad del plan. Los canjes individuales (0000, 1 mes) siguen
-  // sincrónicos: caben en el presupuesto y su UI depende de la respuesta.
-  if (bonusMonths > 0 && order.status !== "renewed") {
-    if (order.status === "paid" || order.status === "renewal_failed") {
-      const target = order
-      void attemptOrderRenewal(target, null, FLUJO_PURCHASE_TIMEOUT_MS)
+  // Renovación DESACOPLADA de la respuesta para TODOS los canjes (individuales
+  // y paquetes). La renovación completa (lectura de línea base + llamada al
+  // panel + verificación) puede tardar 1-4 minutos con el panel lento — más
+  // que el presupuesto ~100 s de Cloudflare y que los timeouts propios — así
+  // que sostener la respuesta producía falsos negativos: el cupón quedaba
+  // registrado y el scheduler terminaba aplicando la renovación sola, pero el
+  // comprador ya había visto «El pago no se completó». La respuesta sale de
+  // inmediato con `pending` y el cliente sondea
+  // `GET /api/mercadopago/orders/{id}` hasta el estado final; los fallos
+  // transitorios del panel se reintentan solos con backoff y el
+  // `transaction_id` deja la traza completa en la bitácora (`mp_order_events`)
+  // y en el log JSON. La conciliación de `paid` varado (10 min) cubre un
+  // proceso cortado a mitad del intento.
+  if (order.status === "renewed") {
+    // Orden ya renovada (replay de un canje aplicado) no vuelve al panel:
+    // renovar de nuevo con la misma clave determinista sería un no-op caro.
+    return {
+      orderId: order.id,
+      amount: order.amount,
+      currency: order.currency,
+      status: "renewed",
+      error: null,
+      verifiedExpiresAt: order.renewal_verified_expires_at,
+      months: order.months,
+      bonusMonths: order.bonus_months,
+      transactionId: null,
+      replayed: true,
+    }
+  }
+
+  if (order.status === "paid" || order.status === "renewal_failed") {
+    // Gate de backoff: un replay (re-clic del comprador, la vía de
+    // recuperación que sugiere el sheet) durante la ventana de un reintento
+    // ya agendado NO dispara otra renovación — el scheduler la ejecuta a su
+    // hora (60 s → 3 min → 10 min) y el sondeo la alcanza. Disparar aquí
+    // ejecutaría el plan completo de inmediato y anularía el backoff, con
+    // el panel lento y secuencial pagándolo todas las renovaciones.
+    const nextRetryAt = order.renewal_next_retry_at
+    const retryPending =
+      nextRetryAt !== null &&
+      Number.isFinite(Date.parse(nextRetryAt)) &&
+      Date.parse(nextRetryAt) > Date.now()
+    if (!retryPending) {
+      const transactionId = newTransactionId()
+      recordOrderEventDetached({
+        orderId: order.id,
+        transactionId,
+        event: "coupon_renewal_detached",
+        outcome: "pending",
+        detail: {
+          replayed: insertedId === null,
+          months: order.months,
+          bonus_months: bonusMonths,
+          coupon: code,
+        },
+      })
+      void attemptOrderRenewal(order, null, FLUJO_PURCHASE_TIMEOUT_MS, {
+        transactionId,
+        trigger: "coupon",
+      })
         .then((outcome) => {
           log("mercadopago.coupon_order", {
-            order_id: target.id,
-            user_name: target.user_name,
-            months: target.months,
+            transaction_id: transactionId,
+            order_id: order.id,
+            user_name: order.user_name,
+            months: order.months,
             bonus_months: bonusMonths,
             coupon: code,
             outcome,
@@ -1947,60 +2175,49 @@ export async function createCouponOrder(params: {
           })
         })
         .catch((error: unknown) => logError("coupon_detached_renewal", error))
+      return {
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        // La renovación corre en segundo plano (con reintentos automáticos si
+        // el panel está lento): el cliente sondea la orden hasta el resultado
+        // final — nunca se informa fallo aquí, la renovación no falló: sigue.
+        status: "pending",
+        error: null,
+        verifiedExpiresAt: null,
+        months: order.months,
+        bonusMonths: order.bonus_months,
+        transactionId,
+        replayed: insertedId === null,
+      }
     }
+    // Reintento ya agendado: sin disparo nuevo ni transacción que reportar
+    // (el scheduler deja su propia traza cuando ejecute).
     return {
       orderId: order.id,
       amount: order.amount,
       currency: order.currency,
-      // Dentro de esta rama la orden NO está renovada (guard de arriba): el
-      // cliente sondea hasta el resultado final.
       status: "pending",
-      error: order.status === "renewal_failed" ? order.error : null,
+      error: null,
       verifiedExpiresAt: null,
       months: order.months,
       bonusMonths: order.bonus_months,
+      transactionId: null,
+      replayed: true,
     }
   }
 
-  // Una orden reintento ya renovada no vuelve al panel: renovar de nuevo con
-  // la misma clave determinista sería un no-op costoso.
-  let outcome: PaymentOutcome
-  if (order.status === "renewed") {
-    outcome = "renewed"
-  } else {
-    outcome = await attemptOrderRenewal(order, null, FLUJO_PURCHASE_TIMEOUT_MS)
-  }
-
-  log("mercadopago.coupon_order", {
-    order_id: order.id,
-    user_name: params.userName,
-    months: params.months,
-    bonus_months: bonusMonths,
-    coupon: code,
-    outcome,
-  })
-
-  // Orden fresca tras el intento: lleva el `error` guardado cuando falló y
-  // el vencimiento verificado (`renewal_verified_expires_at`) cuando se
-  // confirmó — la confirmación al comprador muestra esa fecha como evidencia.
-  const fresh = await getMpOrder(order.id)
-
-  return {
-    orderId: order.id,
-    amount: order.amount,
-    currency: order.currency,
-    // Solo `renewed` se informa como éxito: `in_process` (Idempotency-Key en
-    // curso en el panel) o cualquier otro resultado no confirmado se informa
-    // como `renewal_failed` — la UI de cupón ofrece el reintento, que es
-    // seguro con la clave determinista; la orden queda `paid` en BD y el
-    // reintento la recupera.
-    status: outcome === "renewed" ? "renewed" : "renewal_failed",
-    error: fresh?.error ?? null,
-    verifiedExpiresAt:
-      outcome === "renewed" ? fresh?.renewal_verified_expires_at ?? null : null,
-    months: order.months,
-    bonusMonths: order.bonus_months,
-  }
+  // Invariante: un canje solo existe en paid/renewed/renewal_failed (nace
+  // paid, el replay filtra por método cupón y ningún flujo mueve una orden
+  // de cupón a otro estado — refundOrder exige mercadopago y
+  // rejectTransferOrder transferencia). Un estado imposible falla ruidosamente
+  // en lugar de devolver un `pending` no-terminal que dejaría al comprador en
+  // un bucle de sondeo sin salida.
+  throw new MercadoPagoError(
+    500,
+    "unexpected_coupon_order_status",
+    `La orden de cupón ${order.id} está en un estado no esperado (${order.status}); no se puede renovar desde aquí.`
+  )
 }
 
 /* -------------------------------------------------------------------------- */

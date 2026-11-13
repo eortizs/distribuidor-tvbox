@@ -127,6 +127,8 @@ export async function POST(request: Request) {
         verified_expires_at: result.verifiedExpiresAt,
         months: result.months,
         bonus_months: result.bonusMonths,
+        transaction_id: result.transactionId,
+        replayed: result.replayed,
       },
     })
   } catch (error) {

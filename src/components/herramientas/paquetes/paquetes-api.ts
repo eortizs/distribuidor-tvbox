@@ -76,9 +76,9 @@ export async function createPaqueteTransferOrder(params: {
 
 /**
  * Canjea el cupón asignado del módulo (1010) para el paquete elegido: el
- * servidor valida el código, crea la orden pagada y renueva al instante.
- * Para paquetes la renovación va desacoplada y el status llega `pending`
- * (sondear la orden con `fetchPaymentOrder` hasta verla `renewed`).
+ * servidor valida el código, crea la orden pagada y dispara la renovación
+ * desacoplada — la respuesta llega `pending` (sondear la orden con
+ * `fetchPaymentOrder` hasta verla `renewed`).
  */
 export async function createPaqueteCouponOrder(params: {
   userName: string
@@ -95,6 +95,10 @@ export async function createPaqueteCouponOrder(params: {
   bonusMonths: number
   error: string | null
   verifiedExpiresAt: string | null
+  /** Id de la transacción de renovación (seguimiento de casos). */
+  transactionId: string | null
+  /** true = replay: la orden ya existía y el saldo no se volvió a debitar. */
+  replayed: boolean
 }> {
   return requestJson<{
     order_id: string
@@ -104,6 +108,8 @@ export async function createPaqueteCouponOrder(params: {
     bonus_months: number
     error: string | null
     verified_expires_at: string | null
+    transaction_id?: string | null
+    replayed?: boolean
   }>("/api/paquetes/cupones", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -120,5 +126,7 @@ export async function createPaqueteCouponOrder(params: {
     bonusMonths: data.bonus_months,
     error: data.error ?? null,
     verifiedExpiresAt: data.verified_expires_at ?? null,
+    transactionId: data.transaction_id ?? null,
+    replayed: data.replayed ?? false,
   }))
 }

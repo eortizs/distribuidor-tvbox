@@ -388,6 +388,12 @@ import {
   type PaymentOrder,
   type TransferConcept,
 } from "./pago-api"
+import {
+  COUPON_POLL_EXHAUSTED_MESSAGE,
+  couponRenewalFailureMessage,
+  useCouponRenewalPoll,
+  type CouponPollTarget,
+} from "@/hooks/use-coupon-renewal-poll"
 import { TransferenciasReview } from "./transferencias-review"
 import { RefundsReview } from "./refunds-review"
 import {
@@ -1021,6 +1027,15 @@ export function ClientesAccordion({
     null
   )
   /**
+   * Orden con renovación EN CURSO en el servidor (canje de cupón): la
+   * renovación corre desacoplada y se sondea hasta verla `renewed` o
+   * `renewal_failed`; mientras tanto el botón principal muestra «Aplicando…»
+   * y el sheet no se cierra. El objetivo lleva también el `transactionId` del
+   * canje para el «ID de seguimiento» del mensaje de fallo.
+   */
+  const [couponPollTarget, setCouponPollTarget] =
+    useState<CouponPollTarget | null>(null)
+  /**
    * Id de la intención de canje vigente: se regenera al abrir el sheet y se
    * conserva entre reintentos del mismo intento, de modo que un reintento
    * tras una respuesta perdida devuelve la orden original (idempotente en el
@@ -1262,6 +1277,7 @@ export function ClientesAccordion({
       conceptRequestedKey.current = ""
       setCouponCode("")
       setCouponRetryOrderId(null)
+      setCouponPollTarget(null)
       couponRequestIdRef.current =
         typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
       ticketActions.clearFiles()
@@ -1559,10 +1575,11 @@ export function ClientesAccordion({
   /**
    * Canjea el cupón: el servidor valida el código contra los cupones activos
    * (0000 con `COUPON_QA_ENABLED`), exige saldo suficiente y debita el saldo
-   * en cupones; si el código es válido renueva la licencia al instante. El
-   * canje es idempotente por `couponRequestIdRef`: un reintento
-   * tras una respuesta perdida devuelve la orden original en lugar de sumar
-   * otro mes ni debitar de nuevo.
+   * en cupones; la renovación se dispara DESACOPLADA y la respuesta llega
+   * `pending` — este sheet sondea la orden hasta el resultado final. El canje
+   * es idempotente por `couponRequestIdRef`: un reintento tras una respuesta
+   * perdida devuelve la orden original en lugar de sumar otro mes ni debitar
+   * de nuevo.
    */
   const submitCoupon = useCallback(async () => {
     if (!purchaseTarget || couponCode.length !== COUPON_CODE_LENGTH) return
@@ -1578,25 +1595,40 @@ export function ClientesAccordion({
         code: couponCode,
         requestId,
       })
-      // El canje quedó registrado y el servidor YA debió el saldo en
-      // cupones (renovada o `renewal_failed` por igual): reflejarlo en
-      // local para que la próxima apertura del sheet valide contra el
-      // saldo real sin recargar la página.
-      setSaldoCuponesVigente((saldo) =>
-        saldo !== null
-          ? Math.round((saldo - result.amount) * 100) / 100
-          : null
-      )
+      // Solo un canje FRESCO debita el saldo en cupones: un replay (mismo
+      // request_id, la vía de recuperación que sugiere el sheet tras agotar
+      // el sondeo) devuelve la orden original sin volver a debitar, así que
+      // repetir la resta local alejaría el saldo del real hasta recargar.
+      if (!result.replayed) {
+        setSaldoCuponesVigente((saldo) =>
+          saldo !== null
+            ? Math.round((saldo - result.amount) * 100) / 100
+            : null
+        )
+      }
       if (result.status === "renewal_failed") {
-        // El canje quedó registrado pero la renovación no se confirmó contra
-        // el panel (vencimiento sin cambio o lectura imposible): el botón
-        // principal pasa a reintentar la renovación (misma orden, sin nuevo
-        // canje).
+        // Fallo CONFIRMADO (presupuesto de reintentos agotado o fallo
+        // permanente del panel): el botón principal pasa a reintentar la
+        // renovación (misma orden, sin nuevo canje). El id de transacción
+        // permite al admin seguir el caso en la bitácora.
         setCouponRetryOrderId(result.orderId)
         setPayError(
-          `El cupón se aceptó y quedó registrado (orden ${result.orderId.slice(0, 8)}…), pero la renovación no se confirmó en el panel de licencias.${result.error ? ` ${result.error}` : ""} Pulsa «Reintentar renovación»: no se vuelve a canjar ni suma meses extra.`
+          couponRenewalFailureMessage(
+            result.orderId,
+            result.transactionId,
+            result.error
+          )
         )
         refreshRow(userName)
+      } else if (result.status === "pending") {
+        // Renovación en curso en el servidor: sondear la orden hasta verla
+        // `renewed` o `renewal_failed`; el botón muestra «Aplicando…». Los
+        // fallos transitorios del panel se reintentan solos (scheduler), así
+        // que aquí NUNCA se anuncia fallo: la renovación no falló, sigue.
+        setCouponPollTarget({
+          orderId: result.orderId,
+          transactionId: result.transactionId,
+        })
       } else {
         setPurchaseOpen(false)
         toast.success("Renovación aplicada", {
@@ -1606,8 +1638,8 @@ export function ClientesAccordion({
       }
     } catch (error) {
       // Con el panel de licencias lento la respuesta puede perderse después
-      // de que el cupón se aplicó y renovó: refresca la fila para que la
-      // nueva expiración sea visible. Pulsar de nuevo es seguro: el mismo
+      // de que el cupón se aplicó: refresca la fila para que la nueva
+      // expiración sea visible. Pulsar de nuevo es seguro: el mismo
       // request_id devuelve la orden original, no un canje nuevo.
       refreshRow(userName)
       const ambiguous =
@@ -1630,9 +1662,42 @@ export function ClientesAccordion({
   }, [purchaseTarget, couponCode, refreshRow])
 
   /**
+   * Sondeo de la renovación desacoplada (máquina compartida con paquetes en
+   * `use-coupon-renewal-poll`): `renewed` cierra con éxito; `renewal_failed`
+   * (fallo confirmado) activa el reintento seguro con el «ID de seguimiento»
+   * de la transacción; al agotarse la ventana, el mensaje informa y volver a
+   * pulsar «Aplicar cupón» consulta la misma orden (mismo request_id) sin
+   * crear otra.
+   */
+  useCouponRenewalPoll({
+    target: couponPollTarget,
+    onRenewed: (order) => {
+      setCouponPollTarget(null)
+      setPurchaseOpen(false)
+      toast.success("Renovación aplicada", {
+        description: `${order.user_name} · 1 mes · ${formatMxn(order.amount)}${verifiedExpiresSuffix(order.renewal_verified_expires_at)}`,
+      })
+      refreshRow(order.user_name)
+    },
+    onFailed: (order, target) => {
+      setCouponPollTarget(null)
+      setCouponRetryOrderId(order.id)
+      setPayError(
+        couponRenewalFailureMessage(order.id, target.transactionId, order.error)
+      )
+      refreshRow(order.user_name)
+    },
+    onExhausted: () => {
+      setCouponPollTarget(null)
+      setPayError(COUPON_POLL_EXHAUSTED_MESSAGE)
+    },
+  })
+
+  /**
    * Reintenta la renovación de la orden con renovación fallida de este canje:
    * sin nuevo cargo ni canje; la clave determinista de la orden evita sumar
-   * meses dos veces.
+   * meses dos veces. Si el panel sigue lento (reintento agendado o en curso)
+   * el sheet pasa a sondear la orden en vez de soltar al comprador.
    */
   const retryCouponRenewal = useCallback(async () => {
     if (!couponRetryOrderId || !purchaseTarget) return
@@ -1645,12 +1710,14 @@ export function ClientesAccordion({
         setPayError(
           `La renovación volvió a fallar (orden ${couponRetryOrderId.slice(0, 8)}…).${result.error ? ` ${result.error}` : " Quedó registrada para revisión; inténtalo de nuevo en unos minutos."}`
         )
-      } else if (result.status === "paid") {
-        // El panel sigue lento: el reintento quedó agendado y el servidor lo
-        // ejecuta solo con backoff; la campana trae el resultado final.
-        setPayError(
-          "El panel de licencias sigue lento: la renovación quedó en curso con reintentos automáticos. La campana te avisará el resultado en unos minutos."
-        )
+      } else if (result.status === "paid" || result.status === "pending") {
+        // El panel sigue lento: la renovación quedó agendada (backoff del
+        // scheduler) o sigue en curso. Sondear hasta el resultado final: la
+        // misma pantalla muestra «Aplicando…» y se cierra sola al confirmarse.
+        // Sin `transactionId` aquí: la respuesta del reintento no lo trae.
+        setCouponRetryOrderId(null)
+        setPayError(null)
+        setCouponPollTarget({ orderId: couponRetryOrderId, transactionId: null })
       } else {
         setPurchaseOpen(false)
         toast.success("Renovación aplicada", {
@@ -1668,6 +1735,14 @@ export function ClientesAccordion({
       setSubmittingCoupon(false)
     }
   }, [couponRetryOrderId, purchaseTarget, refreshRow])
+
+  /**
+   * Ocupado del sheet por el sondeo del canje: mientras la renovación
+   * desacoplada corre, el botón principal muestra «Aplicando…», el sheet
+   * queda cerrado bajo llave (la orden ya quedó registrada; cerrar ahora
+   * dejaría sin contexto el resultado) y el OTP se congela.
+   */
+  const couponPolling = couponPollTarget !== null
 
   /**
    * Retorno del checkout (`?orden=…&estado=…`): sondea el estado de la orden
@@ -3456,7 +3531,10 @@ export function ClientesAccordion({
       <Drawer
         open={purchaseOpen}
         onOpenChange={(open) => {
-          if (!open && (purchasing || submittingTransfer || submittingCoupon))
+          if (
+            !open &&
+            (purchasing || submittingTransfer || submittingCoupon || couponPolling)
+          )
             return
           // Renovación en curso (etapas no finales): el sheet no se cierra
           // detrás del bloqueo hasta terminar.
@@ -3957,7 +4035,7 @@ export function ClientesAccordion({
                          setCouponCode(value)
                          setPayError(null)
                        }}
-                       disabled={submittingCoupon}
+                       disabled={submittingCoupon || couponPolling}
                      >
                        <InputOTPGroup>
                          {Array.from(
@@ -3970,10 +4048,11 @@ export function ClientesAccordion({
                      </InputOTP>
                    </div>
                  </Field>
-                 <p className="text-muted-foreground text-center text-xs">
-                   El cupón debita tu saldo en cupones; el servidor valida el
-                   código y la renovación se aplica al instante.
-                 </p>
+                  <p className="text-muted-foreground text-center text-xs">
+                    El cupón debita tu saldo en cupones; el servidor valida el
+                    código y la renovación se aplica en unos instantes. No
+                    cierres esta pantalla: aquí verás el resultado.
+                  </p>
                  {couponSaldoInsuficiente ? (
                    <Alert variant="warning">
                      <TriangleAlertIcon aria-hidden="true" />
@@ -4015,10 +4094,10 @@ export function ClientesAccordion({
                      setTransferRejected(null)
                      setTransferStep("concepto")
                    }}
-                   disabled={purchasing || submittingCoupon}
-                 >
-                   Cambiar método de pago
-                 </Button>
+                    disabled={purchasing || submittingCoupon || couponPolling}
+                  >
+                    Cambiar método de pago
+                  </Button>
                </div>
              ) : null}
 
@@ -4069,12 +4148,13 @@ export function ClientesAccordion({
                 onClick={() => void submitCoupon()}
                 disabled={
                   submittingCoupon ||
+                  couponPolling ||
                   couponCode.length !== COUPON_CODE_LENGTH ||
                   priceMxn === null ||
                   couponSaldoInsuficiente
                 }
               >
-                {submittingCoupon ? (
+                {submittingCoupon || couponPolling ? (
                   <>
                     <LoaderCircleIcon
                       aria-hidden="true"

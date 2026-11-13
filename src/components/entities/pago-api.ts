@@ -298,7 +298,9 @@ export async function rejectTransferOrder(
 
 /**
  * Renovación pagada con cupón: el servidor valida el código contra los
- * cupones activos y, si es válido, renueva la licencia al instante.
+ * cupones activos, registra la orden pagada y dispara la renovación
+ * DESACOPLADA — la respuesta llega `pending` con el `transactionId` de la
+ * transacción y el cliente sondea la orden hasta el estado final.
  */
 export async function createCouponOrder(params: {
   userName: string
@@ -312,6 +314,10 @@ export async function createCouponOrder(params: {
   amount: number
   error: string | null
   verifiedExpiresAt: string | null
+  /** Id de la transacción de renovación (seguimiento de casos). */
+  transactionId: string | null
+  /** true = replay: la orden ya existía y el saldo no se volvió a debitar. */
+  replayed: boolean
 }> {
   return requestJson<{
     order_id: string
@@ -319,6 +325,8 @@ export async function createCouponOrder(params: {
     amount: number
     error: string | null
     verified_expires_at: string | null
+    transaction_id?: string | null
+    replayed?: boolean
   }>("/api/cupones/orders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -334,6 +342,8 @@ export async function createCouponOrder(params: {
     amount: data.amount,
     error: data.error ?? null,
     verifiedExpiresAt: data.verified_expires_at ?? null,
+    transactionId: data.transaction_id ?? null,
+    replayed: data.replayed ?? false,
   }))
 }
 

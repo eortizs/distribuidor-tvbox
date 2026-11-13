@@ -159,6 +159,8 @@ export async function POST(request: Request) {
         currency: result.currency,
         error: result.error,
         verified_expires_at: result.verifiedExpiresAt,
+        transaction_id: result.transactionId,
+        replayed: result.replayed,
       },
     })
   } catch (error) {

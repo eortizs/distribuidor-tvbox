@@ -153,6 +153,12 @@ import {
   createPaqueteTransferOrder,
   type PaymentOrder,
 } from "./paquetes-api"
+import {
+  COUPON_POLL_EXHAUSTED_MESSAGE,
+  couponRenewalFailureMessage,
+  useCouponRenewalPoll,
+  type CouponPollTarget,
+} from "@/hooks/use-coupon-renewal-poll"
 
 type FetchState = "loading" | "success" | "error"
 
@@ -164,16 +170,6 @@ const TICKET_MAX_BYTES = 10 * 1024 * 1024
 
 /** Ruta del módulo: retorno del checkout y limpieza de la query. */
 const MODULO_PATH = "/modulos/paquetes-flujotv"
-
-/**
- * Ventana de sondeo de la renovación desacoplada de un canje de cupón:
- * ~2 min a razón de 2 s por intento. Al agotarse, el canje sigue registrado
- * y la renovación sigue viva en el servidor (la conciliación de `paid` varado
- * la retoma a los 10 minutos); volver a pulsar «Aplicar cupón» consulta de
- * nuevo la misma orden sin crear otra.
- */
-const COUPON_POLL_ATTEMPTS = 60
-const COUPON_POLL_INTERVAL_MS = 2000
 
 /** Segmento de confirmación con el vencimiento nuevo verificado en el panel
  * (null = sin lectura verificada).
@@ -346,11 +342,12 @@ export function PaquetesView({
   /**
    * Orden con renovación EN CURSO en el servidor (canje de paquete): se
    * sondea hasta verla `renewed` o `renewal_failed`; mientras tanto el botón
-   * principal muestra «Aplicando…» y el sheet no se cierra.
+   * principal muestra «Aplicando…» y el sheet no se cierra. El objetivo lleva
+   * también el `transactionId` del canje para el «ID de seguimiento» del
+   * mensaje de fallo.
    */
-  const [couponPollOrderId, setCouponPollOrderId] = useState<string | null>(
-    null
-  )
+  const [couponPollTarget, setCouponPollTarget] =
+    useState<CouponPollTarget | null>(null)
   /**
    * Id de la intención de canje vigente: se regenera al abrir el sheet y se
    * conserva entre reintentos del mismo intento, de modo que un reintento
@@ -431,7 +428,7 @@ export function PaquetesView({
       setPayMethod("mercadopago")
       setPayError(null)
       setCouponRetryOrderId(null)
-      setCouponPollOrderId(null)
+      setCouponPollTarget(null)
       couponRequestIdRef.current =
         typeof crypto.randomUUID === "function" ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`
       ticketActions.clearFiles()
@@ -607,29 +604,40 @@ export function PaquetesView({
         months: paqueteMonths,
         requestId,
       })
-      // El canje quedó registrado y el servidor YA debió el saldo en
-      // cupones (renovada, `renewal_failed` o `pending` por igual):
-      // reflejarlo en local para que la próxima apertura del sheet valide
-      // contra el saldo real sin recargar la página.
-      setSaldoCuponesVigente((saldo) =>
-        saldo !== null ? Math.round((saldo - result.amount) * 100) / 100 : null
-      )
+      // Solo un canje FRESCO debita el saldo en cupones: un replay (mismo
+      // request_id, la vía de recuperación que sugiere el sheet tras agotar
+      // el sondeo) devuelve la orden original sin volver a debitar, así que
+      // repetir la resta local alejaría el saldo del real hasta recargar.
+      if (!result.replayed) {
+        setSaldoCuponesVigente((saldo) =>
+          saldo !== null ? Math.round((saldo - result.amount) * 100) / 100 : null
+        )
+      }
       // Etiqueta SIEMPRE desde la orden del servidor (meses pagados + gratis):
       // un replay con otra selección en pantalla anunciaría el paquete equivocado.
       const label = paqueteOrderLabel(result.months, result.bonusMonths)
       if (result.status === "renewal_failed") {
-        // El canje quedó registrado pero la renovación no se confirmó contra
-        // el panel: el botón principal pasa a reintentar la renovación (misma
-        // orden, sin nuevo canje).
+        // El canje quedó registrado pero la renovación se confirmó fallida
+        // (presupuesto de reintentos agotado o fallo permanente): el botón
+        // principal pasa a reintentar la renovación (misma orden, sin nuevo
+        // canje). El id de transacción permite al admin seguir el caso en la
+        // bitácora (`mp_order_events`).
         setCouponRetryOrderId(result.orderId)
         setPayError(
-          `El cupón se aceptó y quedó registrado (orden ${result.orderId.slice(0, 8)}…), pero la renovación no se confirmó en el panel de licencias.${result.error ? ` ${result.error}` : ""} Pulsa «Reintentar renovación»: no se vuelve a canjar ni suma meses extra.`
+          couponRenewalFailureMessage(
+            result.orderId,
+            result.transactionId,
+            result.error
+          )
         )
         refreshRow(userName)
       } else if (result.status === "pending") {
         // Renovación en curso en el servidor: sondear la orden hasta verla
         // `renewed` o `renewal_failed`; el botón muestra «Aplicando…».
-        setCouponPollOrderId(result.orderId)
+        setCouponPollTarget({
+          orderId: result.orderId,
+          transactionId: result.transactionId,
+        })
       } else {
         setPurchaseOpen(false)
         toast.success("Renovación aplicada", {
@@ -663,73 +671,36 @@ export function PaquetesView({
   }, [purchaseTarget, paqueteMonths, refreshRow])
 
   /**
-   * Sondeo de la renovación desacoplada de un canje de cupón: la orden parte
-   * `paid` (el cupón ya quedó registrado) y el servidor aplica el plan del
-   * paquete en segundo plano. `renewed` cierra con éxito; `renewal_failed`
-   * activa el reintento seguro; al agotarse la ventana, el mensaje informa y
-   * volver a pulsar «Aplicar cupón» consulta la misma orden (mismo
+   * Sondeo de la renovación desacoplada (máquina compartida con clientes en
+   * `use-coupon-renewal-poll`): `renewed` cierra con éxito con la etiqueta
+   * fiel de la orden; `renewal_failed` (fallo confirmado) activa el reintento
+   * seguro con el «ID de seguimiento»; al agotarse la ventana, el mensaje
+   * informa y volver a pulsar «Aplicar cupón» consulta la misma orden (mismo
    * request_id) sin crear otra.
    */
-  useEffect(() => {
-    if (!couponPollOrderId) return
-
-    let cancelled = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    let attempts = 0
-
-    const tick = async () => {
-      attempts += 1
-      let order: PaymentOrder | null = null
-      try {
-        order = await fetchPaymentOrder(couponPollOrderId)
-      } catch {
-        order = null
-      }
-      if (cancelled) return
-
-      if (order) {
-        const label = orderPaqueteLabel(order)
-        if (order.status === "renewed") {
-          setCouponPollOrderId(null)
-          setPurchaseOpen(false)
-          toast.success("Renovación aplicada", {
-            description: `${order.user_name} · ${label} · ${formatMxn(order.amount)}${verifiedExpiresSuffix(order.renewal_verified_expires_at)}`,
-          })
-          refreshRow(order.user_name)
-          return
-        }
-        if (order.status === "renewal_failed") {
-          setCouponPollOrderId(null)
-          setCouponRetryOrderId(order.id)
-          setPayError(
-            `El cupón se aceptó y quedó registrado (orden ${order.id.slice(0, 8)}…), pero la renovación no se confirmó en el panel de licencias.${order.error ? ` ${order.error}` : ""} Pulsa «Reintentar renovación»: no se vuelve a canjar ni suma meses extra.`
-          )
-          refreshRow(order.user_name)
-          return
-        }
-      }
-
-      if (attempts >= COUPON_POLL_ATTEMPTS) {
-        setCouponPollOrderId(null)
-        setPayError(
-          "El cupón quedó registrado y la renovación sigue aplicándose en el panel de licencias. Espera un momento y vuelve a pulsar «Aplicar cupón»: se consulta la misma orden sin canjar ni sumar meses extra."
-        )
-        return
-      }
-      timer = setTimeout(() => {
-        void tick()
-      }, COUPON_POLL_INTERVAL_MS)
-    }
-
-    timer = setTimeout(() => {
-      void tick()
-    }, COUPON_POLL_INTERVAL_MS)
-
-    return () => {
-      cancelled = true
-      if (timer) clearTimeout(timer)
-    }
-  }, [couponPollOrderId, refreshRow])
+  useCouponRenewalPoll({
+    target: couponPollTarget,
+    onRenewed: (order) => {
+      setCouponPollTarget(null)
+      setPurchaseOpen(false)
+      toast.success("Renovación aplicada", {
+        description: `${order.user_name} · ${orderPaqueteLabel(order)} · ${formatMxn(order.amount)}${verifiedExpiresSuffix(order.renewal_verified_expires_at)}`,
+      })
+      refreshRow(order.user_name)
+    },
+    onFailed: (order, target) => {
+      setCouponPollTarget(null)
+      setCouponRetryOrderId(order.id)
+      setPayError(
+        couponRenewalFailureMessage(order.id, target.transactionId, order.error)
+      )
+      refreshRow(order.user_name)
+    },
+    onExhausted: () => {
+      setCouponPollTarget(null)
+      setPayError(COUPON_POLL_EXHAUSTED_MESSAGE)
+    },
+  })
 
   /**
    * Reintenta la renovación de la orden con renovación fallida de este
@@ -747,12 +718,18 @@ export function PaquetesView({
         setPayError(
           `La renovación volvió a fallar (orden ${couponRetryOrderId.slice(0, 8)}…).${result.error ? ` ${result.error}` : " Quedó registrada para revisión; inténtalo de nuevo en unos minutos."}`
         )
-      } else if (result.status === "paid") {
-        // El panel sigue lento: el reintento quedó agendado y el servidor lo
-        // ejecuta solo con backoff; la campana trae el resultado final.
-        setPayError(
-          "El panel de licencias sigue lento: la renovación quedó en curso con reintentos automáticos. La campana te avisará el resultado en unos minutos."
-        )
+      } else if (
+        result.status === "paid" ||
+        result.status === "pending"
+      ) {
+        // El panel sigue lento: el reintento quedó agendado (backoff del
+        // scheduler) o sigue en curso. Sondear la orden hasta el resultado
+        // final en lugar de soltar al comprador: la misma pantalla muestra
+        // «Aplicando…» y el sheet se cierra solo al confirmarse. Sin
+        // `transactionId` aquí: la respuesta del reintento no lo trae.
+        setCouponRetryOrderId(null)
+        setPayError(null)
+        setCouponPollTarget({ orderId: couponRetryOrderId, transactionId: null })
       } else {
         setPurchaseOpen(false)
         toast.success("Renovación aplicada", {
@@ -870,7 +847,7 @@ export function PaquetesView({
    * cerrado bajo llave (la orden ya quedó registrada; cerrar ahora dejaría
    * sin contexto el reintento).
    */
-  const couponPolling = couponPollOrderId !== null
+  const couponPolling = couponPollTarget !== null
   const busy =
     purchasing || submittingTransfer || submittingCoupon || couponPolling
 
