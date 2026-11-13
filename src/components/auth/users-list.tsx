@@ -6,11 +6,13 @@ import {
   useEffect,
   useMemo,
   useState,
+  useTransition,
 } from "react"
 import { useRouter } from "next/navigation"
 import {
   CoinsIcon,
   EllipsisVerticalIcon,
+  LayersIcon,
   PencilIcon,
   PlusIcon,
   ShieldCheckIcon,
@@ -33,6 +35,10 @@ import {
   updateUserPermissionsAction,
   type UpdatePermissionsState,
 } from "@/app/actions/permissions"
+import {
+  updateUserModulesAction,
+} from "@/app/actions/modulos"
+import { MODULOS } from "@/lib/modulos"
 import { Badge } from "@/components/reui/badge"
 import {
   DataGrid,
@@ -82,6 +88,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Separator } from "@/components/ui/separator"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Switch } from "@/components/ui/switch"
 import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
 import { formatMxn } from "@/lib/finanzas"
@@ -112,6 +125,8 @@ export interface UserListItem {
   distribuidorName: string | null
   /** Claves de sección de la barra inferior que esta cuenta no ve. */
   deniedSections: string[]
+  /** Hrefs de módulos del hub que esta cuenta no ve (ajustable desde Módulos). */
+  hiddenModules: string[]
   /** Override de tope diario de cupones; null = usa el valor global. */
   couponDailyLimit: number | null
   /** Override de tope mensual (acumulado) de cupones; null = global. */
@@ -380,20 +395,24 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
 
 /**
  * Menú contextual de acciones de la fila (los tres puntos): agrupa todas las
- * acciones de la cuenta — Saldo, Permisos, Editar y Eliminar (esta solo para
- * cuentas ajenas) — y abre el diálogo correspondiente al elegirla.
+ * acciones de la cuenta — Saldo, Permisos, Módulos (solo donde se pide),
+ * Editar y Eliminar (esta solo para cuentas ajenas) — y abre el diálogo o
+ * sheet correspondiente al elegirla.
  *
  * Compartido por `/users` y el módulo Distribuidores
  * (`/modulos/distribuidores`): el trigger es configurable por props para que
  * el módulo pueda pintar el mismo botón que el carrito de compra de
  * `/clientes` (mismo tamaño, posición y feedback de pulsación) con el icono
- * settings-2; sin props, el trigger es el de siempre en `/users`.
+ * settings-2; sin props, el trigger es el de siempre en `/users`. La opción
+ * Módulos (sheet con la visibilidad del hub por módulo) se activa con
+ * `modulesManagement` y hoy solo la usa el módulo Distribuidores.
  */
 export function UserActionsMenu({
   user,
   isSelf,
   couponDailyLimitDefault,
   couponMonthlyLimitDefault,
+  modulesManagement = false,
   triggerIcon,
   triggerClassName,
 }: {
@@ -402,13 +421,15 @@ export function UserActionsMenu({
   isSelf: boolean
   couponDailyLimitDefault: number
   couponMonthlyLimitDefault: number
+  /** Muestra la opción Módulos (sheet de visibilidad por módulo). */
+  modulesManagement?: boolean
   /** Contenido del trigger; por defecto los tres puntos de `/users`. */
   triggerIcon?: React.ReactNode
   /** Clases extra del trigger (tamaño, redondeo y feedback de `/clientes`). */
   triggerClassName?: string
 }) {
   const [dialog, setDialog] = useState<
-    "saldo" | "permisos" | "editar" | "eliminar" | null
+    "saldo" | "permisos" | "modulos" | "editar" | "eliminar" | null
   >(null)
 
   return (
@@ -436,6 +457,12 @@ export function UserActionsMenu({
               <ShieldCheckIcon aria-hidden="true" />
               <span>Permisos</span>
             </DropdownMenuItem>
+            {modulesManagement ? (
+              <DropdownMenuItem onClick={() => setDialog("modulos")}>
+                <LayersIcon aria-hidden="true" />
+                <span>Módulos</span>
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuItem onClick={() => setDialog("editar")}>
               <PencilIcon aria-hidden="true" />
               <span>Editar</span>
@@ -469,6 +496,13 @@ export function UserActionsMenu({
         open={dialog === "permisos"}
         onOpenChange={(open) => setDialog(open ? "permisos" : null)}
       />
+      {modulesManagement ? (
+        <ModulesSheet
+          user={user}
+          open={dialog === "modulos"}
+          onOpenChange={(open) => setDialog(open ? "modulos" : null)}
+        />
+      ) : null}
       <EditUserDialog
         user={user}
         open={dialog === "editar"}
@@ -1057,6 +1091,126 @@ function PermissionsForm({
         </DialogFooter>
       </form>
     </DialogContent>
+  )
+}
+
+/**
+ * Sheet de visibilidad de módulos (opción Módulos del menú): lista todos los
+ * módulos ajustables del hub (`MODULOS` menos los `adminOnly`) con un switch
+ * por módulo para hacerlo visible u oculto para esa cuenta. El guardado es
+ * inmediato por switch (server action, solo admin): fallo revierte al estado
+ * del servidor con toast; éxito refresca la RSC para que la fila — y el hub
+ * del propio distribuidor, vía bus de tiempo real — queden sincronizados.
+ */
+function ModulesSheet({
+  user,
+  open,
+  onOpenChange,
+}: {
+  user: UserListItem
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      {open ? <ModulesVisibilityList user={user} /> : null}
+    </Sheet>
+  )
+}
+
+/** Catálogo ajustable: todo el hub menos los módulos solo-admin. */
+const MANAGEABLE_MODULES = MODULOS.filter((modulo) => !modulo.adminOnly)
+
+function ModulesVisibilityList({ user }: { user: UserListItem }) {
+  const router = useRouter()
+  const [hidden, setHidden] = useState<Set<string>>(
+    () => new Set(user.hiddenModules)
+  )
+  const [pending, startTransition] = useTransition()
+
+  const toggleModule = (href: string, visible: boolean) => {
+    const next = new Set(hidden)
+    if (visible) {
+      next.delete(href)
+    } else {
+      next.add(href)
+    }
+    setHidden(next)
+    startTransition(async () => {
+      const visibleHrefs = MANAGEABLE_MODULES.filter(
+        (modulo) => !next.has(modulo.href)
+      ).map((modulo) => modulo.href)
+      const result = await updateUserModulesAction(user.id, visibleHrefs)
+      if (!result.ok) {
+        toast.error(result.error)
+        setHidden(new Set(user.hiddenModules))
+        return
+      }
+      router.refresh()
+    })
+  }
+
+  return (
+    <SheetContent side="right" className="w-full sm:max-w-sm">
+      <SheetHeader>
+        <SheetTitle>Módulos de {user.username}</SheetTitle>
+        <SheetDescription>
+          Elige qué módulos del hub ve esta cuenta al entrar. Los cambios se
+          aplican al instante.
+        </SheetDescription>
+      </SheetHeader>
+      <div
+        className="min-h-0 flex-1 overflow-y-auto px-4 pb-4"
+        role="group"
+        aria-label="Módulos del hub"
+      >
+        <div className="flex flex-col gap-1">
+          {MANAGEABLE_MODULES.map((modulo) => {
+            const id = `modulos-${user.id}-${modulo.href}`
+            const visible = !hidden.has(modulo.href)
+            return (
+              <div key={modulo.href} className="flex items-center gap-3 py-1.5">
+                <span
+                  className="bg-muted flex size-9 shrink-0 items-center justify-center rounded-lg"
+                  aria-hidden="true"
+                >
+                  <modulo.icon className="text-muted-foreground size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <FieldLabel
+                    htmlFor={id}
+                    className="text-foreground text-sm font-medium"
+                  >
+                    {modulo.title}
+                  </FieldLabel>
+                  <p className="text-muted-foreground truncate text-xs">
+                    {modulo.description}
+                  </p>
+                </div>
+                <Switch
+                  id={id}
+                  checked={visible}
+                  disabled={pending}
+                  onCheckedChange={(checked) =>
+                    toggleModule(modulo.href, checked)
+                  }
+                  aria-label={
+                    visible
+                      ? `Ocultar ${modulo.title} a ${user.username}`
+                      : `Hacer visible ${modulo.title} a ${user.username}`
+                  }
+                />
+              </div>
+            )
+          })}
+        </div>
+        {pending ? (
+          <p className="text-muted-foreground mt-2 text-xs" role="status">
+            Guardando…
+          </p>
+        ) : null}
+      </div>
+    </SheetContent>
   )
 }
 

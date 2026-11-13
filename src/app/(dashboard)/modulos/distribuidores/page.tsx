@@ -7,6 +7,7 @@ import {
   couponQaDailyLimit,
   couponQaMonthlyLimit,
 } from "@/server/mercadopago/config"
+import { listHiddenModulesByUser } from "@/server/modulos/visibility"
 
 export const metadata = {
   title: "Distribuidores",
@@ -19,14 +20,16 @@ function formatDate(date: Date): string {
 /**
  * Módulo Distribuidores (solo admin): el listado de `/users` filtrado a las
  * cuentas con rol `distribuidor`, servido ya filtrado desde el servidor.
- * Trae además las secciones denegadas por cuenta (diálogo Permisos) y los
- * topes globales de cupón, exactamente igual que la página de Usuarios.
+ * Trae además las secciones denegadas por cuenta (diálogo Permisos), los
+ * módulos ocultos por cuenta (sheet Módulos) y los topes globales de cupón,
+ * exactamente igual que la página de Usuarios.
  */
 export default async function DistribuidoresPage() {
   const session = await requireRole("admin")
-  const [users, deniedByUser] = await Promise.all([
+  const [users, deniedByUser, hiddenModulesByUser] = await Promise.all([
     listUsers(),
     listDeniedSectionsByUser(),
+    listHiddenModulesByUser(),
   ])
 
   const distribuidores: UserListItem[] = users
@@ -38,6 +41,7 @@ export default async function DistribuidoresPage() {
       entityCount: user.entityCount,
       distribuidorName: user.distribuidorName,
       deniedSections: deniedByUser.get(user.id) ?? [],
+      hiddenModules: hiddenModulesByUser.get(user.id) ?? [],
       couponDailyLimit: user.couponDailyLimit,
       couponMonthlyLimit: user.couponMonthlyLimit,
       googleLinked: user.googleLinked,

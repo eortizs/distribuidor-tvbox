@@ -38,6 +38,7 @@ export default async function UsersPage() {
           entityCount: user.entityCount,
           distribuidorName: user.distribuidorName,
           deniedSections: deniedByUser.get(user.id) ?? [],
+          hiddenModules: [],
           couponDailyLimit: user.couponDailyLimit,
           couponMonthlyLimit: user.couponMonthlyLimit,
           googleLinked: user.googleLinked,

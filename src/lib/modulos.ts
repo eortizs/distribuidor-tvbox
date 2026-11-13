@@ -127,6 +127,22 @@ export const MODULOS: Modulo[] = [
 
 const MODULO_HREFS = new Set(MODULOS.map((modulo) => modulo.href))
 
+/**
+ * Hrefs de los módulos cuya visibilidad se puede ajustar por usuario (todo el
+ * catálogo menos los `adminOnly`, que las cuentas no-admin nunca ven): claves
+ * válidas de `user_module_permissions`.
+ */
+export const MODULE_PERMISSION_KEYS: string[] = MODULOS.filter(
+  (modulo) => !modulo.adminOnly
+).map((modulo) => modulo.href)
+
+const MODULE_PERMISSION_KEYS_SET = new Set(MODULE_PERMISSION_KEYS)
+
+/** True si el href pertenece al catálogo ajustable por usuario. */
+export function isModulePermissionKey(value: string): boolean {
+  return MODULE_PERMISSION_KEYS_SET.has(value)
+}
+
 export const MODULO_PREFS_EMPTY: ModulePrefs = {
   favorites: [],
   categories: [],

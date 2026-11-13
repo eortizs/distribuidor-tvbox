@@ -227,6 +227,7 @@ export function DistribuidoresView({
                     isSelf={user.id === currentUserId}
                     couponDailyLimitDefault={couponDailyLimitDefault}
                     couponMonthlyLimitDefault={couponMonthlyLimitDefault}
+                    modulesManagement
                     triggerIcon={
                       <Settings2Icon aria-hidden="true" className="size-5" />
                     }

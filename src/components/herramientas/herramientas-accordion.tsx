@@ -140,6 +140,7 @@ function foldTerm(value: string): string {
 export function HerramientasAccordion({
   initialPrefs,
   isAdmin = false,
+  hiddenModules = [],
 }: {
   /** Preferencias ya guardadas en el servidor; null si el usuario aún no tiene. */
   initialPrefs: ModulePrefs | null
@@ -148,6 +149,11 @@ export function HerramientasAccordion({
    * Para el resto de cuentas esos módulos no existen en el catálogo.
    */
   isAdmin?: boolean
+  /**
+   * Hrefs ocultos para esta cuenta (permisos de módulos del admin): salen
+   * del listado como si no existieran; las rutas siguen servidas.
+   */
+  hiddenModules?: string[]
 }) {
   const [favorites, setFavorites] = useState<string[]>(
     initialPrefs?.favorites ?? []
@@ -296,12 +302,17 @@ export function HerramientasAccordion({
 
   /**
    * Catálogo visible para esta cuenta: el listado completo de MODULOS menos
-   * los módulos `adminOnly` cuando la cuenta no es admin. La búsqueda, las
-   * vistas y los contadores trabajan siempre sobre este catálogo.
+   * los módulos `adminOnly` cuando la cuenta no es admin, y menos los
+   * módulos que el admin ocultó a esta cuenta. La búsqueda, las vistas y
+   * los contadores trabajan siempre sobre este catálogo.
    */
   const catalog = useMemo(
-    () => MODULOS.filter((tool) => !tool.adminOnly || isAdmin),
-    [isAdmin]
+    () =>
+      MODULOS.filter(
+        (tool) =>
+          (!tool.adminOnly || isAdmin) && !hiddenModules.includes(tool.href)
+      ),
+    [isAdmin, hiddenModules]
   )
 
   const visible = useMemo(() => {
@@ -457,9 +468,11 @@ export function HerramientasAccordion({
         <p className="text-muted-foreground text-sm" role="status">
           {searching
             ? "Ningún módulo coincide con la búsqueda."
-            : view === "favoritos"
-              ? "Marca la estrella de un módulo para verlo aquí."
-              : "Ningún módulo pertenece a este filtro. Mantén pulsado un módulo para asignarlo."}
+            : catalog.length === 0
+              ? "Tu cuenta no tiene módulos visibles. Contacta al administrador."
+              : view === "favoritos"
+                ? "Marca la estrella de un módulo para verlo aquí."
+                : "Ningún módulo pertenece a este filtro. Mantén pulsado un módulo para asignarlo."}
         </p>
       ) : (
         <Accordion multiple={false}>
