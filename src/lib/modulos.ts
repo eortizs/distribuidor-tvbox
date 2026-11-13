@@ -1,4 +1,5 @@
 import {
+  BellRingIcon,
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
@@ -51,6 +52,13 @@ export interface Modulo {
 }
 
 export const MODULOS: Modulo[] = [
+  {
+    title: "Alertas",
+    description:
+      "Describe en lenguaje natural qué vigilar y la IA busca en internet para avisarte; también crea recordatorios.",
+    href: "/modulos/alertas",
+    icon: BellRingIcon,
+  },
   {
     title: "Imágenes",
     description:

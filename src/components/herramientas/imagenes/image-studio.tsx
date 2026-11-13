@@ -33,6 +33,7 @@ import {
   shareImage,
   type ShareTarget,
 } from "@/lib/share"
+import { useAttachmentUpload } from "@/hooks/use-attachment-upload"
 
 import { Badge } from "@/components/reui/badge"
 import {
@@ -96,21 +97,13 @@ import {
   ASPECT_OPTIONS,
   type ImageLevel,
 } from "@/server/images/models"
-import {
-  AttachmentChips,
-  type AttachmentItem,
-  type AttachmentStatus,
-} from "@/components/herramientas/attachment-chips"
+import { AttachmentChips } from "@/components/herramientas/attachment-chips"
 import {
   DrawEditor,
   type DrawEditorSavedImage,
 } from "@/components/herramientas/imagenes/draw-editor"
-import {
-  formatBytes,
-  useFileUpload,
-  type FileWithPreview,
-} from "@/hooks/use-file-upload"
 import { useLongPress } from "@/hooks/use-long-press"
+import { formatBytes } from "@/hooks/use-file-upload"
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
 
 interface ImageVariant {
@@ -151,16 +144,6 @@ interface ImageGeneration {
 }
 
 type ListState = "loading" | "ready" | "error"
-
-type ReferenceState = {
-  id: string
-  /** Id del archivo ya subido al almacenamiento del usuario. */
-  serverId: string | null
-  fileName: string
-  mimeType: string
-  sizeBytes: number
-  status: AttachmentStatus
-}
 
 const MAX_PROMPT_LENGTH = 2000
 
@@ -664,12 +647,30 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     ? aspectRatio
     : "auto"
 
-  const [references, setReferences] = React.useState<Record<string, ReferenceState>>({})
-  const [referenceError, setReferenceError] = React.useState<string | null>(null)
-  // Subidas en vuelo: al quitar un chip se aborta la suya para no dejar el
-  // archivo huérfano en el disco.
-  const uploadControllers = React.useRef(new Map<string, AbortController>())
-  const removedReferenceIds = React.useRef(new Set<string>())
+  const {
+    attachments: referenceItems,
+    attachmentIds: referenceIds,
+    uploading: uploadingReferences,
+    failed: failedReferences,
+    totalBytes: referenceBytes,
+    tooBig: referencesTooBig,
+    error: referenceError,
+    setError: setReferenceError,
+    openFileDialog,
+    getInputProps,
+    remove: handleRemoveReference,
+  } = useAttachmentUpload({
+    accept: REFERENCE_IMAGE_TYPES.join(","),
+    maxFiles: MAX_REFERENCE_FILES,
+    maxSize: MAX_REFERENCE_BYTES,
+    maxTotalBytes: MAX_REFERENCE_TOTAL_BYTES,
+    onInvalidFile: () => {
+      setReferenceError(
+        `Solo se admiten imágenes (${REFERENCE_IMAGE_TYPES.map((type) => type.replace("image/", "")).join(", ")}) de hasta ${formatBytes(MAX_REFERENCE_BYTES)} y máximo ${MAX_REFERENCE_FILES} por generación.`
+      )
+    },
+    onUploadError: (message) => toast.error(message),
+  })
 
   const [viewer, setViewer] = React.useState<ImageGeneration | null>(null)
   const [confirmDelete, setConfirmDelete] = React.useState(false)
@@ -786,24 +787,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     toast.error(dictationError)
   }, [dictationError])
 
-  const [
-    { files: pickedFiles },
-    { openFileDialog, getInputProps, removeFile },
-  ] = useFileUpload({
-    multiple: true,
-    maxFiles: MAX_REFERENCE_FILES,
-    maxSize: MAX_REFERENCE_BYTES,
-    accept: REFERENCE_IMAGE_TYPES.join(","),
-    onFilesAdded: (added) => {
-      void uploadReferences(added)
-    },
-    onError: () => {
-      setReferenceError(
-        `Solo se admiten imágenes (${REFERENCE_IMAGE_TYPES.map((type) => type.replace("image/", "")).join(", ")}) de hasta ${formatBytes(MAX_REFERENCE_BYTES)} y máximo ${MAX_REFERENCE_FILES} por generación.`
-      )
-    },
-  })
-
   React.useEffect(() => {
     const controller = new AbortController()
     fetch("/api/images", { cache: "no-store", signal: controller.signal })
@@ -834,133 +817,6 @@ export function ImageStudio({ levels }: ImageStudioProps = { levels: [] }) {
     setListState("loading")
     setReloadToken((token) => token + 1)
   }
-
-  /**
-   * Sube cada imagen elegida al almacenamiento del usuario (kind `attachment`)
-   * y conserva su id: el servidor la lee del disco y la manda al proveedor
-   * como imagen de referencia.
-   */
-  async function uploadReferences(added: FileWithPreview[]) {
-    await Promise.all(added.map((item) => uploadReference(item)))
-  }
-
-  async function uploadReference(item: FileWithPreview) {
-    const file = item.file
-    if (!(file instanceof File)) return
-    const base: ReferenceState = {
-      id: item.id,
-      serverId: null,
-      fileName: file.name,
-      mimeType: file.type || "application/octet-stream",
-      sizeBytes: file.size,
-      status: "uploading",
-    }
-    removedReferenceIds.current.delete(item.id)
-    setReferences((current) => ({ ...current, [item.id]: base }))
-
-    const controller = new AbortController()
-    uploadControllers.current.set(item.id, controller)
-    try {
-      const formData = new FormData()
-      formData.append("file", file)
-      formData.append("kind", "attachment")
-      const response = await fetch("/api/files", {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
-      })
-      const body = (await response.json()) as {
-        ok: boolean
-        data?: { id: string }
-        error?: { message?: string }
-      }
-      if (!response.ok || !body.ok || !body.data) {
-        throw new Error(body.error?.message ?? "No se pudo subir la imagen.")
-      }
-      // El chip se quitó mientras el archivo subía: ya está en el servidor y
-      // hay que liberarlo para no dejarlo huérfano en el disco.
-      if (removedReferenceIds.current.has(item.id)) {
-        void fetch(`/api/files/${body.data.id}`, { method: "DELETE" }).catch(
-          () => {}
-        )
-        return
-      }
-      setReferences((current) => ({
-        ...current,
-        [item.id]: {
-          ...(current[item.id] ?? base),
-          serverId: body.data!.id,
-          status: "ready",
-        },
-      }))
-    } catch (error) {
-      if (controller.signal.aborted) return
-      setReferences((current) => ({
-        ...current,
-        [item.id]: { ...(current[item.id] ?? base), status: "error" },
-      }))
-      toast.error(
-        error instanceof Error
-          ? error.message
-          : "No se pudo adjuntar la imagen."
-      )
-    } finally {
-      uploadControllers.current.delete(item.id)
-    }
-  }
-
-  function handleRemoveReference(id: string) {
-    const entry = references[id]
-    removedReferenceIds.current.add(id)
-    uploadControllers.current.get(id)?.abort()
-    uploadControllers.current.delete(id)
-    removeFile(id)
-    setReferences((current) => {
-      const next = { ...current }
-      delete next[id]
-      return next
-    })
-    if (entry?.serverId) {
-      void fetch(`/api/files/${entry.serverId}`, { method: "DELETE" }).catch(
-        () => {}
-      )
-    }
-  }
-
-  const referenceItems: AttachmentItem[] = pickedFiles.flatMap((item) => {
-    const entry = references[item.id]
-    if (!entry) return []
-    return [
-      {
-        id: entry.id,
-        fileName: entry.fileName,
-        mimeType: entry.mimeType,
-        sizeBytes: entry.sizeBytes,
-        status: entry.status,
-      },
-    ]
-  })
-
-  const referenceIds = referenceItems.flatMap((item) => {
-    const entry = references[item.id]
-    return entry?.serverId && entry.status === "ready" ? [entry.serverId] : []
-  })
-
-  const uploadingReferences = referenceItems.some(
-    (item) => item.status === "uploading"
-  )
-
-  // Una referencia que no se pudo subir no puede omitirse en silencio: se
-  // bloquea el envío hasta que el usuario la quite.
-  const failedReferences = referenceItems.some(
-    (item) => item.status === "error"
-  )
-
-  const referenceBytes = referenceItems.reduce(
-    (sum, item) => sum + item.sizeBytes,
-    0
-  )
-  const referencesTooBig = referenceBytes > MAX_REFERENCE_TOTAL_BYTES
 
   async function generate() {
     const trimmed = prompt.trim()

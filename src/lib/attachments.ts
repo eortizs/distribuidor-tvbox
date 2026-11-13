@@ -28,3 +28,22 @@ export const MAX_AGENT_ATTACHMENT_BYTES = 10 * 1024 * 1024
  * tiene que quedar por debajo de ese tope o la petición se trunca.
  */
 export const MAX_AGENT_ATTACHMENT_TOTAL_BYTES = 15 * 1024 * 1024
+
+/**
+ * Adjuntos de referencia de una alerta (módulo Alertas): el LLM los lee como
+ * contexto en cada revisión. Imágenes que Gemini acepta como entrada visual
+ * más PDF, formato documental que el mismo modelo lee nativamente.
+ */
+export const MAX_ALERT_ATTACHMENT_FILES = 4
+/** Tope por archivo adjunto de una alerta (10 MB, igual que imágenes). */
+export const MAX_ALERT_ATTACHMENT_BYTES = 10 * 1024 * 1024
+/** Tope de bytes totales de los adjuntos de una alerta. */
+export const MAX_ALERT_ATTACHMENT_TOTAL_BYTES = 20 * 1024 * 1024
+/** Formatos aceptados como adjunto de referencia de una alerta. */
+export const ALERT_ATTACHMENT_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+] as const

@@ -95,10 +95,23 @@ function initials(userName: string | null): string {
   return source.slice(0, 2).toUpperCase()
 }
 
-const KIND_BADGE: Record<NotificationKind, { label: string; variant: "success-light" | "destructive-light" | "warning-light" }> = {
+const KIND_BADGE: Record<
+  NotificationKind,
+  {
+    label: string
+    variant:
+      | "success-light"
+      | "destructive-light"
+      | "warning-light"
+      | "info-light"
+      | "primary-light"
+  }
+> = {
   renewal_success: { label: "Exitosa", variant: "success-light" },
   renewal_failed: { label: "Fallida", variant: "destructive-light" },
   transfer_rejected: { label: "Rechazada", variant: "warning-light" },
+  alert_hit: { label: "Alerta", variant: "info-light" },
+  reminder: { label: "Recordatorio", variant: "primary-light" },
 }
 
 const SKELETON_ROWS = 4

@@ -237,7 +237,7 @@ interface GroundingInfo {
   domains: string[]
 }
 
-function extractGrounding(result: {
+export function extractGrounding(result: {
   providerMetadata?: unknown
   steps?: readonly { providerMetadata?: unknown }[]
 }): GroundingInfo {
@@ -278,7 +278,7 @@ function extractGrounding(result: {
   return { chunks, queries, domains }
 }
 
-function domainOf(url: string): string | null {
+export function domainOf(url: string): string | null {
   try {
     return new URL(url).hostname.toLowerCase().replace(/^www\./, "")
   } catch {
@@ -287,8 +287,9 @@ function domainOf(url: string): string | null {
 }
 
 /** true cuando el dominio de la URL es uno de los que devolvió la búsqueda
- * (o un subdominio de él). */
-function domainWasSearched(url: string, searchedDomains: readonly string[]): boolean {
+ * (o un subdominio de él). Compartida con el módulo Alertas, cuya revisión
+ * también exige fuentes que la búsqueda realmente abrió. */
+export function domainWasSearched(url: string, searchedDomains: readonly string[]): boolean {
   const domain = domainOf(url)
   if (!domain) return false
   return searchedDomains.some(

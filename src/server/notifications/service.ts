@@ -26,6 +26,8 @@ export type NotificationKind =
   | "renewal_success"
   | "renewal_failed"
   | "transfer_rejected"
+  | "alert_hit"
+  | "reminder"
 
 export interface NotificationRow {
   id: string
@@ -53,6 +55,8 @@ const KINDS: readonly NotificationKind[] = [
   "renewal_success",
   "renewal_failed",
   "transfer_rejected",
+  "alert_hit",
+  "reminder",
 ]
 
 function logError(context: string, error: unknown): void {
@@ -430,6 +434,31 @@ export function createAdminTransferRejectedNotification(
       )
     )
     .catch((error: unknown) => logError("create_admin_transfer", error))
+}
+
+export interface AlertNotificationInput {
+  userId: string
+  kind: Extract<NotificationKind, "alert_hit" | "reminder">
+  title: string
+  body: string
+}
+
+/**
+ * Aviso de campana del módulo Alertas (hallazgo, recordatorio o alerta
+ * pausada por errores): mejor esfuerzo, igual que los avisos de renovación,
+ * y con su propio disparo SSE para que la campana se refresque en vivo. El
+ * dedup vive en el módulo (huella del hallazgo), así que va sin `order_id`.
+ */
+export function createAlertNotification(input: AlertNotificationInput): void {
+  void insertNotification({
+    userId: input.userId,
+    kind: input.kind,
+    title: input.title,
+    body: input.body,
+    userName: "",
+    expiresAt: null,
+    orderId: null,
+  }).catch((error: unknown) => logError("create_alert", error))
 }
 
 interface NotificationInsert {

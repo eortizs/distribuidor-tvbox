@@ -23,6 +23,7 @@ export type RealtimeKind =
   | "users"
   | "prefs"
   | "notifications"
+  | "alerts"
 
 export interface RealtimeEvent {
   kind: RealtimeKind
@@ -90,7 +91,8 @@ function parsePayload(raw: string | undefined): RealtimeEvent | null {
       candidate.kind !== "expenses" &&
       candidate.kind !== "users" &&
       candidate.kind !== "prefs" &&
-      candidate.kind !== "notifications"
+      candidate.kind !== "notifications" &&
+      candidate.kind !== "alerts"
     ) {
       return null
     }
