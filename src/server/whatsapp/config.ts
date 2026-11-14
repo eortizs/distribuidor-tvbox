@@ -31,6 +31,21 @@ export function isValidWhatsAppNumber(digits: string): boolean {
   )
 }
 
+/**
+ * Forma canónica de un número para registro y lookup: los móviles de México
+ * circulan en WhatsApp en DOS formas — `52` + 10 dígitos (525577977359) y la
+ * legacy `52` + `1` + 10 (5215577977359). El envío resuelve con onWhatsApp
+ * (tolerante), pero el lookup entrante compara dígitos exactos: sin
+ * canonicar, un registro en una forma no matchea el JID que llega en la otra.
+ * Canónico: quitar el `1` tras `52` en números de 13 dígitos.
+ */
+export function canonicalWhatsAppDigits(digits: string): string {
+  if (digits.length === 13 && digits.startsWith("521")) {
+    return `52${digits.slice(3)}`
+  }
+  return digits
+}
+
 function agentNumberOrNull(): string | null {
   const digits = normalizeWhatsAppDigits(
     process.env.WHATSAPP_AGENT_NUMBER?.trim() ?? ""

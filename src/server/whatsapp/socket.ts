@@ -23,8 +23,8 @@ import {
   findUserByWhatsAppPhone,
   logWhatsAppMessageDetached,
 } from "./service"
-import { runWhatsAppAgent } from "./agent"
-import { whatsappAgentNumber } from "./config"
+import { enqueueAgentTurn, runWhatsAppAgent } from "./agent"
+import { canonicalWhatsAppDigits, whatsappAgentNumber } from "./config"
 
 /*
  * Gateway WhatsApp con Baileys: el número del agente IA se vincula como
@@ -159,18 +159,22 @@ const msgRetryCounterCache = new NodeCache() as CacheStore
  * sesión). Devuelve null si no se pudo resolver.
  */
 async function phoneFromJid(jid: string): Promise<string | null> {
-  if (jid.endsWith("@s.whatsapp.net")) {
-    return jid.split("@")[0]?.replace(/\D+/g, "") || null
+  const normalized = jidNormalizedUser(jid)
+  if (normalized.endsWith("@s.whatsapp.net")) {
+    const digits = normalized.split("@")[0]?.replace(/\D+/g, "") || null
+    return digits ? canonicalWhatsAppDigits(digits) : null
   }
-  if (jid.endsWith("@lid")) {
+  if (normalized.endsWith("@lid")) {
     const socket = state().socket
     if (!socket) return null
     try {
-      const pn = await socket.signalRepository.lidMapping.getPNForLID(
-        jidNormalizedUser(jid)
-      )
+      const pn = await socket.signalRepository.lidMapping.getPNForLID(normalized)
       if (!pn) return null
-      const digits = pn.replace(/\D+/g, "")
+      // getPNForLID puede devolver el JID crudo con sufijo de dispositivo
+      // («521…:0@s.whatsapp.net»): hay que normalizarlo antes de extraer
+      // dígitos o el «:0» se cuela como un cero final que rompe el match.
+      const pnJid = jidNormalizedUser(pn)
+      const digits = canonicalWhatsAppDigits(pnJid.split("@")[0]?.replace(/\D+/g, "") ?? "")
       return digits || null
     } catch (error) {
       log(`lid_resolve ${jid}`, error)
@@ -242,6 +246,9 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
 
   const user = await findUserByWhatsAppPhone(phone)
   if (!user) {
+    // Diagnóstico: el espejo salió bien pero el chat no matchea — dejar la
+    // huella del teléfono resuelto para ver la forma del JID entrante.
+    log(`incoming_unregistered phone=${phone} jid=${jid}`)
     if (courtesyAllowed(phone)) {
       await sendTextToJid(
         jid,
@@ -276,26 +283,41 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
   const socket = current.socket
   if (!socket) return
 
-  // «Escribiendo…» mientras consulta: hace la espera legible.
-  try {
-    await socket.sendPresenceUpdate("composing", jid)
-  } catch {
-    // Mejor esfuerzo: sin presencia se responde igual.
-  }
+  // «Escribiendo…» mientras consulta: inmediato y refrescado cada 20 s
+  // (WhatsApp caduca la presencia y los turnos con herramientas tardan).
+  await socket.sendPresenceUpdate("composing", jid).catch(() => undefined)
+  const composingTimer = setInterval(() => {
+    void socket.sendPresenceUpdate("composing", jid).catch(() => undefined)
+  }, 20_000)
+  composingTimer.unref?.()
 
-  const reply = await runWhatsAppAgent(
-    { id: user.id, username: user.username, role: user.role },
-    phone,
-    cleanReplyText(text) || text
-  )
-  await sendTextToJid(jid, reply.text)
-  logWhatsAppMessageDetached({
-    direction: "out",
-    userId: user.id,
-    phone,
-    text: reply.text,
-    meta: { jid, source: "agent", llmUsed: reply.llmUsed },
-  })
+  try {
+    // Turno encolado (convivencia Baileys ↔ agente): serializado por teléfono
+    // y con tope global de concurrencia; el socket nunca espera al LLM.
+    let reply = await enqueueAgentTurn(phone, () =>
+      runWhatsAppAgent(
+        { id: user.id, username: user.username, role: user.role },
+        phone,
+        cleanReplyText(text) || text
+      )
+    )
+    if (!reply) {
+      reply = {
+        text: "El agente está atendiendo varios chats a la vez; inténtalo de nuevo en un momento.",
+        llmUsed: false,
+      }
+    }
+    await sendTextToJid(jid, reply.text)
+    logWhatsAppMessageDetached({
+      direction: "out",
+      userId: user.id,
+      phone,
+      text: reply.text,
+      meta: { jid, source: "agent", llmUsed: reply.llmUsed },
+    })
+  } finally {
+    clearInterval(composingTimer)
+  }
 }
 
 /** Envía texto a un JID concreto (ya resuelto), fallando si no hay socket. */

@@ -3,7 +3,11 @@ import { randomUUID } from "node:crypto"
 import { pool } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 
-import { isValidWhatsAppNumber, normalizeWhatsAppDigits } from "./config"
+import {
+  canonicalWhatsAppDigits,
+  isValidWhatsAppNumber,
+  normalizeWhatsAppDigits,
+} from "./config"
 
 /**
  * Persistencia del módulo WhatsApp: cola de salida (`wa_outbox`), bitácora
@@ -26,6 +30,10 @@ export interface WhatsAppUser {
 export async function findUserByWhatsAppPhone(
   phone: string
 ): Promise<WhatsAppUser | null> {
+  // Ambas formas mexicanas (52+10 y 521+10): el registro puede venir en una
+  // y el JID entrante en la otra — canonicalizar el lookup no basta si la
+  // fila fue guardada antes de la canonicalización.
+  const canonical = canonicalWhatsAppDigits(phone)
   const result = await pool.query<{
     id: string
     username: string
@@ -34,8 +42,8 @@ export async function findUserByWhatsAppPhone(
   }>(
     `SELECT id, username, role, whatsapp_phone
        FROM users
-      WHERE whatsapp_phone = $1`,
-    [phone]
+      WHERE whatsapp_phone = ANY($1)`,
+    [canonical === phone ? [phone] : [phone, canonical]]
   )
   const row = result.rows[0]
   if (!row) return null
@@ -127,7 +135,7 @@ export async function setWhatsAppPhone(
   const normalized =
     rawPhone === null || rawPhone.trim() === ""
       ? null
-      : normalizeWhatsAppDigits(rawPhone)
+      : canonicalWhatsAppDigits(normalizeWhatsAppDigits(rawPhone))
   if (normalized !== null && !isValidWhatsAppNumber(normalized)) {
     throw new AppError(
       422,
