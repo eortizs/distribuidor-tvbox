@@ -10,6 +10,7 @@ import {
   PlugZapIcon,
   ReceiptTextIcon,
   ShoppingBasketIcon,
+  TimerIcon,
   UserCogIcon,
   type LucideIcon,
 } from "lucide-react"
@@ -87,6 +88,13 @@ export const MODULOS: Modulo[] = [
       "Cálculos rápidos con porcentaje comercial, desde botones o teclado.",
     href: "/modulos/calculadora",
     icon: CalculatorIcon,
+  },
+  {
+    title: "Cronómetro",
+    description:
+      "Mide el tiempo con cronómetro de vueltas o cuenta regresiva con aviso sonoro.",
+    href: "/modulos/cronometro",
+    icon: TimerIcon,
   },
   {
     title: "Lista de compras",
