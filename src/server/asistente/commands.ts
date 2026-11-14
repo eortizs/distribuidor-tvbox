@@ -111,6 +111,43 @@ const handlers: Record<SlashCommandName, SlashCommandHandler> = {
       text: `**Vencen en menos de 2 días (${porVencer.length})**\n\n${listing}`,
     }
   },
+
+  clientes: async ({ user, args }) => {
+    // Listado completo del alcance propio, partido por el semáforo de la GUI
+    // de /clientes con su MISMA regla de presets: «Activo» es
+    // statusLabel === "activo" y «Vencido» todo lo demás (vencidos,
+    // pendientes y pruebas — el preset «inactivo» de clientes-accordion).
+    // Orden A→Z por usuario dentro de cada grupo, como el listado plano de
+    // la GUI. Args ignorados a propósito.
+    void args
+    let clients: Awaited<ReturnType<typeof listClientsInScope>>["clients"]
+    try {
+      clients = (await listClientsInScope(user.id)).clients
+    } catch {
+      return {
+        text: "No pude consultar el panel de FlujoTV en este momento. Inténtalo de nuevo en unos minutos; si el problema persiste, avisa al administrador.",
+      }
+    }
+    if (clients.length === 0) {
+      return {
+        text: "No encontré clientes FlujoTV en tu alcance.",
+      }
+    }
+    const sorted = [...clients].sort((a, b) =>
+      a.userName.localeCompare(b.userName, "es")
+    )
+    const activos = sorted.filter((c) => c.statusLabel === "activo")
+    const vencidos = sorted.filter((c) => c.statusLabel !== "activo")
+    const section = (label: string, group: typeof sorted) =>
+      group.length === 0
+        ? null
+        : `**${label} (${group.length})**\n\n${group
+            .map((c) => c.userName)
+            .join("\n")}`
+    const parts = [section("Activo", activos), section("Vencido", vencidos)]
+      .filter((part): part is string => part !== null)
+    return { text: parts.join("\n\n") }
+  },
 }
 
 /**
