@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
+import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete"
 import {
   ArrowUpIcon,
   BotIcon,
@@ -18,11 +19,25 @@ import {
   MAX_ASSISTANT_ATTACHMENT_FILES,
   MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES,
 } from "@/lib/attachments"
+import {
+  SLASH_COMMAND_NAMES,
+  SLASH_COMMANDS,
+  isValidSlashCommandName,
+  slashCommandValidationMessage,
+  type SlashCommandMeta,
+} from "@/lib/asistente-commands"
 import { formatBytes } from "@/hooks/use-file-upload"
 import { useAttachmentUpload } from "@/hooks/use-attachment-upload"
 import { useRealtimeEvent } from "@/hooks/use-realtime"
 import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
 
+import {
+  Autocomplete as SlashCommandAutocomplete,
+  AutocompleteContent,
+  AutocompleteEmpty,
+  AutocompleteItem,
+  AutocompleteList,
+} from "@/components/reui/autocomplete"
 import { AttachmentChips, type AttachmentItem } from "@/components/herramientas/attachment-chips"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
@@ -63,6 +78,35 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 const MAX_INPUT_LENGTH = 4000
+
+/* Ítems del autocompletado de comandos (copia mutable para el Autocomplete). */
+const COMMAND_ITEMS: SlashCommandMeta[] = [...SLASH_COMMANDS]
+const SLASH_AVAILABLE = SLASH_COMMAND_NAMES.map((name) => `/${name}`).join(", ")
+
+/**
+ * Consulta de slash commands del draft: texto tras la "/" inicial mientras
+ * tenga forma de nombre de comando (misma regla de charset que el patrón
+ * canónico de src/lib/asistente-commands.ts; "/" sola abre el popup con los
+ * disponibles). Devuelve null cuando el texto no está en modo comando
+ * (incluido después de escribir un espacio: van argumentos).
+ */
+function slashQueryFromDraft(draft: string): string | null {
+  if (!draft.startsWith("/")) return null
+  const rest = draft.slice(1)
+  if (/\s/.test(rest)) return null
+  return rest.length === 0 || isValidSlashCommandName(rest)
+    ? rest.toLowerCase()
+    : null
+}
+
+/** Matcheo del autocompletado: la "/" del prefijo no participa. */
+function slashFilter(item: SlashCommandMeta, query: string): boolean {
+  const raw = query.startsWith("/") ? query.slice(1) : query
+  const needle = raw.trim().toLowerCase()
+  if (needle.length === 0) return true
+  const name = item.name.toLowerCase()
+  return name.startsWith(needle) || name.includes(needle)
+}
 
 type Turn = {
   id: string
@@ -148,12 +192,36 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
   const [loaded, setLoaded] = useState(false)
   const [draft, setDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
+  /** Alerta de validación de slash commands, bajo el compositor. */
+  const [commandError, setCommandError] = useState<string | null>(null)
+  /**
+   * Draft al momento de descartar el popup de comandos (Esc o click fuera):
+   * el mismo texto no lo reabre; cualquier edición sí.
+   */
+  const [slashDismissed, setSlashDismissed] = useState<string | null>(null)
+  /** Ítem resaltado del popup (lo informa `onItemHighlighted`), para Tab. */
+  const slashHighlightedRef = useRef<SlashCommandMeta | null>(null)
   const counterRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   /** Espejo de `streaming` sin re-render: lo leen los callbacks de sincronización. */
   const streamingRef = useRef(false)
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** Modo comando del borrador: texto tras la "/" inicial, o null si no aplica. */
+  const slashQuery = slashQueryFromDraft(draft)
+  const slashOpen = slashQuery !== null && slashDismissed !== draft
+  const slashMatches = COMMAND_ITEMS.filter((item) => slashFilter(item, draft))
+
+  /**
+   * Única puerta de escritura del borrador: texto nuevo reabre el popup de
+   * comandos y limpia la alerta de validación previa (escribir manda).
+   */
+  function updateDraft(next: string) {
+    setDraft(next)
+    setSlashDismissed(null)
+    setCommandError(null)
+  }
 
   /*
    * Adjuntos del turno: mismos límites y máquina de estado que las imágenes
@@ -214,7 +282,7 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
     lang: "es-MX",
     onTranscript: (text) => {
       if (dictationCancelledRef.current || !text.trim()) return
-      setDraft(joinDraft(dictationBaseRef.current, text))
+      updateDraft(joinDraft(dictationBaseRef.current, text))
     },
     onEnd: (text) => {
       const base = dictationBaseRef.current
@@ -224,7 +292,7 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
         return
       }
       if (text.trim()) {
-        setDraft(joinDraft(base, text))
+        updateDraft(joinDraft(base, text))
       }
       textareaRef.current?.focus()
     },
@@ -474,6 +542,17 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
     ) {
       return
     }
+    // Slash commands: se validan en el cliente antes de enviar; con error el
+    // borrador se conserva para corregir sin volver a escribirlo.
+    const commandProblem = slashCommandValidationMessage(
+      question,
+      readyAttachments.length > 0
+    )
+    if (commandProblem) {
+      setCommandError(commandProblem)
+      return
+    }
+    setCommandError(null)
     setDraft("")
     // Los chips del turno llevan el id del ARCHIVO en el servidor (lo que
     // `attachmentIds` del hook devuelve para los adjuntos listos, en el
@@ -502,6 +581,55 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
     abortRef.current?.abort()
   }
 
+  /**
+   * Teclado del compositor. Nuestro handler corre ANTES que el interno del
+   * autocomplete (Base UI compone los handlers de derecha a izquierda), así
+   * que:
+   * - `preventBaseUIHandler()` aparta al autocomplete de teclas que un input
+   *   de una línea roba al textarea: Home/End (scroll) y Escape con el popup
+   *   cerrado (su «limpiar selección» borraría el borrador).
+   * - Con el popup abierto, Enter/Tab completan y nunca envían: Enter lo
+   *   resuelve el propio autocomplete (ítem resaltado por autoHighlight); si
+   *   no hay coincidencias mostramos la validación aquí y cerramos.
+   * - Sin popup, Enter envía como siempre (Shift+Enter salta línea).
+   */
+  function handleComposerKeyDown(event: React.KeyboardEvent<HTMLTextAreaElement>) {
+    const baseUIEvent = event as React.KeyboardEvent<HTMLTextAreaElement> & {
+      preventBaseUIHandler?: () => void
+    }
+    if (event.key === "Home" || event.key === "End") {
+      baseUIEvent.preventBaseUIHandler?.()
+      return
+    }
+    if (event.key === "Escape" && !slashOpen) {
+      baseUIEvent.preventBaseUIHandler?.()
+      return
+    }
+    if (event.key === "Tab" && slashOpen && slashHighlightedRef.current) {
+      event.preventDefault()
+      updateDraft(`/${slashHighlightedRef.current.name} `)
+      return
+    }
+    if (
+      event.key === "Enter" &&
+      !event.shiftKey &&
+      !event.nativeEvent.isComposing
+    ) {
+      if (slashOpen) {
+        event.preventDefault()
+        if (slashMatches.length === 0) {
+          setCommandError(
+            `No hay comandos que coincidan con "${draft}". Disponibles: ${SLASH_AVAILABLE}.`
+          )
+          setSlashDismissed(draft)
+        }
+        return
+      }
+      event.preventDefault()
+      event.currentTarget.form?.requestSubmit()
+    }
+  }
+
   const lastTurn = turns[turns.length - 1]
 
   return (
@@ -527,13 +655,25 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    setDraft(suggestion.prompt)
+                    updateDraft(suggestion.prompt)
                     textareaRef.current?.focus()
                   }}
                 >
                   {suggestion.label}
                 </Button>
               ))}
+              {/* Descubrimiento de slash commands: la barra sola abre el
+                  popup de autocompletado con los disponibles. */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  updateDraft("/")
+                  textareaRef.current?.focus()
+                }}
+              >
+                Comandos
+              </Button>
             </EmptyContent>
           </Empty>
         ) : (
@@ -649,73 +789,87 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
           </div>
         ) : null}
         <form className="w-full" onSubmit={handleSubmit}>
-          <div className="flex w-full flex-col gap-1.5">
-            {pendingAttachments.length > 0 ? (
-              <AttachmentChips
-                attachments={pendingAttachments}
-                onRemove={handleRemoveAttachment}
-                disabled={uploadingAttachments}
-              />
-            ) : null}
-            {/* Bitono como la Descripción de Imágenes: la celda de adjuntos
-                lleva un fondo propio (sin borde: solo cambio de tono) y el
-                símbolo + grande; el mensaje vive en la zona de la derecha y
-                las acciones (dictar, enviar) quedan en la esquina inferior
-                derecha del área (items-end + self-end), acompañando el
-                crecimiento del texto hasta 160 px. */}
-            <InputGroup className="items-end bg-background">
-              {attachmentsReady ? (
-                <InputGroupAddon
-                  align="inline-start"
-                  className="self-stretch bg-muted/50 pl-1 pr-1 has-[>button]:ml-0"
-                >
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <InputGroupButton
-                          type="button"
-                          size="icon-sm"
-                          variant="ghost"
-                          onClick={openFileDialog}
-                          aria-label="Adjuntar imágenes o PDF al mensaje"
-                        />
-                      }
-                    >
-                      <PlusIcon aria-hidden="true" className="size-5" />
-                    </TooltipTrigger>
-                    <TooltipContent>Adjuntar imágenes o PDF</TooltipContent>
-                  </Tooltip>
-                </InputGroupAddon>
+          <SlashCommandAutocomplete
+            items={COMMAND_ITEMS}
+            value={draft}
+            onValueChange={updateDraft}
+            open={slashOpen}
+            onOpenChange={(nextOpen) => {
+              if (!nextOpen) setSlashDismissed(draft)
+            }}
+            autoHighlight="always"
+            filter={slashFilter}
+            itemToStringValue={(item) => `/${item.name} `}
+            onItemHighlighted={(item) => {
+              slashHighlightedRef.current = item ?? null
+            }}
+          >
+            <div className="flex w-full flex-col gap-1.5">
+              {pendingAttachments.length > 0 ? (
+                <AttachmentChips
+                  attachments={pendingAttachments}
+                  onRemove={handleRemoveAttachment}
+                  disabled={uploadingAttachments}
+                />
               ) : null}
-              <InputGroupTextarea
-                ref={textareaRef}
-                aria-label="Mensaje para el asistente"
-                placeholder="Escribe tu mensaje… (Enter para enviar, Shift+Enter para salto de línea)"
-                rows={1}
-                maxLength={MAX_INPUT_LENGTH}
-                value={draft}
-                onChange={(event) => {
-                  // Escribir mientras se dicta manda sobre lo dictado: la
-                  // sesión se cierra sin guardar lo que se estaba oyendo.
-                  if (dictating) {
-                    dictationCancelledRef.current = true
-                    stopDictation()
+              {/* Bitono como la Descripción de Imágenes: la celda de adjuntos
+                  lleva un fondo propio (sin borde: solo cambio de tono) y el
+                  símbolo + grande; el mensaje vive en la zona de la derecha y
+                  las acciones (dictar, enviar) quedan en la esquina inferior
+                  derecha del área (items-end + self-end), acompañando el
+                  crecimiento del texto hasta 160 px. */}
+              <InputGroup className="items-end bg-background">
+                {attachmentsReady ? (
+                  <InputGroupAddon
+                    align="inline-start"
+                    className="self-stretch bg-muted/50 pl-1 pr-1 has-[>button]:ml-0"
+                  >
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <InputGroupButton
+                            type="button"
+                            size="icon-sm"
+                            variant="ghost"
+                            onClick={openFileDialog}
+                            aria-label="Adjuntar imágenes o PDF al mensaje"
+                          />
+                        }
+                      >
+                        <PlusIcon aria-hidden="true" className="size-5" />
+                      </TooltipTrigger>
+                      <TooltipContent>Adjuntar imágenes o PDF</TooltipContent>
+                    </Tooltip>
+                  </InputGroupAddon>
+                ) : null}
+                {/* El input del autocomplete renderiza el textarea del
+                    compositor (prop `render` de Base UI): el textarea sigue
+                    siendo hijo directo del InputGroup y el popup de comandos
+                    se ancla a él. */}
+                <AutocompletePrimitive.Input
+                  render={
+                    <InputGroupTextarea
+                      ref={textareaRef}
+                      aria-label="Mensaje para el asistente"
+                      placeholder="Escribe tu mensaje o / para comandos… (Enter envía, Shift+Enter salto de línea)"
+                      rows={1}
+                      maxLength={MAX_INPUT_LENGTH}
+                      onChange={(event) => {
+                        // Escribir mientras se dicta manda sobre lo dictado:
+                        // la sesión se cierra sin guardar lo que se estaba
+                        // oyendo.
+                        if (dictating) {
+                          dictationCancelledRef.current = true
+                          stopDictation()
+                        }
+                        updateDraft(event.target.value)
+                      }}
+                      className="placeholder:text-foreground/60"
+                      onKeyDown={handleComposerKeyDown}
+                    />
                   }
-                  setDraft(event.target.value)
-                }}
-                className="placeholder:text-foreground/60"
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Enter" &&
-                    !event.shiftKey &&
-                    !event.nativeEvent.isComposing
-                  ) {
-                    event.preventDefault()
-                    event.currentTarget.form?.requestSubmit()
-                  }
-                }}
-              />
-              <InputGroupAddon align="inline-end" className="self-end">
+                />
+                <InputGroupAddon align="inline-end" className="self-end">
                 {/* El micrófono cierra el renglón junto al envío: dictar es
                     la otra forma de escribir el mensaje (misma UX que la
                     Descripción de Imágenes). Ambos botones a 36 px con zona
@@ -812,7 +966,38 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
                 continuar.
               </p>
             ) : null}
-          </div>
+            {commandError ? (
+              <p role="alert" className="text-destructive text-xs">
+                {commandError}
+              </p>
+            ) : null}
+              {/* Popup de comandos: anclado al textarea, abre hacia arriba
+                  (no tapa el compositor con el teclado móvil activo). */}
+              <AutocompleteContent side="top" align="start">
+                <AutocompleteEmpty>
+                  No hay comandos que coincidan.
+                </AutocompleteEmpty>
+                <AutocompleteList>
+                  {(item) => (
+                    <AutocompleteItem
+                      key={item.name}
+                      value={item}
+                      className="min-h-11 items-start gap-1 py-2"
+                    >
+                      <span className="flex min-w-0 flex-col gap-0.5">
+                        <span className="text-sm font-medium">
+                          /{item.name}
+                        </span>
+                        <span className="text-muted-foreground text-sm font-normal">
+                          {item.description}
+                        </span>
+                      </span>
+                    </AutocompleteItem>
+                  )}
+                </AutocompleteList>
+              </AutocompleteContent>
+            </div>
+          </SlashCommandAutocomplete>
         </form>
       </CardFooter>
     </Card>

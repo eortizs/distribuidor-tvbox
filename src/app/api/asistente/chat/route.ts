@@ -14,6 +14,8 @@ import {
   sanitizeMessages,
   MAX_CONTENT_LENGTH,
 } from "@/server/asistente/llm"
+import { parseSlashCommand } from "@/lib/asistente-commands"
+import { executeSlashCommand } from "@/server/asistente/commands"
 import { errorResponse, readJsonBody } from "@/server/http"
 import { AppError } from "@/server/umejson/types"
 
@@ -36,6 +38,14 @@ import { AppError } from "@/server/umejson/types"
 
 const HISTORY_CONTEXT_TURNS = 20
 const HISTORY_RENDER_TURNS = 40
+
+/* Cuerpo completo de una respuesta ya lista (streams y resultados de
+ * slash commands): el cliente lo lee con el mismo contrato text/plain. */
+const PLAIN_TEXT_HEADERS = {
+  "Content-Type": "text/plain; charset=utf-8",
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+} as const
 
 interface ChatBody {
   message?: unknown
@@ -102,6 +112,34 @@ export async function POST(request: Request) {
         )
       }
 
+      /*
+       * Slash commands: doble mecanismo de atención. Si el texto tiene forma
+       * de comando (parseSlashCommand) se ejecuta DIRECTAMENTE (sin LLM) y se
+       * responde con el resultado como cuerpo text/plain — el cliente lo
+       * pinta como turno del asistente con el mismo contrato del stream. Un
+       * "/" sin nombre o con caracteres inválidos NO es comando y sigue hacia
+       * el modelo (también con adjuntos, como cualquier mensaje).
+       */
+      if (message.startsWith("/")) {
+        const isCommandShaped = parseSlashCommand(message) !== null
+        if (isCommandShaped) {
+          const hasAttachments =
+            Array.isArray(parsed.attachmentIds) &&
+            parsed.attachmentIds.length > 0
+          if (hasAttachments) {
+            throw new AppError(
+              422,
+              "comando_adjuntos",
+              "Los comandos no admiten adjuntos: envía el comando solo o el archivo con un mensaje normal."
+            )
+          }
+        }
+        const slashReply = await executeSlashCommand(user, message)
+        if (slashReply !== null) {
+          return new Response(slashReply, { headers: PLAIN_TEXT_HEADERS })
+        }
+      }
+
       // Adjuntos: validar propiedad/límites y transcribirlos con visión
       // ANTES de persistir el turno; la descripción queda en la fila y la
       // historia posterior la reutiliza sin releer archivos.
@@ -162,13 +200,7 @@ export async function POST(request: Request) {
           })
         }
       )
-      return new Response(stream, {
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-store",
-          "X-Content-Type-Options": "nosniff",
-        },
-      })
+      return new Response(stream, { headers: PLAIN_TEXT_HEADERS })
     }
 
     // Contrato legacy: el cliente envía su historial (bundle en caché de un
@@ -209,13 +241,7 @@ export async function POST(request: Request) {
         })()
       }
     )
-    return new Response(stream, {
-      headers: {
-        "Content-Type": "text/plain; charset=utf-8",
-        "Cache-Control": "no-store",
-        "X-Content-Type-Options": "nosniff",
-      },
-    })
+    return new Response(stream, { headers: PLAIN_TEXT_HEADERS })
   } catch (error) {
     return errorResponse(error)
   }
