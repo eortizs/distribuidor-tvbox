@@ -3,10 +3,27 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
-import { ArrowUpIcon, BotIcon, SquareIcon } from "lucide-react"
+import {
+  ArrowUpIcon,
+  BotIcon,
+  MicIcon,
+  PlusIcon,
+  SquareIcon,
+} from "lucide-react"
+import { toast } from "sonner"
 
+import {
+  ASSISTANT_ATTACHMENT_TYPES,
+  MAX_ASSISTANT_ATTACHMENT_BYTES,
+  MAX_ASSISTANT_ATTACHMENT_FILES,
+  MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES,
+} from "@/lib/attachments"
+import { formatBytes } from "@/hooks/use-file-upload"
+import { useAttachmentUpload } from "@/hooks/use-attachment-upload"
 import { useRealtimeEvent } from "@/hooks/use-realtime"
+import { useSpeechRecognition } from "@/hooks/use-speech-recognition"
 
+import { AttachmentChips, type AttachmentItem } from "@/components/herramientas/attachment-chips"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
@@ -43,6 +60,7 @@ import {
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller"
 import { Spinner } from "@/components/ui/spinner"
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 
 const MAX_INPUT_LENGTH = 4000
 
@@ -52,6 +70,50 @@ type Turn = {
   text: string
   /** Canal de origen del turno; WhatsApp cuando la conversación siguió ahí. */
   channel?: "web" | "whatsapp"
+  /** Adjuntos del turno (chips en la burbuja; los trae la historia del servidor). */
+  attachments?: AttachmentItem[]
+}
+
+/**
+ * Junta el texto que ya estaba en el área con lo que se dictó. Cada sesión de
+ * dictado se agrega a lo escrito antes y el resultado nunca pasa del límite
+ * del área (mismo contrato del prompt en Imágenes).
+ */
+function joinDraft(base: string, spoken: string): string {
+  const clean = spoken.trim()
+  const previous = base.trim()
+  const joined = clean ? (previous ? `${previous} ${clean}` : clean) : base
+  return joined.length > MAX_INPUT_LENGTH
+    ? joined.slice(0, MAX_INPUT_LENGTH)
+    : joined
+}
+
+/** Copy del dictado según su estado: una sola fuente para botón, tooltip,
+ *  estado de escucha y avisos (igual que Imágenes). */
+function dictationCopy(supported: boolean, listening: boolean) {
+  if (!supported) {
+    return {
+      label: "Dictado por voz no disponible",
+      tooltip: "El dictado por voz no está disponible aquí",
+      error:
+        "El dictado por voz no está disponible aquí. Usa Chrome, Edge o Safari en una conexión segura.",
+      status: "",
+    }
+  }
+  if (listening) {
+    return {
+      label: "Detener el dictado",
+      tooltip: "Detener el dictado",
+      error: "",
+      status: "Escuchando… detén el micrófono cuando termines.",
+    }
+  }
+  return {
+    label: "Dictar el mensaje",
+    tooltip: "Dictar el mensaje con la voz",
+    error: "",
+    status: "",
+  }
 }
 
 const SUGGESTIONS = [
@@ -71,7 +133,16 @@ const SUGGESTIONS = [
   },
 ]
 
-export function AsistenteChat() {
+type AsistenteChatProps = {
+  /**
+   * Lector de adjuntos configurado en el servidor (modelo de visión + clave
+   * de gateway): sin él el botón «+» se oculta, como el método de
+   * transferencia sin datos bancarios.
+   */
+  attachmentsReady?: boolean
+}
+
+export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) {
   const [turns, setTurns] = useState<Turn[]>([])
   const [streaming, setStreaming] = useState(false)
   const [loaded, setLoaded] = useState(false)
@@ -84,6 +155,110 @@ export function AsistenteChat() {
   const streamingRef = useRef(false)
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  /*
+   * Adjuntos del turno: mismos límites y máquina de estado que las imágenes
+   * de referencia de Imágenes (subida a /api/files con chips y errores). Al
+   * enviar el mensaje se usa `detachAll` (limpia los chips SIN borrar los
+   * archivos del servidor: quedan ligados al turno persistido); quitar un
+   * chip antes de enviar sí borra el archivo.
+   */
+  const {
+    attachments: pendingAttachments,
+    attachmentIds: pendingAttachmentIds,
+    uploading: uploadingAttachments,
+    failed: failedAttachments,
+    totalBytes: attachmentsBytes,
+    tooBig: attachmentsTooBig,
+    error: attachmentsError,
+    setError: setAttachmentsError,
+    openFileDialog,
+    getInputProps,
+    remove: handleRemoveAttachment,
+    detachAll: detachSentAttachments,
+  } = useAttachmentUpload({
+    accept: ASSISTANT_ATTACHMENT_TYPES.join(","),
+    maxFiles: MAX_ASSISTANT_ATTACHMENT_FILES,
+    maxSize: MAX_ASSISTANT_ATTACHMENT_BYTES,
+    maxTotalBytes: MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES,
+    onInvalidFile: () => {
+      setAttachmentsError(
+        `Solo se admiten imágenes o PDF de hasta ${formatBytes(MAX_ASSISTANT_ATTACHMENT_BYTES)} y máximo ${MAX_ASSISTANT_ATTACHMENT_FILES} por mensaje.`
+      )
+    },
+    onUploadError: (message) => toast.error(message),
+  })
+
+  // Adjuntos listos para viajar (subida completa al servidor).
+  const readyAttachments = pendingAttachments.filter(
+    (attachment) => attachment.status === "ready"
+  )
+
+  /*
+   * Dictado por voz (Web Speech API, mismo hook de Imágenes): `dictationBase`
+   * es lo que había escrito cuando empezó la sesión, para que cada sesión se
+   * agregue a lo escrito antes. Va en un ref porque el reconocedor puede
+   * devolver palabras antes de que el área se vuelva a pintar.
+   */
+  const dictationBaseRef = useRef("")
+  // Si el usuario escribe mientras se dicta, lo escrito manda: la sesión se
+  // cierra sin guardar lo dictado.
+  const dictationCancelledRef = useRef(false)
+
+  const {
+    isSupported: dictationSupported,
+    isListening: dictating,
+    error: dictationError,
+    start: startDictation,
+    stop: stopDictation,
+  } = useSpeechRecognition({
+    lang: "es-MX",
+    onTranscript: (text) => {
+      if (dictationCancelledRef.current || !text.trim()) return
+      setDraft(joinDraft(dictationBaseRef.current, text))
+    },
+    onEnd: (text) => {
+      const base = dictationBaseRef.current
+      dictationBaseRef.current = ""
+      if (dictationCancelledRef.current) {
+        dictationCancelledRef.current = false
+        return
+      }
+      if (text.trim()) {
+        setDraft(joinDraft(base, text))
+      }
+      textareaRef.current?.focus()
+    },
+  })
+
+  // Copy del dictado disponible desde aquí: el toast de «no soportado» y el
+  // botón comparten la misma fuente.
+  const dictation = dictationCopy(dictationSupported, dictating)
+
+  const toggleDictation = useCallback(() => {
+    if (dictating) {
+      stopDictation()
+      return
+    }
+    if (!dictationSupported) {
+      toast.error(dictation.error)
+      return
+    }
+    dictationBaseRef.current = draft
+    startDictation()
+  }, [
+    dictating,
+    dictation,
+    dictationSupported,
+    draft,
+    startDictation,
+    stopDictation,
+  ])
+
+  useEffect(() => {
+    if (!dictationError) return
+    toast.error(dictationError)
+  }, [dictationError])
+
   function nextId() {
     counterRef.current += 1
     return `t${counterRef.current}`
@@ -95,13 +270,33 @@ export function AsistenteChat() {
       const response = await fetch("/api/asistente/chat", { cache: "no-store" })
       if (!response.ok) return null
       const data = (await response.json()) as {
-        data?: { messages?: { id: number; role: "user" | "assistant"; content: string; channel?: "web" | "whatsapp" }[] }
+        data?: {
+          messages?: {
+            id: number
+            role: "user" | "assistant"
+            content: string
+            channel?: "web" | "whatsapp"
+            attachments?: {
+              id: string
+              fileName: string
+              mimeType: string
+              sizeBytes: number
+            }[]
+          }[]
+        }
       }
       return (data.data?.messages ?? []).map((row) => ({
         id: `m${row.id}`,
         role: row.role,
         text: row.content,
         channel: row.channel,
+        attachments: (row.attachments ?? []).map((attachment) => ({
+          id: attachment.id,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes,
+          status: "ready" as const,
+        })),
       }))
     } catch {
       return null
@@ -175,12 +370,28 @@ export function AsistenteChat() {
     return () => abortRef.current?.abort()
   }, [])
 
-  async function runCompletion(question: string, dedupe: boolean) {
+  async function runCompletion(
+    question: string,
+    dedupe: boolean,
+    attachments: AttachmentItem[] = []
+  ) {
     const questionId = nextId()
     const replyId = nextId()
     setTurns((current) => [
       ...current,
-      { id: questionId, role: "user", text: question, channel: "web" },
+      {
+        id: questionId,
+        role: "user",
+        text: question,
+        channel: "web",
+        attachments:
+          attachments.length > 0
+            ? attachments.map((attachment) => ({
+                ...attachment,
+                status: "ready" as const,
+              }))
+            : undefined,
+      },
       { id: replyId, role: "assistant", text: "" },
     ])
     streamingRef.current = true
@@ -194,7 +405,14 @@ export function AsistenteChat() {
       const response = await fetch("/api/asistente/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: question, dedupe }),
+        body: JSON.stringify({
+          message: question,
+          dedupe,
+          attachmentIds:
+            attachments.length > 0
+              ? attachments.map((attachment) => attachment.id)
+              : undefined,
+        }),
         signal: controller.signal,
       })
 
@@ -244,16 +462,40 @@ export function AsistenteChat() {
   function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const question = draft.trim()
-    if (!question || streaming) return
+    // Un turno lleva texto, adjuntos o ambos; nada mientras dicta, sube un
+    // archivo o hay un adjunto roto o excedido.
+    if (
+      (!question && readyAttachments.length === 0) ||
+      streaming ||
+      dictating ||
+      uploadingAttachments ||
+      failedAttachments ||
+      attachmentsTooBig
+    ) {
+      return
+    }
     setDraft("")
-    void runCompletion(question, false)
+    // Los chips del turno llevan el id del ARCHIVO en el servidor (lo que
+    // `attachmentIds` del hook devuelve para los adjuntos listos, en el
+    // mismo orden): es lo que la API valida contra `user_files`.
+    const attachments = readyAttachments.map((attachment, index) => ({
+      ...attachment,
+      id: pendingAttachmentIds[index] ?? attachment.id,
+    }))
+    // Los archivos ya están ligados al turno: se quitan los chips sin borrar
+    // nada del servidor.
+    detachSentAttachments()
+    void runCompletion(question, false, attachments)
   }
 
   function handleRetry() {
     if (streaming) return
     const last = turns[turns.length - 1]
     if (!last || last.role !== "user") return
-    void runCompletion(last.text, true)
+    // Los adjuntos viajan de nuevo (por si el intento anterior no llegó a
+    // persistirse); si el turno ya estaba en el servidor, `dedupe` conserva
+    // la fila original y sus descripciones.
+    void runCompletion(last.text, true, last.attachments ?? [])
   }
 
   function handleStop() {
@@ -342,6 +584,12 @@ export function AsistenteChat() {
                               align={isUser ? "end" : "start"}
                             >
                               <BubbleContent className="space-y-2">
+                                {turn.attachments &&
+                                turn.attachments.length > 0 ? (
+                                  <AttachmentChips
+                                    attachments={turn.attachments}
+                                  />
+                                ) : null}
                                 {isUser || isStreamingRow ? (
                                   <p className="whitespace-pre-wrap">
                                     {turn.text}
@@ -401,51 +649,170 @@ export function AsistenteChat() {
           </div>
         ) : null}
         <form className="w-full" onSubmit={handleSubmit}>
-          <InputGroup className="bg-background">
-            <InputGroupTextarea
-              ref={textareaRef}
-              aria-label="Mensaje para el asistente"
-              placeholder="Escribe tu mensaje… (Enter para enviar, Shift+Enter para salto de línea)"
-              rows={1}
-              maxLength={MAX_INPUT_LENGTH}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              className="placeholder:text-foreground/60"
-              onKeyDown={(event) => {
-                if (
-                  event.key === "Enter" &&
-                  !event.shiftKey &&
-                  !event.nativeEvent.isComposing
-                ) {
-                  event.preventDefault()
-                  event.currentTarget.form?.requestSubmit()
-                }
-              }}
+          <div className="flex w-full flex-col gap-1.5">
+            {pendingAttachments.length > 0 ? (
+              <AttachmentChips
+                attachments={pendingAttachments}
+                onRemove={handleRemoveAttachment}
+                disabled={uploadingAttachments}
+              />
+            ) : null}
+            {/* Bitono como la Descripción de Imágenes: la celda de adjuntos
+                lleva un fondo propio (sin borde: solo cambio de tono) y el
+                símbolo + grande; el mensaje vive en la zona de la derecha y
+                las acciones (dictar, enviar) quedan en la esquina inferior
+                derecha del área (items-end + self-end), acompañando el
+                crecimiento del texto hasta 160 px. */}
+            <InputGroup className="items-end bg-background">
+              {attachmentsReady ? (
+                <InputGroupAddon
+                  align="inline-start"
+                  className="self-stretch bg-muted/50 pl-1 pr-1 has-[>button]:ml-0"
+                >
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <InputGroupButton
+                          type="button"
+                          size="icon-sm"
+                          variant="ghost"
+                          onClick={openFileDialog}
+                          aria-label="Adjuntar imágenes o PDF al mensaje"
+                        />
+                      }
+                    >
+                      <PlusIcon aria-hidden="true" className="size-5" />
+                    </TooltipTrigger>
+                    <TooltipContent>Adjuntar imágenes o PDF</TooltipContent>
+                  </Tooltip>
+                </InputGroupAddon>
+              ) : null}
+              <InputGroupTextarea
+                ref={textareaRef}
+                aria-label="Mensaje para el asistente"
+                placeholder="Escribe tu mensaje… (Enter para enviar, Shift+Enter para salto de línea)"
+                rows={1}
+                maxLength={MAX_INPUT_LENGTH}
+                value={draft}
+                onChange={(event) => {
+                  // Escribir mientras se dicta manda sobre lo dictado: la
+                  // sesión se cierra sin guardar lo que se estaba oyendo.
+                  if (dictating) {
+                    dictationCancelledRef.current = true
+                    stopDictation()
+                  }
+                  setDraft(event.target.value)
+                }}
+                className="placeholder:text-foreground/60"
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
+                    event.preventDefault()
+                    event.currentTarget.form?.requestSubmit()
+                  }
+                }}
+              />
+              <InputGroupAddon align="inline-end" className="self-end">
+                {/* El micrófono cierra el renglón junto al envío: dictar es
+                    la otra forma de escribir el mensaje (misma UX que la
+                    Descripción de Imágenes). Ambos botones a 36 px con zona
+                    de toque de 52×52 px (estándar móvil de AGENTS.md:
+                    extensión invisible, sin cambiar el aspecto). */}
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <InputGroupButton
+                        type="button"
+                        size="icon-sm"
+                        variant={dictating ? "destructive" : "ghost"}
+                        onClick={toggleDictation}
+                        aria-label={dictation.label}
+                        aria-pressed={dictating}
+                        aria-disabled={!dictationSupported}
+                        className="size-9 aria-disabled:opacity-50 relative after:absolute after:content-[''] after:-inset-2"
+                      />
+                    }
+                  >
+                    <MicIcon aria-hidden="true" className="size-5" />
+                  </TooltipTrigger>
+                  <TooltipContent>{dictation.tooltip}</TooltipContent>
+                </Tooltip>
+                {streaming ? (
+                  <InputGroupButton
+                    type="button"
+                    size="icon-sm"
+                    variant="outline"
+                    onClick={handleStop}
+                    className="size-9 relative after:absolute after:content-[''] after:-inset-2"
+                  >
+                    <SquareIcon aria-hidden="true" className="size-5" />
+                    <span className="sr-only">Detener respuesta</span>
+                  </InputGroupButton>
+                ) : (
+                  <InputGroupButton
+                    type="submit"
+                    size="icon-sm"
+                    variant="default"
+                    aria-disabled={
+                      !draft.trim() && readyAttachments.length === 0
+                    }
+                    className="size-9 relative after:absolute after:content-[''] after:-inset-2"
+                  >
+                    <ArrowUpIcon aria-hidden="true" className="size-5" />
+                    <span className="sr-only">Enviar</span>
+                  </InputGroupButton>
+                )}
+              </InputGroupAddon>
+            </InputGroup>
+            {dictating ? (
+              <p
+                role="status"
+                className="text-muted-foreground flex items-center gap-2 text-xs"
+              >
+                <span
+                  aria-hidden="true"
+                  className="bg-destructive size-1.5 shrink-0 animate-pulse rounded-full motion-reduce:animate-none"
+                />
+                {dictation.status}
+              </p>
+            ) : null}
+            {draft.length >= MAX_INPUT_LENGTH ? (
+              <p
+                role="status"
+                className="text-muted-foreground text-xs"
+              >
+                Límite de {MAX_INPUT_LENGTH} caracteres alcanzado: lo que
+                sigas dictando o escribiendo no se agrega.
+              </p>
+            ) : null}
+            <input
+              {...getInputProps()}
+              className="sr-only"
+              aria-hidden="true"
+              tabIndex={-1}
             />
-            <InputGroupAddon align="inline-end">
-              {streaming ? (
-                <InputGroupButton
-                  type="button"
-                  size="icon-sm"
-                  variant="outline"
-                  onClick={handleStop}
-                >
-                  <SquareIcon aria-hidden="true" />
-                  <span className="sr-only">Detener respuesta</span>
-                </InputGroupButton>
-              ) : (
-                <InputGroupButton
-                  type="submit"
-                  size="icon-sm"
-                  variant="default"
-                  aria-disabled={!draft.trim()}
-                >
-                  <ArrowUpIcon aria-hidden="true" />
-                  <span className="sr-only">Enviar</span>
-                </InputGroupButton>
-              )}
-            </InputGroupAddon>
-          </InputGroup>
+            {attachmentsError ? (
+              <p role="alert" className="text-destructive text-xs">
+                {attachmentsError}
+              </p>
+            ) : null}
+            {attachmentsTooBig ? (
+              <p role="alert" className="text-destructive text-xs">
+                Los archivos adjuntos suman {formatBytes(attachmentsBytes)};
+                el máximo por mensaje es{" "}
+                {formatBytes(MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES)}.
+              </p>
+            ) : null}
+            {failedAttachments ? (
+              <p role="alert" className="text-destructive text-xs">
+                Hay un archivo adjunto que no se pudo subir. Quítalo para
+                continuar.
+              </p>
+            ) : null}
+          </div>
         </form>
       </CardFooter>
     </Card>

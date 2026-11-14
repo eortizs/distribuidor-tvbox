@@ -47,3 +47,18 @@ export const ALERT_ATTACHMENT_TYPES = [
   "image/webp",
   "application/pdf",
 ] as const
+
+/** Archivos adjuntos por turno del Asistente (conversación unificada). */
+export const MAX_ASSISTANT_ATTACHMENT_FILES = 4
+/** Tope por archivo adjunto del Asistente (10 MB, igual que imágenes). */
+export const MAX_ASSISTANT_ATTACHMENT_BYTES = 10 * 1024 * 1024
+/** Tope de bytes totales de los adjuntos de un turno del Asistente. */
+export const MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES = 20 * 1024 * 1024
+/** Formatos aceptados como adjunto del Asistente (imágenes + PDF). */
+export const ASSISTANT_ATTACHMENT_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+] as const

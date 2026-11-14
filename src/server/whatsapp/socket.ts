@@ -5,6 +5,8 @@ import NodeCache from "@cacheable/node-cache"
 import makeWASocket, {
   Browsers,
   DisconnectReason,
+  downloadMediaMessage,
+  extractMessageContent,
   fetchLatestBaileysVersion,
   isJidBroadcast,
   isJidGroup,
@@ -18,6 +20,14 @@ import makeWASocket, {
   type WASocket,
 } from "@whiskeysockets/baileys"
 import pino from "pino"
+
+import { MAX_ASSISTANT_ATTACHMENT_BYTES } from "@/lib/attachments"
+import {
+  assistantAttachmentsConfigured,
+  describeAssistantAttachments,
+  type AssistantAttachmentMeta,
+} from "@/server/asistente/attachments"
+import { saveUserFile } from "@/server/storage/user-files"
 
 import {
   findUserByWhatsAppPhone,
@@ -58,6 +68,16 @@ const INBOUND_RATE_MAX = 20
 const INBOUND_RATE_WINDOW_MS = 60_000
 /** Respuestas de cortesía («no registrado», «solo texto»): 1 por 24 h. */
 const COURTESY_WINDOW_MS = 24 * 60 * 60 * 1000
+/** Tope de espera para descifrar y bajar un archivo de WhatsApp. */
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 30_000
+/** Tipos de archivo que el agente puede interpretar (los mismos del Asistente). */
+const SUPPORTED_MEDIA_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+  "application/pdf",
+]
 
 type WhatsAppStatus =
   | "disabled"
@@ -142,6 +162,85 @@ function extractText(message: object | null | undefined): string {
     return text.trim()
   }
   return ""
+}
+
+/**
+ * Contenido del mensaje ya desenvuelto (WhatsApp envuelve fotos/documents en
+ * efímeros, view-once y plantillas): `extractMessageContent` de Baileys deja
+ * a la vista `imageMessage` / `documentMessage` del mensaje real.
+ */
+function unwrappedContent(message: object | null | undefined): Record<string, unknown> | null {
+  if (!message || typeof message !== "object") return null
+  const content = extractMessageContent(message as proto.IMessage)
+  return content && typeof content === "object"
+    ? (content as Record<string, unknown>)
+    : null
+}
+
+function captionOf(media: unknown): string {
+  const caption = (media as Record<string, unknown> | undefined)?.caption
+  return typeof caption === "string" ? caption.trim() : ""
+}
+
+/** Texto de acompañamiento del archivo (caption de foto o documento). */
+function extractCaption(message: object | null | undefined): string {
+  const content = unwrappedContent(message)
+  if (!content) return ""
+  return captionOf(content.imageMessage) || captionOf(content.documentMessage)
+}
+
+/** El archivo (imagen o documento) que trae el mensaje, sin bajar nada. */
+function extractMediaInfo(
+  message: object | null | undefined
+): { mimeType: string; fileName: string | null } | null {
+  const content = unwrappedContent(message)
+  if (!content) return null
+  const image = content.imageMessage as { mimetype?: unknown } | undefined
+  if (image && typeof image.mimetype === "string" && image.mimetype) {
+    return { mimeType: image.mimetype, fileName: null }
+  }
+  const document = content.documentMessage as {
+    mimetype?: unknown
+    fileName?: unknown
+  } | undefined
+  if (document && typeof document.mimetype === "string" && document.mimetype) {
+    return {
+      mimeType: document.mimetype,
+      fileName:
+        typeof document.fileName === "string" && document.fileName.trim()
+          ? document.fileName.trim()
+          : null,
+    }
+  }
+  return null
+}
+
+/** Nombre de archivo por omisión cuando WhatsApp no manda uno. */
+function defaultMediaFileName(mimeType: string): string {
+  if (mimeType === "application/pdf") return "documento.pdf"
+  const ext = mimeType.split("/")[1]?.split(";")[0] || "bin"
+  return `imagen.${ext}`
+}
+
+/**
+ * Baja el archivo del mensaje (con re-petición a WhatsApp si el medio ya
+ * expiró en el servidor) con tope de tiempo.
+ */
+async function downloadIncomingMedia(
+  m: WAMessage,
+  socket: WASocket
+): Promise<Buffer> {
+  const download = downloadMediaMessage(m, "buffer", {}, {
+    reuploadRequest: socket.updateMediaMessage,
+    logger,
+  })
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(
+      () => reject(new Error("media_download_timeout")),
+      MEDIA_DOWNLOAD_TIMEOUT_MS
+    ).unref?.()
+  )
+  return Promise.race([download, timeout])
 }
 
 /** Quita decoraciones de WhatsApp (negritas, emojis de viñeta, espacios). */
@@ -260,7 +359,12 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
   }
 
   const text = extractText(m.message)
-  if (!text) {
+  const caption = extractCaption(m.message)
+  const mediaInfo = extractMediaInfo(m.message)
+
+  // El lector de archivos (visión vía gateway) debe estar configurado en el
+  // servidor: sin él el agente sigue siendo solo de texto.
+  if (mediaInfo && !assistantAttachmentsConfigured()) {
     if (courtesyAllowed(phone)) {
       await sendTextToJid(
         jid,
@@ -270,18 +374,99 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
     return
   }
 
+  // Sin texto, caption ni archivo no hay consulta que atender.
+  if (!text && !caption && !mediaInfo) {
+    if (courtesyAllowed(phone)) {
+      await sendTextToJid(
+        jid,
+        "Por ahora solo puedo leer mensajes de texto. Escríbeme tu consulta."
+      ).catch(() => undefined)
+    }
+    return
+  }
+
+  // Tipos fuera del catálogo (video, audio, stickers…): aviso una vez al día.
+  if (mediaInfo && !SUPPORTED_MEDIA_TYPES.includes(mediaInfo.mimeType)) {
+    if (courtesyAllowed(phone)) {
+      await sendTextToJid(
+        jid,
+        "Por ahora solo puedo leer imágenes (fotos) y documentos PDF. Escríbeme tu consulta en texto."
+      ).catch(() => undefined)
+    }
+    return
+  }
+
   if (!allowInbound(phone)) return
+
+  const socket = current.socket
+  if (!socket) return
+
+  /*
+   * Adjunto del turno: bajar el archivo, guardarlo en el almacenamiento del
+   * usuario (mismo `user_files` que el Asistente de la PWA) y transcribirlo
+   * con visión ANTES del turno. La transcripción viaja con el turno (bloque
+   * de datos) y queda en la conversación unificada: la PWA ve los chips.
+   */
+  let attachments: AssistantAttachmentMeta[] = []
+  if (mediaInfo) {
+    let bytes: Buffer
+    try {
+      bytes = await downloadIncomingMedia(m, socket)
+    } catch (error) {
+      log("media_download", error)
+      await sendTextToJid(
+        jid,
+        "No pude leer el archivo que enviaste (pudo expirar o pesar demasiado). Inténtalo de nuevo."
+      ).catch(() => undefined)
+      return
+    }
+    if (bytes.byteLength === 0 || bytes.byteLength > MAX_ASSISTANT_ATTACHMENT_BYTES) {
+      await sendTextToJid(
+        jid,
+        `El archivo supera el límite de ${Math.round(MAX_ASSISTANT_ATTACHMENT_BYTES / (1024 * 1024))} MB por mensaje. Escríbeme tu consulta en texto.`
+      ).catch(() => undefined)
+      return
+    }
+    try {
+      const file = await saveUserFile({
+        userId: user.id,
+        kind: "attachment",
+        fileName: mediaInfo.fileName ?? defaultMediaFileName(mediaInfo.mimeType),
+        mimeType: mediaInfo.mimeType,
+        bytes,
+      })
+      attachments = await describeAssistantAttachments(user.id, [
+        {
+          fileId: file.id,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          sizeBytes: file.sizeBytes,
+          description: null,
+        },
+      ])
+    } catch (error) {
+      log("media_store", error)
+      await sendTextToJid(
+        jid,
+        "No pude registrar el archivo que enviaste. Inténtalo de nuevo."
+      ).catch(() => undefined)
+      return
+    }
+  }
+
+  const effectiveText = cleanReplyText(text || caption) || text || caption
 
   logWhatsAppMessageDetached({
     direction: "in",
     userId: user.id,
     phone,
-    text,
-    meta: { jid },
+    text:
+      effectiveText ||
+      (mediaInfo
+        ? `[archivo: ${attachments[0]?.fileName ?? mediaInfo.mimeType}]`
+        : ""),
+    meta: { jid, media: mediaInfo?.mimeType ?? null },
   })
-
-  const socket = current.socket
-  if (!socket) return
 
   // «Escribiendo…» mientras consulta: inmediato y refrescado cada 20 s
   // (WhatsApp caduca la presencia y los turnos con herramientas tardan).
@@ -297,7 +482,8 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
     let reply = await enqueueAgentTurn(phone, () =>
       runWhatsAppAgent(
         { id: user.id, username: user.username, role: user.role },
-        cleanReplyText(text) || text
+        effectiveText,
+        attachments
       )
     )
     if (!reply) {

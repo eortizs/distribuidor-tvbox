@@ -1,5 +1,10 @@
 import { pool, withTransaction } from "@/server/db"
 import { publishRealtime } from "@/server/realtime/bus"
+import {
+  attachmentContextBlock,
+  parseAttachmentMetas,
+  type AssistantAttachmentMeta,
+} from "./attachments"
 
 /*
  * Conversación unificada del asistente: UNA historia por usuario compartida
@@ -12,6 +17,10 @@ import { publishRealtime } from "@/server/realtime/bus"
  *
  * El contenido se persiste con los valores reales (post-aliasing); el
  * aliasing de correos sigue aplicándose SOLO en la frontera con el LLM.
+ * Los adjuntos del turno viven en la columna `attachments` (metadatos + la
+ * transcripción de visión ya extraída); a la hora de armar el contexto del
+ * LLM se agregan como bloque de datos con `toLlmMessages`, sin tocar el
+ * texto visible del turno.
  */
 
 export type AssistantChannel = "web" | "whatsapp"
@@ -22,6 +31,7 @@ export interface AssistantMessageRow {
   content: string
   channel: AssistantChannel
   createdAt: string
+  attachments: AssistantAttachmentMeta[]
 }
 
 /** Turnos que se conservan por usuario: memoria conversacional, no auditoría. */
@@ -37,8 +47,9 @@ export async function loadConversation(
     content: string
     channel: AssistantChannel
     created_at: Date
+    attachments: unknown
   }>(
-    `SELECT id, role, content, channel, created_at
+    `SELECT id, role, content, channel, created_at, attachments
        FROM assistant_messages
       WHERE user_id = $1::uuid
       ORDER BY id DESC
@@ -52,6 +63,7 @@ export async function loadConversation(
       content: row.content,
       channel: row.channel,
       createdAt: row.created_at.toISOString(),
+      attachments: parseAttachmentMetas(row.attachments),
     }))
     .reverse()
 }
@@ -69,9 +81,13 @@ export async function appendConversationMessage(params: {
   content: string
   channel: AssistantChannel
   skipIfLastUser?: boolean
+  /** Adjuntos del turno (con sus descripciones ya calculadas). */
+  attachments?: AssistantAttachmentMeta[]
 }): Promise<void> {
   const content = params.content.trim()
-  if (content.length === 0) return
+  const attachments = params.attachments ?? []
+  // Un turno necesita texto o adjuntos: sin ninguno no hay nada que contar.
+  if (content.length === 0 && attachments.length === 0) return
 
   await withTransaction(async (tx) => {
     if (params.skipIfLastUser) {
@@ -89,9 +105,15 @@ export async function appendConversationMessage(params: {
       }
     }
     await tx.query(
-      `INSERT INTO assistant_messages (user_id, role, content, channel)
-       VALUES ($1::uuid, $2, $3, $4)`,
-      [params.userId, params.role, content, params.channel]
+      `INSERT INTO assistant_messages (user_id, role, content, channel, attachments)
+       VALUES ($1::uuid, $2, $3, $4, $5::jsonb)`,
+      [
+        params.userId,
+        params.role,
+        content,
+        params.channel,
+        JSON.stringify(attachments),
+      ]
     )
     await tx.query(
       `DELETE FROM assistant_messages
@@ -100,7 +122,7 @@ export async function appendConversationMessage(params: {
             SELECT id FROM assistant_messages
              WHERE user_id = $1::uuid
              ORDER BY id DESC LIMIT $2
-          )`,
+           )`,
       [params.userId, RETAIN_PER_USER]
     )
     // Aviso en tiempo real al propio usuario (la otra pestaña/canal refresca
@@ -111,4 +133,22 @@ export async function appendConversationMessage(params: {
       distribuidorId: params.userId,
     })
   })
+}
+
+/**
+ * Historia persistida → mensajes para el LLM: cada turno con adjuntos lleva
+ * su bloque de datos (las transcripciones ya guardadas, sin releer archivos)
+ * pegado al contenido. Es el único punto donde los adjuntos entran al
+ * contexto: la PWA y WhatsApp comparten la misma vista de la conversación.
+ */
+export function toLlmMessages(
+  rows: readonly AssistantMessageRow[]
+): { role: "user" | "assistant"; content: string }[] {
+  return rows.map((row) => ({
+    role: row.role,
+    content:
+      row.attachments.length > 0
+        ? `${row.content}${attachmentContextBlock(row.attachments)}`
+        : row.content,
+  }))
 }
