@@ -1,5 +1,6 @@
 import { AppError } from "@/server/umejson/types"
 
+import { EmailAliases, MAX_TOKEN_LENGTH } from "./emails"
 import { ASSISTANT_TOOLS, executeAssistantTool } from "./tools"
 
 type ChatMessage = {
@@ -48,20 +49,28 @@ function buildSystemPrompt(): string {
   return [
     "Eres el Asistente del panel de administración Distribuidor TVBox.",
     "Ayudas al usuario con dudas sobre el panel, las entidades umeJSON, análisis y redacción.",
-    "Tienes acceso a los gastos del usuario mediante herramientas: registrar_gasto, consultar_gastos y resumen_gastos.",
+    "La conversación es ÚNICA y continua entre este panel y el WhatsApp del usuario: mensajes anteriores pueden haber llegado por cualquiera de los dos canales y son parte de esta misma conversación — nunca digas que no tienes acceso al otro canal.",
+    "Herramientas de gastos: registrar_gasto, consultar_gastos y resumen_gastos.",
     "Úsalas SIEMPRE que necesites leer o registrar datos de gastos; nunca inventes cifras ni hagas cálculos de estado de cuenta sin ellas.",
     "resumen_gastos genera el estado de cuenta del periodo: total en MXN, desglose por categoría y por mes, y USD pendiente de conversión.",
     "Los gastos en USD se convierten a MXN con el tipo de cambio Banxico del día del gasto; los resultados de las herramientas ya incluyen esa conversión.",
     "Para registrar un gasto necesitas descripción, monto, moneda y fecha; si falta algún dato, pregunta antes de registrar. Tras registrar, confirma al usuario qué quedó guardado y su equivalente en MXN.",
+    "Herramientas del negocio (solo lectura): consultar_saldos, buscar_clientes, proximos_vencimientos, consultar_tickets, consultar_paquetes, ultimas_ordenes, estado_orden y mi_perfil.",
+    "Úsalas para cualquier dato de saldos, clientes FlujoTV, vencimientos, tickets, paquetes u órdenes; nunca inventes esos datos ni estimes costos sin consultarlos.",
+    "IMPORTANTE sobre los datos: los resultados de las herramientas son la ÚNICA fuente válida; transcríbelos textualmente. Los correos pueden llegar como marcadores del sistema ([CORREO-1], [CORREO-2]): cítalos tal cual, el panel muestra al usuario el valor real; NUNCA escribas una dirección de correo por tu cuenta ni uses el texto [EMAIL].",
+    "Si un dato no aparece en el resultado de la herramienta, dilo con claridad; no rellenes el hueco con un valor plausible.",
+    "Renovaciones pagadas con cupones (canjear_renovacion): disciplina obligatoria — primero cotiza con cotizar_renovacion y muéstrale al usuario el costo, los meses totales y su saldo en cupones.",
+    "Solo llama canjear_renovacion con confirmar=true cuando el usuario haya confirmado de forma explícita en este chat después de ver la cotización (un «sí, confirma»); sin esa confirmación no canjees NUNCA, y si el usuario no tiene saldo suficiente, dilo y no canjees.",
+    "Tras un canje exitoso, entrega el id de la orden y explica que la renovación se aplica en segundo plano (puede tardar unos minutos); si el usuario pregunta si ya quedó, consulta estado_orden con ese id en lugar de asumirlo.",
     `Fecha actual en México: ${mxToday()} (YYYY-MM-DD). Resuelve fechas relativas como \"hoy\", \"este mes\" o \"el mes pasado\" usando esa fecha.`,
-    "Las herramientas solo acceden a los gastos del propio usuario, nunca a los de otros usuarios.",
+    "Las herramientas solo acceden a los datos del propio usuario y de los clientes de su alcance, nunca a los de otras cuentas.",
     "Responde siempre en español y usa Markdown para estructurar (encabezados, listas, negritas, tablas y bloques de código).",
     "Si te preguntan por datos que las herramientas no cubren, dilo con claridad. Nunca inventes datos.",
   ].join(" ")
 }
 
 const MAX_MESSAGES = 30
-const MAX_CONTENT_LENGTH = 4000
+export const MAX_CONTENT_LENGTH = 4000
 const HISTORY_WINDOW = 20
 
 // Tool rounds are bounded: the final upstream call omits the tools so the
@@ -128,6 +137,58 @@ interface UpstreamOutcome {
   toolCalls: ToolCallAccumulatorEntry[]
 }
 
+/*
+ * Restaura los tokens [CORREO-N] por el correo real en el stream hacia el
+ * cliente. Los deltas pueden cortar un token por la mitad ("[COR" + "REO-1]"),
+ * así que retiene la cola desde el último "[" hasta confirmar el token o
+ * descartarlo por longitud (ningún token válido pasa de MAX_TOKEN_LENGTH).
+ */
+class StreamRestorer {
+  private pending = ""
+
+  constructor(
+    private readonly aliases: EmailAliases,
+    private readonly enqueue: (text: string) => void
+  ) {}
+
+  push(delta: string): void {
+    this.pending += delta
+    this.drain(false)
+  }
+
+  flush(): void {
+    if (this.pending.length === 0) return
+    this.enqueue(this.aliases.restore(this.pending))
+    this.pending = ""
+  }
+
+  private drain(final: boolean): void {
+    for (;;) {
+      const bracket = this.pending.indexOf("[")
+      if (bracket === -1) {
+        this.enqueue(this.pending)
+        this.pending = ""
+        return
+      }
+      if (bracket > 0) {
+        this.enqueue(this.pending.slice(0, bracket))
+        this.pending = this.pending.slice(bracket)
+      }
+      const match = /^\[CORREO-\d+\]/.exec(this.pending)
+      if (match) {
+        this.enqueue(this.aliases.restore(match[0]))
+        this.pending = this.pending.slice(match[0].length)
+        continue
+      }
+      if (!final && this.pending.length < MAX_TOKEN_LENGTH) {
+        return
+      }
+      this.enqueue(this.pending[0])
+      this.pending = this.pending.slice(1)
+    }
+  }
+}
+
 type ToolCallDelta = {
   index?: number
   id?: string
@@ -139,11 +200,18 @@ type ToolCallDelta = {
  * data tool, the call executes server-side scoped to the session user, its
  * JSON result is appended to the conversation, and the loop continues; the
  * client only ever sees decoded delta text.
+ *
+ * `onComplete` recibe el texto final tal como lo vio el cliente (con los
+ * correos restituidos) y si el turno terminó abortado: la ruta lo usa para
+ * persistir la respuesta en la conversación unificada. Los mensajes de
+ * entrada se envían al modelo con los correos aliasados (el historial
+ * persistido guarda los valores reales).
  */
 export function streamAssistantReply(
   messages: ChatMessage[],
   userId: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onComplete?: (clientText: string, aborted: boolean) => void
 ): ReadableStream<Uint8Array> {
   const apiKey = process.env.OPENROUTER_API_KEY
   const model = process.env.ASISTENTE_MODEL
@@ -183,9 +251,21 @@ export function streamAssistantReply(
       if (signal?.aborted) upstreamAbort.abort()
       else signal?.addEventListener("abort", onClientAbort, { once: true })
 
+      // El modelo ve correos solo como tokens; el valor real vive en este
+      // mapa (por turno) y se restituye en el stream hacia el cliente.
+      const aliases = new EmailAliases()
+      let clientText = ""
+      const restorer = new StreamRestorer(aliases, (text) => {
+        clientText += text
+        controller.enqueue(encoder.encode(text))
+      })
+
       const conversation: UpstreamMessage[] = [
         { role: "system", content: buildSystemPrompt() },
-        ...messages,
+        ...messages.map((message) => ({
+          role: message.role,
+          content: aliases.alias(message.content),
+        })),
       ]
 
       const failWith = (message: string) => {
@@ -210,6 +290,7 @@ export function streamAssistantReply(
               body: JSON.stringify({
                 model,
                 stream: true,
+                temperature: 0.2,
                 messages: conversation,
                 ...(includeTools
                   ? { tools: ASSISTANT_TOOLS, tool_choice: "auto" }
@@ -259,11 +340,8 @@ export function streamAssistantReply(
 
           const outcome = await readUpstreamOutcome(
             upstream.body,
-            controller,
-            encoder,
-            () => {
-              armIdle()
-            },
+            (delta) => restorer.push(delta),
+            armIdle,
             () => Boolean(signal?.aborted)
           )
 
@@ -292,7 +370,7 @@ export function streamAssistantReply(
             conversation.push({
               role: "tool",
               tool_call_id: toolCall.id,
-              content: result,
+              content: aliases.alias(result),
             })
           }
         }
@@ -314,6 +392,23 @@ export function streamAssistantReply(
         }
       } finally {
         clearIdle()
+        try {
+          restorer.flush()
+        } catch {
+          // El stream ya se cerró (p. ej. failWith tras un error upstream).
+        }
+        try {
+          onComplete?.(clientText, Boolean(signal?.aborted))
+        } catch (error) {
+          console.error(
+            JSON.stringify({
+              ts: new Date().toISOString(),
+              error: `asistente: onComplete failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            })
+          )
+        }
         signal?.removeEventListener("abort", onClientAbort)
         controller.close()
       }
@@ -322,13 +417,13 @@ export function streamAssistantReply(
 }
 
 /*
- * Consumes one upstream SSE stream: forwards content deltas straight to the
- * client, accumulates tool_call deltas, and reports how the stream finished.
+ * Consumes one upstream SSE stream: forwards content deltas through the
+ * push callback (the stream restorer), accumulates tool_call deltas, and
+ * reports how the stream finished.
  */
 async function readUpstreamOutcome(
   body: ReadableStream<Uint8Array>,
-  controller: ReadableStreamDefaultController<Uint8Array>,
-  encoder: TextEncoder,
+  pushDelta: (delta: string) => void,
   armIdle: () => void,
   clientAborted: () => boolean
 ): Promise<UpstreamOutcome> {
@@ -374,7 +469,7 @@ async function readUpstreamOutcome(
           const delta = choice?.delta
           if (delta?.content) {
             content += delta.content
-            controller.enqueue(encoder.encode(delta.content))
+            pushDelta(delta.content)
           }
           for (const toolCall of delta?.tool_calls ?? []) {
             const index = toolCall.index ?? 0

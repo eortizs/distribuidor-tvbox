@@ -351,6 +351,7 @@ import {
 } from "@/components/reui/timeline"
 import { formatMxn } from "@/lib/finanzas"
 import {
+  foldTerm,
   formatFlujoDate,
   type FlujoClient,
 } from "@/lib/flujotv"
@@ -694,18 +695,8 @@ function clientName(
 }
 
 /**
- * Normaliza para comparar textos: minúsculas y sin acentos, igual que la
- * búsqueda de `/client_names` («cambron» encuentra «Cambrón»).
+ * Subtítulo de la opción: cuántos clientes devuelve ese filtro.
  */
-function foldTerm(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-}
-
-/** Subtítulo de la opción: cuántos clientes devuelve ese filtro. */
 function optionCount(count: number | undefined): string | undefined {
   if (count === undefined) return undefined
   return `${count} ${count === 1 ? "cliente" : "clientes"}`

@@ -1,9 +1,11 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { ArrowUpIcon, BotIcon, SquareIcon } from "lucide-react"
+
+import { useRealtimeEvent } from "@/hooks/use-realtime"
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
@@ -48,18 +50,19 @@ type Turn = {
   id: string
   role: "user" | "assistant"
   text: string
+  /** Canal de origen del turno; WhatsApp cuando la conversación siguió ahí. */
+  channel?: "web" | "whatsapp"
 }
 
 const SUGGESTIONS = [
   {
     label: "¿Qué puedes hacer?",
     prompt:
-      "¿Qué puedes hacer? Explícame cómo me ayudas con el control de mis gastos.",
+      "¿Qué puedes hacer? Explícame cómo me ayudas con el control de mis gastos y de mis clientes.",
   },
   {
-    label: "Registrar un gasto",
-    prompt:
-      "Registra un gasto de $500 MXN en la categoría Inventario de hoy, por compra de un TVBox.",
+    label: "Vencimientos de clientes",
+    prompt: "¿Qué clientes FlujoTV vencen esta semana?",
   },
   {
     label: "Estado de cuenta",
@@ -71,16 +74,93 @@ const SUGGESTIONS = [
 export function AsistenteChat() {
   const [turns, setTurns] = useState<Turn[]>([])
   const [streaming, setStreaming] = useState(false)
+  const [loaded, setLoaded] = useState(false)
   const [draft, setDraft] = useState("")
   const [error, setError] = useState<string | null>(null)
   const counterRef = useRef(0)
   const abortRef = useRef<AbortController | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  /** Espejo de `streaming` sin re-render: lo leen los callbacks de sincronización. */
+  const streamingRef = useRef(false)
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   function nextId() {
     counterRef.current += 1
     return `t${counterRef.current}`
   }
+
+  /** Historia del servidor → turnos de la UI (la conversación unificada). */
+  const loadServerTurns = useCallback(async (): Promise<Turn[] | null> => {
+    try {
+      const response = await fetch("/api/asistente/chat", { cache: "no-store" })
+      if (!response.ok) return null
+      const data = (await response.json()) as {
+        data?: { messages?: { id: number; role: "user" | "assistant"; content: string; channel?: "web" | "whatsapp" }[] }
+      }
+      return (data.data?.messages ?? []).map((row) => ({
+        id: `m${row.id}`,
+        role: row.role,
+        text: row.content,
+        channel: row.channel,
+      }))
+    } catch {
+      return null
+    }
+  }, [])
+
+  /*
+   * Sincronización en tiempo real: la conversación es compartida con
+   * WhatsApp, así que cada evento del bus `assistant` (turno nuevo en
+   * cualquier canal) refresca la historia en silencio. Nunca durante un
+   * stream propio (el turno local aún no está en el servidor y la respuesta
+   * en curso no debe pisarse); el evento del propio turno al persistirse
+   * re-sincroniza al terminar.
+   */
+  const syncFromServer = useCallback(async () => {
+    if (streamingRef.current) return
+    const serverTurns = await loadServerTurns()
+    if (serverTurns) setTurns(serverTurns)
+  }, [loadServerTurns])
+
+  const scheduleSync = useCallback(() => {
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
+    syncTimerRef.current = setTimeout(() => {
+      syncTimerRef.current = null
+      void syncFromServer()
+    }, 400)
+  }, [syncFromServer])
+
+  useRealtimeEvent(["assistant"], scheduleSync)
+
+  // La conversación vive en el servidor y se comparte con WhatsApp: al
+  // montar se carga la historia (incluidos los turnos originados ahí).
+  useEffect(() => {
+    let cancelled = false
+    void loadServerTurns().then((serverTurns) => {
+      if (cancelled || !serverTurns) {
+        if (!cancelled) setLoaded(true)
+        return
+      }
+      setTurns(serverTurns)
+      setLoaded(true)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [loadServerTurns])
+
+  // Al volver a la pestaña: recuperar lo escrito en el otro canal mientras
+  // estuvo oculta (los eventos SSE se ignoran con la pestaña oculta).
+  useEffect(() => {
+    const onVisible = () => {
+      if (!document.hidden) scheduleSync()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible)
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current)
+    }
+  }, [scheduleSync])
 
   function fitTextarea() {
     const el = textareaRef.current
@@ -95,9 +175,15 @@ export function AsistenteChat() {
     return () => abortRef.current?.abort()
   }, [])
 
-  async function runCompletion(history: Turn[]) {
+  async function runCompletion(question: string, dedupe: boolean) {
+    const questionId = nextId()
     const replyId = nextId()
-    setTurns([...history, { id: replyId, role: "assistant", text: "" }])
+    setTurns((current) => [
+      ...current,
+      { id: questionId, role: "user", text: question, channel: "web" },
+      { id: replyId, role: "assistant", text: "" },
+    ])
+    streamingRef.current = true
     setStreaming(true)
     setError(null)
 
@@ -108,9 +194,7 @@ export function AsistenteChat() {
       const response = await fetch("/api/asistente/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: history.map(({ role, text }) => ({ role, content: text })),
-        }),
+        body: JSON.stringify({ message: question, dedupe }),
         signal: controller.signal,
       })
 
@@ -152,6 +236,7 @@ export function AsistenteChat() {
       }
     } finally {
       abortRef.current = null
+      streamingRef.current = false
       setStreaming(false)
     }
   }
@@ -161,17 +246,14 @@ export function AsistenteChat() {
     const question = draft.trim()
     if (!question || streaming) return
     setDraft("")
-    void runCompletion([
-      ...turns,
-      { id: nextId(), role: "user", text: question },
-    ])
+    void runCompletion(question, false)
   }
 
   function handleRetry() {
     if (streaming) return
     const last = turns[turns.length - 1]
     if (!last || last.role !== "user") return
-    void runCompletion(turns)
+    void runCompletion(last.text, true)
   }
 
   function handleStop() {
@@ -183,7 +265,7 @@ export function AsistenteChat() {
   return (
     <Card className="mx-auto min-h-0 w-full max-w-4xl flex-1 gap-0 overflow-hidden py-0">
       <CardContent className="min-h-0 flex-1 p-0">
-        {turns.length === 0 ? (
+        {loaded && turns.length === 0 ? (
           <Empty className="h-full border-none">
             <EmptyHeader>
               <EmptyMedia variant="icon">
@@ -191,8 +273,9 @@ export function AsistenteChat() {
               </EmptyMedia>
               <EmptyTitle>¿En qué te ayudo?</EmptyTitle>
               <EmptyDescription className="text-foreground">
-                Pregúntame sobre el panel o las entidades umeJSON, o pídeme
-                ayuda para redactar. Pronto también podrás consultar tus datos.
+                Pregúntame por tus gastos, saldo, clientes FlujoTV,
+                vencimientos, tickets u órdenes. La conversación continúa en
+                WhatsApp: lo que hables aquí sigue allá y viceversa.
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -249,6 +332,11 @@ export function AsistenteChat() {
                             )}
                           </MessageAvatar>
                           <MessageContent>
+                            {turn.channel === "whatsapp" ? (
+                              <span className="text-muted-foreground mb-1 block text-xs">
+                                vía WhatsApp
+                              </span>
+                            ) : null}
                             <Bubble
                               variant={isUser ? "muted" : "ghost"}
                               align={isUser ? "end" : "start"}

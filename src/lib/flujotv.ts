@@ -174,6 +174,19 @@ export function formatFlujoDate(value: string | null): string {
   return dateFormatter.format(new Date(parsed))
 }
 
+/**
+ * Normaliza para comparar textos: minúsculas y sin acentos. Única fuente del
+ * criterio de búsqueda del módulo Clientes (GUI y herramientas del
+ * asistente): «cambron» encuentra «Cambrón».
+ */
+export function foldTerm(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+}
+
 /** Días restantes: texto corto con el matiz de urgencia. */
 export function formatDaysRemaining(days: number | null): string {
   if (days === null) return "—"

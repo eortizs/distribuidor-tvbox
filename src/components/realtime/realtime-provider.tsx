@@ -18,6 +18,7 @@ export type RealtimeKind =
   | "prefs"
   | "notifications"
   | "alerts"
+  | "assistant"
 
 export type RealtimeStatus = "connecting" | "live" | "offline"
 
@@ -59,6 +60,7 @@ const KINDS: RealtimeKind[] = [
   "prefs",
   "notifications",
   "alerts",
+  "assistant",
 ]
 
 function parseMessage(event: Event): RealtimeMessage | null {

@@ -34,12 +34,14 @@ interface SessionScope {
 }
 
 function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
-  // Preferencias, notificaciones y alertas: solo las del propio usuario, sea
-  // cual sea el rol — ni siquiera un admin recibe las de otras cuentas.
+  // Preferencias, notificaciones, alertas y conversación del asistente: solo
+  // las del propio usuario, sea cual sea el rol — ni siquiera un admin recibe
+  // las de otras cuentas.
   if (
     event.kind === "prefs" ||
     event.kind === "notifications" ||
-    event.kind === "alerts"
+    event.kind === "alerts" ||
+    event.kind === "assistant"
   ) {
     return event.distribuidorId === scope.userId
   }

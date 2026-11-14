@@ -44,8 +44,12 @@ export async function resolveClientScope(user: AuthUser): Promise<ClientScope> {
   return name.length > 0 ? { kind: "distributor", name } : { kind: "none" }
 }
 
-/** Distribuidor del cliente: llave cruda si viene, si no el mapa de validez. */
-function clientDistributor(
+/**
+ * Distribuidor («socio») del cliente: llave cruda si viene, si no el mapa de
+ * validez usuario→reseller (el mismo valor que muestra la tarjeta de
+ * /clientes; compartido por la GUI y las herramientas del asistente).
+ */
+export function clientDistributor(
   client: FlujoClient,
   userResellers: Record<string, string>
 ): string {

@@ -297,7 +297,6 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
     let reply = await enqueueAgentTurn(phone, () =>
       runWhatsAppAgent(
         { id: user.id, username: user.username, role: user.role },
-        phone,
         cleanReplyText(text) || text
       )
     )
