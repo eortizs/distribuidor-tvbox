@@ -21,6 +21,11 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
     name: "holamundo",
     description: "Envía un mensaje de bienvenida a tu WhatsApp registrado.",
   },
+  {
+    name: "vence",
+    description:
+      "Lista los clientes FlujoTV que vencen en menos de 2 días, el más próximo primero.",
+  },
 ] as const
 
 /** Clave tipada del registro de handlers (1:1 con SLASH_COMMANDS). */

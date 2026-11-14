@@ -531,8 +531,11 @@ async function loadAuthUser(userId: string): Promise<AuthUser | null> {
  * paralelo, alcance aplicado y búsqueda local foldTerm sobre
  * usuario/correo/nombre (la GUI nunca re-consulta el panel por el cuadro de
  * búsqueda).
+ *
+ * Compartida con los slash commands del Asistente (src/server/asistente/
+ * commands.ts): misma fuente y mismo alcance que las herramientas de lectura.
  */
-async function listClientsInScope(
+export async function listClientsInScope(
   userId: string
 ): Promise<{
   clients: Awaited<ReturnType<typeof scopeFlujoClients>>

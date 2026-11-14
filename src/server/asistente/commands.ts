@@ -11,6 +11,7 @@ import {
 } from "@/server/whatsapp/service"
 
 import { appendConversationMessage, loadConversation } from "./conversations"
+import { listClientsInScope } from "./tools"
 
 /*
  * Ejecución de slash commands del Asistente: mecanismo directo, SIN pasar por
@@ -67,6 +68,47 @@ const handlers: Record<SlashCommandName, SlashCommandHandler> = {
     }
     return {
       text: `**Comando /holamundo ejecutado**\n\nEnvié un mensaje de bienvenida a tu WhatsApp registrado (${phone}). La entrega va por la cola del canal: suele salir en segundos y sobrevive cortes de conexión.`,
+    }
+  },
+
+  vence: async ({ user, args }) => {
+    // Ventana fija del comando: vencimiento en MENOS de 2 días (0 = vence
+    // hoy, 1 = vence mañana), orden ascendente por días. Como toda regla
+    // sobre días del panel, solo considera clientes vigentes (nunca
+    // vencidos) — el mismo criterio del filtro «Por vencer» de /clientes y
+    // de la herramienta proximos_vencimientos. Args ignorados a propósito.
+    void args
+    let clients: Awaited<ReturnType<typeof listClientsInScope>>["clients"]
+    try {
+      clients = (await listClientsInScope(user.id)).clients
+    } catch {
+      return {
+        text: "No pude consultar el panel de FlujoTV en este momento. Inténtalo de nuevo en unos minutos; si el problema persiste, avisa al administrador.",
+      }
+    }
+    if (clients.length === 0) {
+      return {
+        text: "No encontré clientes FlujoTV en tu alcance.",
+      }
+    }
+    const porVencer = clients
+      .filter(
+        (c) =>
+          c.daysRemaining !== null &&
+          c.daysRemaining >= 0 &&
+          c.daysRemaining < 2
+      )
+      .sort((a, b) => (a.daysRemaining ?? 0) - (b.daysRemaining ?? 0))
+    if (porVencer.length === 0) {
+      return {
+        text: "Ningún cliente de tu alcance vence en menos de 2 días.",
+      }
+    }
+    const listing = porVencer
+      .map((c) => `${c.userName} (${c.daysRemaining}d)`)
+      .join("\n")
+    return {
+      text: `**Vencen en menos de 2 días (${porVencer.length})**\n\n${listing}`,
     }
   },
 }
