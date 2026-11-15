@@ -138,7 +138,7 @@ function limpiarCampo(value: unknown, max = 300): string | null {
   return clean.length > 0 ? clean.slice(0, max) : null
 }
 
-interface ExtraccionLLM {
+export interface ExtraccionLLM {
   esComprobante: boolean
   datos: DatosComprobante | null
   advertencias: string[]
@@ -149,8 +149,14 @@ interface ExtraccionLLM {
  * Envía el comprobante al modelo y devuelve los datos extraídos validados.
  * Lanza Error con mensaje técnico si el proveedor falla o la salida no es
  * utilizable: el llamador lo degrada a revisión manual, nunca a rechazo.
+ *
+ * Exportada para el flujo del Asistente: allí el concepto de pago se
+ * DESCUBRE desde el comprobante (el código impreso identifica la orden), así
+ * que la extracción corre ANTES de crear la orden y su resultado se pasa a
+ * `reviewTransferReceipt` como `preextracted` para no gastar una segunda
+ * llamada de visión.
  */
-async function extraerComprobanteDeArchivo(input: {
+export async function extraerComprobanteDeArchivo(input: {
   bytes: Uint8Array
   mimeType: string
 }): Promise<ExtraccionLLM> {
@@ -336,6 +342,12 @@ export async function reviewTransferReceipt(input: {
   amountMxn: number
   /** Código de pago entregado al comprador (paso 1); vacío solo en órdenes previas al concepto. */
   conceptCode: string
+  /**
+   * Extracción ya corrida por el llamador (flujo del Asistente, que descubre
+   * el concepto desde el comprobante ANTES de crear la orden). Presente → no
+   * se vuelve a llamar al modelo: mismo veredicto con una sola llamada.
+   */
+  preextracted?: ExtraccionLLM
 }): Promise<ReviewOutcome> {
   const holderName = transferBankDataOrNull()?.holder ?? ""
   if (!receiptScanConfigured() || holderName.length === 0) {
@@ -347,34 +359,36 @@ export async function reviewTransferReceipt(input: {
   // renovación; el duplicado va a revisión manual).
   const sha256 = createHash("sha256").update(input.bytes).digest("hex")
 
-  let extraccion: ExtraccionLLM
-  try {
-    extraccion = await extraerComprobanteDeArchivo({
-      bytes: input.bytes,
-      mimeType: input.mimeType,
-    })
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    const scan: ScanResult = {
-      ok: false,
-      esComprobante: false,
-      checks: [],
-      reasons: [],
-      duplicate: false,
-      advertencias: [],
-      datos: null,
-      modelo: process.env.RECEIPT_SCAN_MODEL?.trim() ?? "",
-      error: message,
+  let extraccion: ExtraccionLLM | null = input.preextracted ?? null
+  if (extraccion === null) {
+    try {
+      extraccion = await extraerComprobanteDeArchivo({
+        bytes: input.bytes,
+        mimeType: input.mimeType,
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      const scan: ScanResult = {
+        ok: false,
+        esComprobante: false,
+        checks: [],
+        reasons: [],
+        duplicate: false,
+        advertencias: [],
+        datos: null,
+        modelo: process.env.RECEIPT_SCAN_MODEL?.trim() ?? "",
+        error: message,
+      }
+      await guardarScan(
+        input.orderId,
+        "error",
+        scan,
+        scan.modelo,
+        sha256
+      ).catch(() => {})
+      logScan(input.orderId, { outcome: "scan_error", error: message })
+      return { review: "manual", status: "pending", scan }
     }
-    await guardarScan(
-      input.orderId,
-      "error",
-      scan,
-      scan.modelo,
-      sha256
-    ).catch(() => {})
-    logScan(input.orderId, { outcome: "scan_error", error: message })
-    return { review: "manual", status: "pending", scan }
   }
 
   if (!extraccion.esComprobante || extraccion.datos === null) {

@@ -16,6 +16,7 @@ import {
 } from "@/server/asistente/llm"
 import { parseSlashCommand } from "@/lib/asistente-commands"
 import { executeSlashCommand } from "@/server/asistente/commands"
+import { maybeHandleRenewalReceipt } from "@/server/asistente/renovacion"
 import { errorResponse, readJsonBody } from "@/server/http"
 import { AppError } from "@/server/umejson/types"
 
@@ -140,9 +141,8 @@ export async function POST(request: Request) {
         }
       }
 
-      // Adjuntos: validar propiedad/límites y transcribirlos con visión
-      // ANTES de persistir el turno; la descripción queda en la fila y la
-      // historia posterior la reutiliza sin releer archivos.
+      // Adjuntos: validar propiedad/límites ANTES de cualquier consumo de
+      // visión (el interceptor de renovación necesita los metadatos).
       const attachmentMetas = await resolveAssistantAttachments(
         user.id,
         parsed.attachmentIds
@@ -154,6 +154,25 @@ export async function POST(request: Request) {
           "Escribe un mensaje o adjunta un archivo."
         )
       }
+
+      /*
+       * Renovación por transferencia (paso 3): un adjunto SIN mensaje que
+       * pertenezca a un comprador con conceptos activos intercepta el turno
+       * SIN pasar por el modelo — el escaneo extrae lo impreso, el concepto
+       * de pago impreso descubre la renovación y se responde el veredicto.
+       * También acepta el adjunto CON el código como mensaje (variante
+       * explícita). El lector de visión del chat no se ejecuta en estos
+       * casos: la extracción es del escaneo de la orden.
+       */
+      const renewalReply = await maybeHandleRenewalReceipt({
+        user,
+        message,
+        attachments: attachmentMetas,
+      })
+      if (renewalReply !== null) {
+        return new Response(renewalReply, { headers: PLAIN_TEXT_HEADERS })
+      }
+
       const attachments = await describeAssistantAttachments(
         user.id,
         attachmentMetas

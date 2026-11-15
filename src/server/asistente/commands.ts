@@ -12,6 +12,8 @@ import {
 
 import { appendConversationMessage, loadConversation } from "./conversations"
 import { listClientsInScope } from "./tools"
+import { handleRenovarCommand } from "./renovacion"
+import { isRenovarCommandName } from "@/lib/asistente-commands"
 
 /*
  * Ejecución de slash commands del Asistente: mecanismo directo, SIN pasar por
@@ -148,6 +150,25 @@ const handlers: Record<SlashCommandName, SlashCommandHandler> = {
       .filter((part): part is string => part !== null)
     return { text: parts.join("\n\n") }
   },
+
+  tv3: async ({ user, args }) => {
+    // Ayuda del comando dinámico de renovación: `/tv3` solo no renueva nada,
+    // enseña la sintaxis. El comando REAL es el usuario completo del cliente
+    // (/tv3baltazar) y lo resuelve la ruta dinámica de executeSlashCommand.
+    void user
+    void args
+    return {
+      text: [
+        "**Renovación por transferencia desde el chat**",
+        "",
+        "Escribe el comando con el usuario EXACTO de la licencia de tu cliente:",
+        "",
+        "`/tv3baltazar`",
+        "",
+        "Te entrego el concepto de pago (código de 4 caracteres), el importe (plazo fijo de 1 mes) y los datos bancarios. Después de pagar, **adjunta el comprobante aquí SIN mensaje (solo el archivo)**: lo escaneo, el concepto de pago impreso identifica la renovación y, si la fecha, el importe y el beneficiario también pasan, la aplico en automático; si algo falla, te digo qué fue.",
+      ].join("\n"),
+    }
+  },
 }
 
 /**
@@ -173,9 +194,16 @@ export async function executeSlashCommand(
   if (!parsed) return null
   const trimmed = rawMessage.trim()
 
-  const handler = (handlers as Record<string, SlashCommandHandler | undefined>)[
-    parsed.name
-  ]
+  const handler =
+    (handlers as Record<string, SlashCommandHandler | undefined>)[parsed.name] ??
+    // Comando dinámico de renovación: el usuario del cliente ES el comando
+    // (/tv3baltazar → «tv3baltazar»). No vive en el registro (sería uno por
+    // cliente); la regla compartida del prefijo lo enruta aquí. Args
+    // ignorados: el usuario es el nombre completo del comando.
+    (isRenovarCommandName(parsed.name)
+      ? async ({ user }: SlashCommandContext) =>
+          handleRenovarCommand({ user, name: parsed.name })
+      : undefined)
   if (!handler) {
     const available = SLASH_COMMAND_NAMES.map((name) => `/${name}`).join(", ")
     throw new AppError(

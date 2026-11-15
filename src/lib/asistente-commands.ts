@@ -31,6 +31,11 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
     description:
       "Lista todos tus clientes FlujoTV agrupados en Activo y Vencido, A→Z.",
   },
+  {
+    name: "tv3",
+    description:
+      "Renovación por transferencia: /tv3<usuario> — ej. /tv3baltazar (1 mes).",
+  },
 ] as const
 
 /** Clave tipada del registro de handlers (1:1 con SLASH_COMMANDS). */
@@ -41,6 +46,28 @@ export const SLASH_COMMAND_NAMES: readonly string[] = SLASH_COMMANDS.map(
   (command) => command.name
 )
 
+/**
+ * Prefijo del comando DINÁMICO de renovación por transferencia: el usuario
+ * del cliente FlujoTV completo es el comando (/tv3baltazar → cliente
+ * «tv3baltazar»), así que no vive en SLASH_COMMANDS (uno por cliente es
+ * inlistable). Regla compartida cliente/servidor: un comando registrado
+ * tiene prioridad; cualquier otro nombre que empiece con este prefijo va al
+ * flujo de renovación (src/server/asistente/renovacion.ts).
+ */
+export const RENOVAR_COMMAND_PREFIX = "tv3"
+
+/**
+ * true si `name` (sin la barra, en minúsculas) tiene forma del comando de
+ * renovación: empieza con el prefijo y trae algo después de él. «/tv3» solo
+ * es el comando registrado de ayuda, no una renovación.
+ */
+export function isRenovarCommandName(name: string): boolean {
+  return (
+    name.startsWith(RENOVAR_COMMAND_PREFIX) &&
+    name.length > RENOVAR_COMMAND_PREFIX.length
+  )
+}
+
 export interface ParsedSlashCommand {
   /** Nombre en minúsculas, sin la barra. */
   name: string
@@ -48,8 +75,13 @@ export interface ParsedSlashCommand {
   args: string
 }
 
-/** Fuente única del charset de un nombre de comando: patrón y shape derivan de aquí. */
-const SLASH_NAME_SOURCE = "[a-z0-9][a-z0-9-]*"
+/**
+ * Fuente única del charset de un nombre de comando: patrón y shape derivan de
+ * aquí. Incluye `.`, `_` y `-` porque los comandos de renovación SON el
+ * usuario del cliente (/tv3baltazar) y un usuario puede traer puntos o guion
+ * bajo.
+ */
+const SLASH_NAME_SOURCE = "[a-z0-9][a-z0-9._-]*"
 
 const SLASH_COMMAND_PATTERN = new RegExp(
   `^\\/(${SLASH_NAME_SOURCE})(?:\\s+([\\s\\S]*))?$`,
@@ -89,6 +121,16 @@ export function slashCommandValidationMessage(
   // su curso hacia el modelo, igual que hace el servidor.
   if (!parsed) return null
   if (!SLASH_COMMAND_NAMES.includes(parsed.name)) {
+    if (isRenovarCommandName(parsed.name)) {
+      // Comando dinámico de renovación (/tv3<usuario>): existe por diseño
+      // aunque no esté en la lista. El comprobante va en OTRO mensaje (el
+      // adjunto solo, sin texto): el sistema lo escanea y el concepto
+      // impreso identifica la renovación.
+      if (hasAttachments) {
+        return "El comando /tv3<usuario> no lleva adjuntos: envía el comando solo. El comprobante lo mandas después como adjunto, SIN mensaje: lo escaneo y el concepto de pago impreso identifica la renovación."
+      }
+      return null
+    }
     const available = SLASH_COMMAND_NAMES.map((name) => `/${name}`).join(", ")
     return `No existe el comando /${parsed.name}. Disponibles: ${available}.`
   }

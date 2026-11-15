@@ -89,6 +89,17 @@ function generateCode(): string {
   return code
 }
 
+/**
+ * true si `code` (ya normalizado a mayúsculas) tiene la FORMA de un código de
+ * concepto: 4 caracteres del alfabeto (sin 0/O/1/I). Única fuente de la
+ * forma; la usa el Asistente para interceptar el mensaje del comprobante sin
+ * secuestrar texto normal del chat («HOLA» no puede ser un código real).
+ */
+export function isTransferConceptCodeShape(code: string): boolean {
+  if (code.length !== CODE_LENGTH) return false
+  return [...code].every((char) => CODE_ALPHABET.includes(char))
+}
+
 function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -223,6 +234,144 @@ export async function getActiveTransferConcept(input: {
   return row
     ? { id: String(row.id), code: String(row.code), periodMonth: String(row.period_month) }
     : null
+}
+
+/** Concepto activo visto desde el chat: código + usuario al que está ligado. */
+export interface ActiveConceptByCode extends TransferConcept {
+  /** Usuario de FlujoTV que la orden renovará (ligado al emitir el código). */
+  userName: string
+}
+
+/**
+ * TODOS los conceptos activos del comprador en el mes actual, del más viejo
+ * al más nuevo. Es la base del descubrimiento del Asistente: el código
+ * IMPRESO en el comprobante se busca entre estos conceptos para identificar
+ * a qué orden pertenece el pago (sin pedirle el código al comprador).
+ */
+export async function findActiveConceptsForBuyer(input: {
+  buyerUserId: string
+}): Promise<ActiveConceptByCode[]> {
+  const result = await pool.query<{
+    id: string
+    code: string
+    period_month: string
+    user_name: string
+  }>(
+    `SELECT id, code, period_month, user_name
+       FROM transfer_concepts
+      WHERE buyer_user_id = $1::uuid AND period_month = $2 AND status = 'active'
+      ORDER BY created_at ASC`,
+    [input.buyerUserId, currentPeriodMonth()]
+  )
+  return result.rows.map((row) => ({
+    id: String(row.id),
+    code: String(row.code),
+    periodMonth: String(row.period_month),
+    userName: String(row.user_name),
+  }))
+}
+
+/** Concepto consumido visto desde el chat, con la orden que lo anuló. */
+export interface ConsumedConceptByCode {
+  code: string
+  orderId: string
+}
+
+/**
+ * Conceptos YA consumidos del comprador en el mes actual (con la orden que
+ * los consumió). Alimenta el replay del Asistente: si el código impreso en
+ * el comprobante ya fue usado, el comprador ve el estado REAL de esa orden
+ * en lugar de un «concepto inválido» que invita a pagar dos veces.
+ */
+export async function findConsumedConceptsForBuyer(input: {
+  buyerUserId: string
+}): Promise<ConsumedConceptByCode[]> {
+  const result = await pool.query<{
+    code: string
+    consumed_by_order_id: string
+  }>(
+    `SELECT code, consumed_by_order_id
+       FROM transfer_concepts
+      WHERE buyer_user_id = $1::uuid AND period_month = $2
+        AND status = 'consumed' AND consumed_by_order_id IS NOT NULL
+      ORDER BY consumed_at DESC`,
+    [input.buyerUserId, currentPeriodMonth()]
+  )
+  return result.rows.map((row) => ({
+    code: String(row.code),
+    orderId: String(row.consumed_by_order_id),
+  }))
+}
+
+/**
+ * Resuelve el concepto ACTIVO del comprador por SU código, sin el usuario:
+ * es la puerta del envío de comprobante por el Asistente, donde el comprador
+ * adjunta el ticket con el código como mensaje (el concepto ya quedó ligado
+ * al usuario al emitirse en el paso 1). El código es único entre los activos
+ * del mes a través de todos los compradores, así que (comprador, código)
+ * identifica una sola intención. Null = código ajeno, vencido o anulado.
+ */
+export async function findActiveConceptByCodeForBuyer(input: {
+  buyerUserId: string
+  code: string
+}): Promise<ActiveConceptByCode | null> {
+  const periodMonth = currentPeriodMonth()
+  const result = await pool.query<{
+    id: string
+    code: string
+    period_month: string
+    user_name: string
+  }>(
+    `SELECT id, code, period_month, user_name
+       FROM transfer_concepts
+      WHERE buyer_user_id = $1::uuid AND code = $2
+        AND period_month = $3 AND status = 'active'
+      LIMIT 1`,
+    [input.buyerUserId, input.code.toUpperCase(), periodMonth]
+  )
+  const row = result.rows[0]
+  return row
+    ? {
+        id: String(row.id),
+        code: String(row.code),
+        periodMonth: String(row.period_month),
+        userName: String(row.user_name),
+      }
+    : null
+}
+
+/**
+ * Resuelve un código YA consumido del comprador a la orden que lo consumió,
+ * por código sin usuario (misma puerta del Asistente que
+ * `findActiveConceptByCodeForBuyer`). Alimenta la respuesta de replay: el
+ * comprador que vuelve a mandar el código tras una respuesta perdida ve el
+ * estado REAL de su orden, no un «código inválido» que invita a pagar dos
+ * veces. Null = el código no existe, es ajeno o venció con el mes.
+ */
+export async function findConsumedConceptByCodeForBuyer(input: {
+  buyerUserId: string
+  code: string
+}): Promise<ConsumedTransferConcept | null> {
+  const periodMonth = currentPeriodMonth()
+  const result = await pool.query<{
+    id: string
+    consumed_by_order_id: string | null
+    period_month: string
+  }>(
+    `SELECT id, consumed_by_order_id, period_month
+       FROM transfer_concepts
+      WHERE buyer_user_id = $1::uuid AND code = $2
+        AND period_month = $3 AND status = 'consumed'
+      LIMIT 1`,
+    [input.buyerUserId, input.code.toUpperCase(), periodMonth]
+  )
+  const row = result.rows[0]
+  if (!row || !row.consumed_by_order_id) return null
+  return {
+    conceptId: String(row.id),
+    orderId: String(row.consumed_by_order_id),
+    periodMonth: String(row.period_month),
+  }
 }
 
 /** Concepto consumido con la orden que lo consumió (para el replay). */

@@ -20,6 +20,8 @@ import {
   MAX_ASSISTANT_ATTACHMENT_TOTAL_BYTES,
 } from "@/lib/attachments"
 import {
+  isRenovarCommandName,
+  parseSlashCommand,
   SLASH_COMMAND_NAMES,
   SLASH_COMMANDS,
   isValidSlashCommandName,
@@ -618,6 +620,14 @@ export function AsistenteChat({ attachmentsReady = false }: AsistenteChatProps) 
       if (slashOpen) {
         event.preventDefault()
         if (slashMatches.length === 0) {
+          // El comando de renovación (/tv3<usuario>) es DINÁMICO: no está en
+          // la lista del popup (uno por cliente), pero es válido — Enter
+          // envía en lugar de bloquear con «sin coincidencias».
+          const parsed = parseSlashCommand(draft)
+          if (parsed && isRenovarCommandName(parsed.name)) {
+            event.currentTarget.form?.requestSubmit()
+            return
+          }
           setCommandError(
             `No hay comandos que coincidan con "${draft}". Disponibles: ${SLASH_AVAILABLE}.`
           )

@@ -46,8 +46,13 @@ export interface CondicionEvaluada {
 /** Tolerancia para importes con redondeo del banco (p. ej. 99.99 vs 100). */
 const AMOUNT_TOLERANCE_MXN = 0.01
 
-/** Normaliza texto para comparaciones: minúsculas, sin acentos ni signos. */
-function normalizarTexto(value: string): string {
+/**
+ * Normaliza texto para comparaciones: minúsculas, sin acentos ni signos.
+ * Exportada para el descubrimiento del Asistente (el código impreso en el
+ * comprobante se busca dentro del concepto leído con la MISMA tolerancia
+ * que usa la evaluación de condiciones).
+ */
+export function normalizarTexto(value: string): string {
   return value
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
