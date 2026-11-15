@@ -228,6 +228,14 @@ export async function createTransferOrder(params: {
   currency: string
   review?: TransferReview
   reasons?: string[]
+  /**
+   * true = la orden YA existía para este concepto (reenvío del comprobante
+   * tras una respuesta perdida): el servidor no creó otra; continuar con
+   * `status` en lugar de re-escanear.
+   */
+  replayed?: boolean
+  /** Estado real de la orden en replay (paid | renewed | rejected | …). */
+  status?: string
 }> {
   const body = new FormData()
   body.set("user_name", params.userName)
@@ -241,6 +249,7 @@ export async function createTransferOrder(params: {
     review?: TransferReview
     status?: string
     reasons?: string[]
+    replayed?: boolean
   }>("/api/transferencias/orders", { method: "POST", body })
   return {
     orderId: data.order_id,
@@ -248,6 +257,8 @@ export async function createTransferOrder(params: {
     currency: data.currency,
     review: data.review,
     reasons: data.reasons ?? [],
+    replayed: data.replayed === true,
+    status: data.status,
   }
 }
 

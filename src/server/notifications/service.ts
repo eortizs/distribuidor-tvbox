@@ -504,6 +504,20 @@ function insertNotification(insert: NotificationInsert): Promise<boolean> {
     )
     .then((result) => {
       if ((result.rowCount ?? 0) > 0) {
+        // Observabilidad: evidencia de que el aviso SÍ se escribió. Sin
+        // esta línea, un comprador que reporta «no me llegó la campana» no
+        // deja rastro para distinguir fallo de inserción de un borrado
+        // manual (caso real: copias admin presentes, cero filas del
+        // comprador y ningún error en el log de errores).
+        console.info(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            event: "notifications.created",
+            kind: insert.kind,
+            user_id: insert.userId,
+            order_id: insert.orderId,
+          })
+        )
         publishRealtimeDetached({
           kind: "notifications",
           entityId: insert.orderId ?? undefined,

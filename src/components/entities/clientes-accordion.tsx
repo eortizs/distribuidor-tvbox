@@ -1397,6 +1397,46 @@ export function ClientesAccordion({
         concepto: transferConcept.code,
         file: ticket,
       })
+      if (result.replayed) {
+        // La orden YA existía para este concepto: el primer envío procesó y
+        // su respuesta se perdió (o el concepto ya la consumió). Continuar
+        // con su estado real — nunca crear otra orden ni re-escanear.
+        clearRenewalStorage()
+        setRenewalBlock(null)
+        ticketActions.clearFiles()
+        if (
+          result.status === "renewed" ||
+          result.status === "paid" ||
+          result.status === "renewal_failed"
+        ) {
+          // Renovación aplicada o en curso: el sondeo del bloqueo lleva la
+          // orden a su estado final (éxito con vencimiento verificado / fallo).
+          const block: RenewalBlock = {
+            orderId: result.orderId,
+            userName,
+            stage: "renovando",
+            verifiedExpiresAt: null,
+            startedAt: Date.now(),
+          }
+          setRenewalBlock(block)
+          persistRenewalBlock(block)
+        } else {
+          // En revisión del admin o rechazada: el veredicto ya está guardado.
+          setTransferRejected({ reasons: result.reasons ?? [] })
+          toast.error(
+            result.status === "rejected"
+              ? "Comprobante ya revisado"
+              : "Comprobante ya registrado",
+            {
+              description:
+                result.status === "rejected"
+                  ? "Tu comprobante fue revisado y no fue autorizado. Contacta al administrador."
+                  : "Tu comprobante ya está en revisión del administrador; no hace falta enviarlo otra vez.",
+            }
+          )
+        }
+        return
+      }
       if (result.review === "auto_approved") {
         // Etapa 2: renovación en el panel; el sondeo del bloqueo lleva la
         // orden hasta su estado final antes de liberar.

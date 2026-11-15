@@ -9,6 +9,7 @@ import { flujoErrorResponse } from "@/server/flujotv/http"
 import { mpErrorResponse } from "@/server/mercadopago/errors"
 import {
   createTransferOrder,
+  getTransferOrderReplayPayload,
   listPendingTransferOrders,
 } from "@/server/mercadopago/service"
 import { licensePriceMxnOrNull } from "@/server/mercadopago/config"
@@ -20,7 +21,10 @@ import {
 import { AppError } from "@/server/umejson/types"
 import { errorResponse } from "@/server/http"
 import { reviewTransferReceipt, checkRateLimitReceiptScan } from "@/server/transferencias/scan"
-import { getActiveTransferConcept } from "@/server/transferencias/concepto"
+import {
+  getActiveTransferConcept,
+  resolveConsumedTransferConcept,
+} from "@/server/transferencias/concepto"
 import { isRenewalMonths } from "@/lib/flujotv"
 
 /** Tipos de comprobante admitidos: foto o PDF del ticket de transferencia. */
@@ -118,6 +122,42 @@ export async function POST(request: Request) {
       code: concepto,
     })
     if (!concept) {
+      // El código no está activo. ¿Lo consumió una orden previa del PROPIO
+      // comprador (el primer envío sí procesó y la respuesta se perdió)?
+      // Responder con el estado REAL de esa orden (replay idempotente) en
+      // lugar del 422 genérico: ese mensaje se lee como «rechazaron mi
+      // pago» e invitaba a pagar de nuevo — caso real: P36E consumido 13 s
+      // antes por la orden que SÍ renovó; el comprador pagó dos veces.
+      const consumed = await resolveConsumedTransferConcept({
+        buyerUserId: user.id,
+        userName,
+        code: concepto,
+      })
+      const replay = consumed
+        ? await getTransferOrderReplayPayload(consumed.orderId)
+        : null
+      if (replay) {
+        console.info(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            event: "mercadopago.transfer_concept_replayed",
+            actor: `user:${user.username}`,
+            order_id: replay.orderId,
+            status: replay.status,
+          })
+        )
+        return Response.json({
+          ok: true,
+          data: {
+            order_id: replay.orderId,
+            amount: replay.amount,
+            currency: replay.currency,
+            status: replay.status,
+            reasons: replay.reasons,
+            replayed: true,
+          },
+        })
+      }
       throw new AppError(
         422,
         "concepto_invalido",
@@ -194,13 +234,22 @@ export async function POST(request: Request) {
       conceptId: concept.id,
       conceptCode: concept.code,
     })
+    if (result.replayed) {
+      // Replay: la orden original conserva SU ticket; el recién subido queda
+      // huérfano y se elimina (sin orden nueva, sin archivo que guardar).
+      await deleteUserFile(user.id, saved.id).catch(() => {})
+    }
 
     // Revisión automática del comprobante (LLM + condiciones de la orden):
-    // nunca lanza; `manual` significa revisión admin como siempre. El cupón
+    // nunca lanza; `manual` significa revisión admin como siempre. El cupo
     // de escaneos por comprador agotado también degrada a manual (sin error
-    // para el comprador y sin llamadas de visión ilimitadas).
+    // para el comprador y sin llamadas de visión ilimitadas). Una orden en
+    // replay NO se re-escanea: ya tiene veredicto o proceso propio, y la
+    // respuesta lleva su estado real para que el cliente continúe con él.
     let review
-    if (checkRateLimitReceiptScan(user.id)) {
+    if (result.replayed) {
+      review = null
+    } else if (checkRateLimitReceiptScan(user.id)) {
       review = await reviewTransferReceipt({
         orderId: result.orderId,
         buyerUserId: user.id,
@@ -232,7 +281,8 @@ export async function POST(request: Request) {
         months,
         amount: result.amount,
         ticket_file_id: saved.id,
-        review: review.review,
+        replayed: result.replayed,
+        review: review?.review ?? null,
       })
     )
 
@@ -243,14 +293,16 @@ export async function POST(request: Request) {
           order_id: result.orderId,
           amount: result.amount,
           currency: result.currency,
-          review: review.review,
-          status: review.status,
-          // Motivos del rechazo automático (vacío salvo `auto_rejected`):
-          // el comprador los muestra junto al aviso de contactar al admin.
-          reasons: review.scan?.reasons ?? [],
+          review: review?.review ?? null,
+          status: review?.status ?? result.status,
+          // Motivos del rechazo automático (vacío salvo `auto_rejected`) o
+          // ya registrados de la orden original en replay: el comprador los
+          // muestra junto al aviso de contactar al admin.
+          reasons: review?.scan?.reasons ?? result.reasons,
+          replayed: result.replayed,
         },
       },
-      { status: 201 }
+      { status: result.replayed ? 200 : 201 }
     )
   } catch (error) {
     // Sin orden no hay ticket que guardar: se elimina el archivo huérfano.

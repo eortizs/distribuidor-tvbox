@@ -13,6 +13,7 @@ import { getUserFile, userFilePath } from "@/server/storage/user-files"
 import { transferBankDataOrNull } from "@/server/mercadopago/config"
 import {
   approveTransferOrder,
+  findRecentRenewedOrder,
   getMpOrder,
 } from "@/server/mercadopago/service"
 import {
@@ -435,6 +436,36 @@ export async function reviewTransferReceipt(input: {
         "Este comprobante ya fue registrado en otra orden de tu cuenta."
       )
       logScan(input.orderId, { outcome: "duplicate_detected" })
+    }
+  }
+
+  // Guardia anti-doble-renovación: el comprobante puede ser VÁLIDO, pero si
+  // otra orden pagada renovó a este usuario hace segundos/minutos, aprobar
+  // otra renovación casi siempre apila un mes sobre un pago accidental doble
+  // (el comprador no vio que la primera ya aplicó). La orden va a revisión
+  // del admin — el dinero SÍ llegó: no se rechaza en automático, se decide
+  // con contexto (aplicar sabiendo que suma, o reembolsar).
+  if (reasons.length === 0) {
+    const recent = await findRecentRenewedOrder({
+      userName: input.userName,
+      excludeOrderId: input.orderId,
+    })
+    if (recent) {
+      const minutes = Math.max(
+        1,
+        Math.round((Date.now() - Date.parse(recent.renewedAt)) / 60_000)
+      )
+      reasons.push(
+        `El cliente ${input.userName} ya fue renovado hace ${minutes} min por ` +
+          `otra orden pagada (orden ${recent.id.slice(0, 8)}…). El comprobante ` +
+          `queda en revisión del administrador para evitar una renovación doble.`
+      )
+      logScan(input.orderId, {
+        outcome: "recent_renewal_guard",
+        recent_order_id: recent.id,
+        recent_method: recent.method,
+        recent_renewed_at: recent.renewedAt,
+      })
     }
   }
 

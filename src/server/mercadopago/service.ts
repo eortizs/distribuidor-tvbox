@@ -53,7 +53,10 @@ export type RenewalTrigger =
   | "coupon"
   | "scheduler"
   | "reconcile"
+  /** Reintento de un ADMIN: decisión humana, cruza la guardia anti-doble. */
   | "admin_retry"
+  /** Reintento del propio COMPRADOR: sigue sujeto a la guardia anti-doble. */
+  | "buyer_retry"
   | "transfer"
 
 export interface MpOrderRow {
@@ -256,6 +259,89 @@ function renewalRetryDelayMs(baseMs: number, error: unknown): number {
  */
 function renewalIdempotencyKey(orderId: string, attempts: number): string {
   return attempts <= 1 ? `mp-${orderId}` : `mp-${orderId}-r${attempts}`
+}
+
+/**
+ * Ventana anti-doble-renovación por usuario de licencia: dos órdenes pagadas
+ * del MISMO usuario con renovaciones a menos de esto son casi siempre un
+ * accidente (el comprador no vio que la primera ya aplicó — respuesta
+ * perdida, aviso no leído — y pagó otra vez). La segunda renovación se
+ * BLOQUEA en los caminos automáticos y queda `renewal_failed` con motivo
+ * claro para que el admin decida (aplicarla sabiendo que apila un mes, o
+ * reembolsar); su reintento manual (solo admin) cruza la guardia a
+ * conciencia. El cooldown post-éxito del PANEL (~5 min) no alcanza: el
+ * scheduler de reintentos lo cruza por diseño (caso real: transferencia
+ * renovó 16:45 y el cupón canjeado 16:48 renovó encima a las 16:51).
+ */
+const RECENT_RENEWAL_WINDOW_MINUTES = 10
+
+interface RecentRenewedOrder {
+  id: string
+  method: MpOrderMethod
+  /** ISO de `renewed_at`. */
+  renewedAt: string
+}
+
+/**
+ * Última renovación APLICADA de `userName` dentro de la ventana anti-doble.
+ * Null = sin colisión: la renovación puede proceder en automático.
+ */
+export async function findRecentRenewedOrder(input: {
+  userName: string
+  excludeOrderId?: string
+}): Promise<RecentRenewedOrder | null> {
+  const result = await pool.query<{
+    id: string
+    method: string
+    renewed_at: Date
+  }>(
+    `SELECT id, method, renewed_at
+       FROM mp_orders
+      WHERE user_name = $1
+        AND status = 'renewed'
+        AND renewed_at IS NOT NULL
+        AND renewed_at >= now() - ($2::int * interval '1 minute')
+        AND ($3::uuid IS NULL OR id <> $3::uuid)
+      ORDER BY renewed_at DESC
+      LIMIT 1`,
+    [
+      input.userName,
+      RECENT_RENEWAL_WINDOW_MINUTES,
+      input.excludeOrderId ?? null,
+    ]
+  )
+  const row = result.rows[0]
+  if (!row) return null
+  return {
+    id: String(row.id),
+    method:
+      row.method === "transferencia"
+        ? "transferencia"
+        : row.method === "cupon"
+          ? "cupon"
+          : "mercadopago",
+    renewedAt: new Date(row.renewed_at).toISOString(),
+  }
+}
+
+/** Minutos que faltan para que la ventana anti-doble se abra de nuevo. */
+function minutesUntilRenewalWindowOpens(renewedAt: string): number {
+  const elapsedMinutes = (Date.now() - Date.parse(renewedAt)) / 60_000
+  return Math.max(1, Math.ceil(RECENT_RENEWAL_WINDOW_MINUTES - elapsedMinutes))
+}
+
+/** Motivo accionable (comprador y admin) para una renovación doble bloqueada. */
+function recentRenewalMessage(
+  userName: string,
+  recent: RecentRenewedOrder
+): string {
+  const minutes = minutesUntilRenewalWindowOpens(recent.renewedAt)
+  return (
+    `La licencia de '${userName}' ya fue renovada hace poco por otra orden pagada ` +
+    `(orden ${recent.id.slice(0, 8)}…, vía ${recent.method}). ` +
+    `Para proteger tu pago no se aplica otra renovación automática: espera ~${minutes} min ` +
+    `o contacta al administrador para que la aplique o reembolse.`
+  )
 }
 
 /**
@@ -826,6 +912,56 @@ async function runOrderRenewal(
         `La orden ${order.id} tiene meses fuera de rango (${order.months}).`
       )
     }
+    // Guardia anti-doble-renovación (capa de renovación): si OTRA orden
+    // pagada renovó a este usuario dentro de la ventana, la renovación no
+    // procede en automático. El fallo es PERMANENTE a propósito (el código
+    // queda fuera de los transitorios): el scheduler de reintentos NO debe
+    // cruzar la ventana empujando la segunda compra — eso era el doble cobro
+    // del caso real (transferencia 16:45 + cupón 16:51 sobre el mismo
+    // usuario). El reintento del ADMIN (decisión humana) la cruza y queda
+    // trazado en el log.
+    const recentRenewal = await findRecentRenewedOrder({
+      userName: order.user_name,
+      excludeOrderId: order.id,
+    })
+    if (recentRenewal && trigger !== "admin_retry") {
+      recordOrderEventDetached({
+        orderId: order.id,
+        transactionId,
+        event: "renewal_blocked_recent",
+        attempt: order.renewal_retry_count + 1,
+        detail: {
+          trigger,
+          recent_order_id: recentRenewal.id,
+          recent_method: recentRenewal.method,
+          recent_renewed_at: recentRenewal.renewedAt,
+          window_minutes: RECENT_RENEWAL_WINDOW_MINUTES,
+        },
+      })
+      log("mercadopago.payment", {
+        transaction_id: transactionId,
+        order_id: order.id,
+        payment_id: paymentId,
+        user_name: order.user_name,
+        outcome: "renewal_blocked_recent",
+        recent_order_id: recentRenewal.id,
+      })
+      throw new MercadoPagoError(
+        409,
+        "renewal_recent_duplicated",
+        recentRenewalMessage(order.user_name, recentRenewal)
+      )
+    }
+    if (recentRenewal) {
+      // Reintento admin: cruza la guardia a conciencia; queda en el log.
+      log("mercadopago.payment", {
+        transaction_id: transactionId,
+        order_id: order.id,
+        user_name: order.user_name,
+        outcome: "renewal_recent_bypassed_admin",
+        recent_order_id: recentRenewal.id,
+      })
+    }
     const bonusMonths =
       Number.isInteger(order.bonus_months) && order.bonus_months > 0
         ? order.bonus_months
@@ -1355,7 +1491,10 @@ export async function reconcilePendingOrder(
  * deploy durante la llamada al panel). No vuelve a cobrar: re-ejecuta la
  * llamada al panel con la misma clave de idempotencia determinista.
  */
-export async function retryOrderRenewal(orderId: string): Promise<MpOrderRow> {
+export async function retryOrderRenewal(
+  orderId: string,
+  opts: { admin?: boolean } = {}
+): Promise<MpOrderRow> {
   const order = await getMpOrder(orderId)
   if (!order) {
     throw new MercadoPagoError(404, "not_found", "La orden no existe.")
@@ -1389,7 +1528,11 @@ export async function retryOrderRenewal(orderId: string): Promise<MpOrderRow> {
     order,
     order.payment_id === null ? null : String(order.payment_id),
     undefined,
-    { trigger: "admin_retry" }
+    {
+      // admin_retry = decisión humana: cruza la guardia anti-doble.
+      // buyer_retry = reintento del comprador: sigue sujeto a la guardia.
+      trigger: opts.admin ? "admin_retry" : "buyer_retry",
+    }
   )
 
   log("mercadopago.order_retry", {
@@ -1491,6 +1634,88 @@ export interface CreatedTransferOrder {
   orderId: string
   amount: number
   currency: string
+  /**
+   * true = la orden YA existía para este concepto de pago (reenvío del
+   * comprobante tras una respuesta perdida, o concepto consumido por ella):
+   * no se creó otra ni se re-escaneó. El comprador continúa con su estado
+   * real en lugar de duplicar el pago.
+   */
+  replayed: boolean
+  /** Estado actual de la orden (una recién creada es `pending`). */
+  status: MpOrderStatus
+  /** Motivos ya registrados (orden rechazada o en revisión). */
+  reasons: string[]
+}
+
+function isUniqueViolationPg(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "23505"
+  )
+}
+
+/** Orden de transferencia ligada a un concepto de pago (para el replay). */
+async function findTransferOrderByConcept(
+  conceptId: string
+): Promise<MpOrderRow | null> {
+  const result = await pool.query(
+    `SELECT * FROM mp_orders
+      WHERE concept_id = $1::uuid AND method = 'transferencia'
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [conceptId]
+  )
+  const row = result.rows[0]
+  return row ? parseRow(row as Record<string, unknown>) : null
+}
+
+/**
+ * Respuesta de replay: el estado REAL de la orden ya existente. Para una
+ * rechazada o en revisión incluye los motivos guardados del escaneo (o el
+ * motivo del admin) para que el comprador vea el veredicto en lugar de
+ * re-enviar el mismo comprobante.
+ */
+async function transferReplayPayload(
+  order: MpOrderRow
+): Promise<CreatedTransferOrder> {
+  const reasons: string[] = []
+  if (order.status === "rejected" || order.status === "pending") {
+    const scanRow = await pool.query<{ scan_result: unknown }>(
+      `SELECT scan_result FROM mp_orders WHERE id = $1::uuid`,
+      [order.id]
+    )
+    const scan = scanRow.rows[0]?.scan_result
+    const scanReasons =
+      scan && typeof scan === "object"
+        ? (scan as { reasons?: unknown }).reasons
+        : null
+    if (Array.isArray(scanReasons)) {
+      for (const item of scanReasons.slice(0, 6)) {
+        if (typeof item === "string" && item.length > 0) reasons.push(item)
+      }
+    }
+    if (reasons.length === 0 && typeof order.error === "string" && order.error) {
+      reasons.push(order.error)
+    }
+  }
+  return {
+    orderId: order.id,
+    amount: order.amount,
+    currency: order.currency,
+    replayed: true,
+    status: order.status,
+    reasons,
+  }
+}
+
+/** Replay por id: puerta del reenvío con el concepto YA consumido. */
+export async function getTransferOrderReplayPayload(
+  orderId: string
+): Promise<CreatedTransferOrder | null> {
+  const order = await getMpOrder(orderId)
+  if (!order || order.method !== "transferencia") return null
+  return transferReplayPayload(order)
 }
 
 /**
@@ -1512,34 +1737,78 @@ export async function createTransferOrder(params: {
   conceptId?: string
   conceptCode?: string
 }): Promise<CreatedTransferOrder> {
+  // Idempotencia por concepto (replay): el concepto es la llave de la
+  // intención de compra. Reenviar el comprobante tras una respuesta perdida
+  // (o un doble clic) devuelve la orden ORIGINAL en lugar de crear otra —
+  // dos órdenes con el mismo comprobante eran dos escaneos y potencialmente
+  // dos aprobaciones (caso real: LVP9 generó `renewed` + `rejected` a 25 s).
+  if (params.conceptId) {
+    const existing = await findTransferOrderByConcept(params.conceptId)
+    if (existing) {
+      log("mercadopago.transfer_replay", {
+        order_id: existing.id,
+        user_name: params.userName,
+        status: existing.status,
+      })
+      return transferReplayPayload(existing)
+    }
+  }
+
   const orderId = randomUUID()
   const bonusMonths = params.bonusMonths ?? 0
   const amount =
     Math.round(resolveMercadoPagoConfig().licensePriceMxn * params.months * 100) /
     100
 
-  await pool.query(
-    `INSERT INTO mp_orders
-       (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
-        external_reference, ticket_file_id, concept_id, concept_code)
-     VALUES ($1::uuid, 'pending', 'transferencia', $2, $3, $4, $5, 'MXN', $6,
-             $1::text, $7::uuid, $8::uuid, $9)`,
-    [
-      orderId,
-      params.userName,
-      params.months,
-      bonusMonths,
-      amount,
-      params.buyerUserId,
-      params.ticketFileId,
-      params.conceptId ?? null,
-      params.conceptCode ?? null,
-    ]
-  )
+  try {
+    await pool.query(
+      `INSERT INTO mp_orders
+         (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
+          external_reference, ticket_file_id, concept_id, concept_code)
+       VALUES ($1::uuid, 'pending', 'transferencia', $2, $3, $4, $5, 'MXN', $6,
+               $1::text, $7::uuid, $8::uuid, $9)`,
+      [
+        orderId,
+        params.userName,
+        params.months,
+        bonusMonths,
+        amount,
+        params.buyerUserId,
+        params.ticketFileId,
+        params.conceptId ?? null,
+        params.conceptCode ?? null,
+      ]
+    )
+  } catch (error) {
+    // Carrera de dos envíos con el mismo concepto activo: el índice único
+    // `mp_orders_concept_id_unique_idx` deja pasar solo al ganador y el
+    // perdedor responde con SU orden (replay) en lugar de un error 500 que
+    // el comprador reintentaría de nuevo.
+    if (isUniqueViolationPg(error) && params.conceptId) {
+      const winner = await findTransferOrderByConcept(params.conceptId)
+      if (winner) {
+        log("mercadopago.transfer_replay", {
+          order_id: winner.id,
+          user_name: params.userName,
+          status: winner.status,
+          raced: true,
+        })
+        return transferReplayPayload(winner)
+      }
+    }
+    throw error
+  }
 
   notifyOrderChange({ id: orderId, user_name: params.userName }, "pending")
 
-  return { orderId, amount, currency: "MXN" }
+  return {
+    orderId,
+    amount,
+    currency: "MXN",
+    replayed: false,
+    status: "pending",
+    reasons: [],
+  }
 }
 
 export interface TransferScanSummary {
@@ -1987,6 +2256,25 @@ export async function createCouponOrder(params: {
         429,
         "coupon_monthly_limit",
         `Ya canjeaste el máximo de ${monthlyLimit} cupones este mes.`
+      )
+    }
+
+    // Guardia anti-doble-renovación (capa de canje): si otra orden pagada
+    // renovó a este usuario hace segundos/minutos, el canje casi siempre es
+    // un pago accidental doble (el comprador no vio que la primera ya
+    // aplicó). Se rechaza ANTES del débito: sin orden, sin cargo en cupones,
+    // y el comprador recibe el motivo con la espera restante. La carrera con
+    // una transferencia aprobándose en paralelo la cierra la guardia dentro
+    // de la renovación (capa de renovación), que sella la orden como
+    // `renewal_failed` sin empujar a través del cooldown del panel.
+    const recentRenewal = await findRecentRenewedOrder({
+      userName: params.userName,
+    })
+    if (recentRenewal) {
+      throw new MercadoPagoError(
+        409,
+        "renovacion_reciente",
+        recentRenewalMessage(params.userName, recentRenewal)
       )
     }
 

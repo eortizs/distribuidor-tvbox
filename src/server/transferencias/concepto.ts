@@ -225,6 +225,49 @@ export async function getActiveTransferConcept(input: {
     : null
 }
 
+/** Concepto consumido con la orden que lo consumió (para el replay). */
+export interface ConsumedTransferConcept {
+  conceptId: string
+  /** Orden que lo consumió (aprobada o rechazada); nunca de otro comprador. */
+  orderId: string
+  periodMonth: string
+}
+
+/**
+ * Resuelve un código YA consumido del comprador + usuario + mes actual a la
+ * orden que lo consumió. Es la mitad de la idempotencia del envío: el
+ * comprador que reintenta la subida de su comprobante después de una
+ * respuesta perdida no recibe «concepto inválido» (un callejón que invita a
+ * pagar dos veces) sino el estado REAL de su orden anterior. Null = el
+ * código no existe, es ajeno o venció con el mes: el 422 de siempre.
+ */
+export async function resolveConsumedTransferConcept(input: {
+  buyerUserId: string
+  userName: string
+  code: string
+}): Promise<ConsumedTransferConcept | null> {
+  const periodMonth = currentPeriodMonth()
+  const result = await pool.query<{
+    id: string
+    consumed_by_order_id: string | null
+    period_month: string
+  }>(
+    `SELECT id, consumed_by_order_id, period_month
+       FROM transfer_concepts
+      WHERE buyer_user_id = $1::uuid AND user_name = $2
+        AND code = $3 AND period_month = $4 AND status = 'consumed'
+      LIMIT 1`,
+    [input.buyerUserId, input.userName.trim(), input.code.toUpperCase(), periodMonth]
+  )
+  const row = result.rows[0]
+  if (!row || !row.consumed_by_order_id) return null
+  return {
+    conceptId: String(row.id),
+    orderId: String(row.consumed_by_order_id),
+    periodMonth: String(row.period_month),
+  }
+}
+
 /**
  * Anula el concepto ligado a una orden terminada (aprobada o rechazada):
  * la siguiente transacción del comprador recibe un código nuevo. Mejor
