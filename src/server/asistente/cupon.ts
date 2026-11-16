@@ -6,16 +6,14 @@ import {
   resolveClientScope,
 } from "@/server/flujotv/scope"
 import { getFlujoClient } from "@/server/flujotv/service"
-import {
-  isCouponQaEnabled,
-  licensePriceMxnOrNull,
-} from "@/server/mercadopago/config"
+import { isCouponQaEnabled } from "@/server/mercadopago/config"
 import { MercadoPagoError } from "@/server/mercadopago/errors"
 import {
   createCouponOrder,
   type CreatedCouponOrder,
 } from "@/server/mercadopago/service"
 import { getSaldosActual } from "@/server/saldo/service"
+import { clientLicensePriceMxnOrNull } from "@/server/clientes/metadata"
 
 import {
   appendConversationMessage,
@@ -133,7 +131,9 @@ export async function handleRenovarCuponCommand(input: {
 }): Promise<{ text: string }> {
   const userName = input.name.trim()
 
-  const price = licensePriceMxnOrNull()
+  // Precio vigente del cliente: el especial si lo tiene (client_metadata),
+  // o el general del servidor.
+  const price = await clientLicensePriceMxnOrNull(userName)
   if (price === null) {
     return {
       text: "El pago con cupón no está disponible en este momento: el servidor no tiene configurado el precio de la licencia. Avisa al administrador.",

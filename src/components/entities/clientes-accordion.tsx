@@ -168,9 +168,23 @@
  * desplazable en horizontal con el scrollbar oculto; un chevron gris
  * flotante en el margen derecho solo sugiere que la fila continúa: el
  * tooltip «deslizar» aparece al hover o tap y el tap además recorre la fila
- * hasta el final para demostrar el gesto. Con perfil distribuidor el
+ *   y el tap además recorre la fila hasta el final para demostrar el gesto. Con perfil distribuidor el
  * builder omite el campo Distribuidor y la opción Socio (todas las filas
  * comparten el mismo).
+ *
+ * El contenido expandido de cada fila lleva, bajo la línea del socio, el
+ * botón **Detalles** — la única vía al bottom sheet con los datos del
+ * cliente (Drawer con asa de arrastre): arriba la identidad con el estado
+ * del semáforo, luego los datos del panel de FlujoTV en solo lectura
+ * (próximo vencimiento, nombre propio, distribuidor y cuenta con copia) y
+ * al final los datos locales de la app (tabla `client_metadata`, API
+ * `/api/clientes/metadata`): alias (nombre propio editable para el listado),
+ * WhatsApp de contacto (con copia y enlace wa.me) y el costo de la licencia
+ * PARA ESE cliente — solo el admin lo edita; vacío = precio general
+ * `LICENSE_PRICE_MXN`. Ese precio especial es el que después aplican todos
+ * los flujos de cobro (el servidor resuelve lo mismo en Mercado Pago,
+ * transferencia y cupón, y también en las herramientas del asistente), y el
+ * sheet de pago lee su resumen de ahí.
  *
  * El dato viene de `GET /api/flujotv/clients`, el mismo endpoint de la
  * pestaña Clientes del Lab; la búsqueda filtra en cliente por usuario,
@@ -206,6 +220,7 @@ import {
   ChevronRightIcon,
   CircleCheckIcon,
   CopyIcon,
+  ExternalLinkIcon,
   FileTextIcon,
   HashIcon,
   ImageIcon,
@@ -354,6 +369,7 @@ import {
   foldTerm,
   formatFlujoDate,
   type FlujoClient,
+  type FlujoClientsResponse,
 } from "@/lib/flujotv"
 import { mpProcessingFeeMxn, mpTotalMxn } from "@/lib/mp-pricing"
 import {
@@ -406,6 +422,14 @@ type FetchState = "loading" | "success" | "error"
 
 /** Métodos de pago del bottom sheet de renovación. */
 type PayMethod = "mercadopago" | "transferencia" | "cupon"
+
+/**
+ * Metadatos locales de un cliente (tabla `client_metadata` del servidor):
+ * alias editable, WhatsApp de contacto y precio especial de la licencia
+ * (null = usa el precio general). La llave del mapa es el usuario en
+ * minúsculas, como envía `/api/flujotv/clients`.
+ */
+type ClientMetaEntry = NonNullable<FlujoClientsResponse["clientMeta"]>[string]
 
 /**
  * Pasos del flujo de transferencia bancaria: primero el concepto de pago
@@ -938,6 +962,26 @@ export function ClientesAccordion({
   const [purchasing, setPurchasing] = useState(false)
   const [payError, setPayError] = useState<string | null>(null)
   /**
+   * Metadatos locales por cliente (alias, WhatsApp, precio especial), del
+   * listado (`clientMeta` de /api/flujotv/clients) y actualizados al guardar
+   * el sheet «Detalles». La llave es el usuario en minúsculas.
+   */
+  const [clientMeta, setClientMeta] = useState<Record<string, ClientMetaEntry>>(
+    {}
+  )
+  /** Bottom sheet «Detalles» del cliente: abierto al pulsar su nombre. */
+  const [detailsOpen, setDetailsOpen] = useState(false)
+  const [detailsTarget, setDetailsTarget] = useState<FlujoClient | null>(null)
+  /** Borradores del sheet «Detalles». */
+  const [draftAlias, setDraftAlias] = useState("")
+  const [draftWhatsapp, setDraftWhatsapp] = useState("")
+  const [draftPrice, setDraftPrice] = useState("")
+  const [savingMeta, setSavingMeta] = useState(false)
+  /** Qué valor del sheet «Detalles» se acaba de copiar (feedback breve). */
+  const [metaCopied, setMetaCopied] = useState<"usuario" | "whatsapp" | null>(
+    null
+  )
+  /**
    * Método elegido en el sheet; null = lista sin selección: al abrir no hay
    * método por defecto y el usuario elige entre las tres opciones. Cada
    * opción abre su propia pantalla (la lista desaparece) y «Cambiar método
@@ -1002,13 +1046,23 @@ export function ClientesAccordion({
     setSaldoCuponesVigente(saldoCupones)
   }
   /**
+   * Precio vigente del cliente objetivo del sheet de pago: el especial si el
+   * cliente lo tiene (`client_metadata.price_mxn`), o el general del
+   * servidor. Todos los importes del checkout se leen de aquí, para que lo
+   * cobrado coincida con lo mostrado (el servidor resuelve lo mismo).
+   */
+  const purchaseMetaEntry = purchaseTarget
+    ? clientMeta[purchaseTarget.userName.trim().toLowerCase()] ?? null
+    : null
+  const purchasePriceMxn = purchaseMetaEntry?.price_mxn ?? priceMxn
+  /**
    * El cupón debita el saldo en cupones: sin saldo suficiente el canje se
    * bloquea en la ventana (y el servidor lo revalida igual antes de aceptar).
    */
   const couponSaldoInsuficiente =
     saldoCuponesVigente !== null &&
-    priceMxn !== null &&
-    saldoCuponesVigente < priceMxn
+    purchasePriceMxn !== null &&
+    saldoCuponesVigente < purchasePriceMxn
   /**
    * Orden con renovación fallida pendiente de recuperación en este canje: el
    * botón principal pasa de «Aplicar cupón» a «Reintentar renovación» (sin
@@ -1178,6 +1232,7 @@ export function ClientesAccordion({
         if (requestId !== requestCounter.current) return
         setClients(data.clients)
         setClientNames(data.clientNames ?? {})
+        setClientMeta(data.clientMeta ?? {})
         setResellerNames(names)
         setUserResellers(byUser)
         setErrorMessage(null)
@@ -1203,6 +1258,129 @@ export function ClientesAccordion({
     },
     [userResellers]
   )
+
+  /** Metadatos locales del cliente; null si nunca se editó. */
+  const metaOf = useCallback(
+    (userName: string): ClientMetaEntry | null =>
+      clientMeta[userName.trim().toLowerCase()] ?? null,
+    [clientMeta]
+  )
+
+  /** Precio vigente del cliente: el especial si lo tiene, o el general. */
+  const effectivePriceMxn = useCallback(
+    (userName: string): number | null =>
+      metaOf(userName)?.price_mxn ?? priceMxn,
+    [metaOf, priceMxn]
+  )
+
+  /** Nombre mostrado del cliente: alias local o nombre propio del panel. */
+  const clientDisplayName = useCallback(
+    (client: FlujoClient): string =>
+      metaOf(client.userName)?.alias || clientName(client, clientNames),
+    [metaOf, clientNames]
+  )
+
+  /** Copia un valor del sheet «Detalles» al portapapeles con feedback breve. */
+  const copyMetaValue = useCallback((value: string, key: "usuario" | "whatsapp") => {
+    navigator.clipboard
+      .writeText(value)
+      .then(() => {
+        setMetaCopied(key)
+        window.setTimeout(() => setMetaCopied(null), 2000)
+      })
+      .catch(() => {
+        toast.error("No se pudo copiar el valor.")
+      })
+  }, [])
+
+  /** Abre el sheet «Detalles» del cliente con sus datos precargados. */
+  const openDetails = useCallback(
+    (client: FlujoClient) => {
+      const meta = clientMeta[client.userName.trim().toLowerCase()] ?? null
+      setDetailsTarget(client)
+      setDraftAlias(meta?.alias ?? "")
+      setDraftWhatsapp(meta?.whatsapp_phone ?? "")
+      setDraftPrice(meta?.price_mxn != null ? String(meta.price_mxn) : "")
+      setMetaCopied(null)
+      setDetailsOpen(true)
+    },
+    [clientMeta]
+  )
+
+  /** Borradores del sheet «Detalles» listos para guardar. */
+  const draftPriceTrim = draftPrice.trim()
+  const draftPriceInvalid =
+    draftPriceTrim.length > 0 &&
+    (!Number.isFinite(Number(draftPriceTrim)) || Number(draftPriceTrim) <= 0)
+  /** Enlace wa.me del WhatsApp borrador (null sin dígitos suficientes). */
+  const whatsappWaLink = (() => {
+    const digits = draftWhatsapp.replace(/[^0-9]/g, "")
+    return digits.length >= 8 ? `https://wa.me/${digits}` : null
+  })()
+
+  /**
+   * Guarda los metadatos del cliente (alias, WhatsApp y, para el admin, el
+   * precio especial): PUT /api/clientes/metadata con los tres campos (null
+   * borra el dato; el precio especial vacío = usar el precio general). Al
+   * guardar actualiza el mapa local para que la fila y el sheet de pago
+   * reflejen los cambios al instante.
+   */
+  const saveMetadata = useCallback(async () => {
+    if (!detailsTarget || savingMeta) return
+    const userName = detailsTarget.userName.trim()
+    const priceValue =
+      draftPriceTrim.length > 0
+        ? Math.round(Number(draftPriceTrim) * 100) / 100
+        : null
+    setSavingMeta(true)
+    try {
+      const response = await fetch("/api/clientes/metadata", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          usuario: userName,
+          alias: draftAlias.trim() || null,
+          whatsapp_phone: draftWhatsapp.trim() || null,
+          ...(isAdmin ? { price_mxn: priceValue } : {}),
+        }),
+      })
+      const json = (await response.json().catch(() => null)) as {
+        ok?: boolean
+        error?: { message?: string }
+        data?: ClientMetaEntry
+      } | null
+      if (!response.ok || !json?.ok || !json.data) {
+        toast.error(
+          json?.error?.message ?? "No se pudo guardar los detalles."
+        )
+        return
+      }
+      const saved = json.data
+      setClientMeta((current) => ({
+        ...current,
+        [userName.toLowerCase()]: {
+          alias: saved.alias,
+          whatsapp_phone: saved.whatsapp_phone,
+          price_mxn: saved.price_mxn,
+        },
+      }))
+      setDetailsOpen(false)
+      toast.success("Detalles guardados", {
+        description: `${userName} · los cambios ya aparecen en el listado.`,
+      })
+    } catch {
+      toast.error("No se pudo guardar los detalles.")
+    } finally {
+      setSavingMeta(false)
+    }
+  }, [
+    detailsTarget,
+    savingMeta,
+    draftAlias,
+    draftWhatsapp,
+    draftPriceTrim,
+    isAdmin,
+  ])
 
   const reload = useCallback(() => {
     setFetchState("loading")
@@ -2360,12 +2538,17 @@ export function ClientesAccordion({
             </AvatarFallback>
           </Avatar>
           <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 pr-14">
+            {/*
+             * El nombre vuelve a ser texto plano: la fila entera es el botón
+             * del acordeón; el bottom sheet «Detalles» SOLO abre con su botón
+             * (vive en el contenido expandido, bajo la línea del socio).
+             */}
             <span className="truncate text-base font-semibold tracking-tight">
               {client.userName}
             </span>
-            {clientName(client, clientNames) ? (
+            {clientDisplayName(client) ? (
               <span className="line-clamp-2 text-muted-foreground text-xs">
-                {clientName(client, clientNames)}
+                {clientDisplayName(client)}
               </span>
             ) : null}
             {client.expiresAt || client.daysRemaining !== null ? (
@@ -2412,6 +2595,23 @@ export function ClientesAccordion({
               socio: {resellerOf(client)}
             </span>
           ) : null}
+          {/*
+           * Botón «Detalles»: la única vía al bottom sheet con los datos del
+           * cliente. Tamaño estándar de app móvil (altura 36 px, relleno
+           * lateral 16 px, área táctil ≥ 44 px) y fondo invertido del tema
+           * (`foreground`: negro en claro, blanco en oscuro), igual que las
+           * vistas activas de la barra de filtros.
+           */}
+          <Button
+            variant="ghost"
+            size="lg"
+            onClick={() => openDetails(client)}
+            className="mt-1 h-9 w-fit bg-foreground px-4 text-background text-sm font-medium hover:bg-foreground/90"
+            aria-haspopup="dialog"
+            aria-label={`Ver detalles de ${client.userName}`}
+          >
+            Detalles
+          </Button>
         </div>
       </AccordionContent>
     </AccordionItem>
@@ -3621,7 +3821,9 @@ export function ClientesAccordion({
                 </div>
                 {!mpBreakdown ? (
                   <span className="text-lg font-semibold tabular-nums">
-                    {priceMxn !== null ? formatMxn(priceMxn) : "—"}
+                    {purchasePriceMxn !== null
+                      ? formatMxn(purchasePriceMxn)
+                      : "—"}
                   </span>
                 ) : null}
               </div>
@@ -3661,7 +3863,9 @@ export function ClientesAccordion({
                       Concepto (costo de licencia)
                     </span>
                     <span className="font-medium tabular-nums">
-                      {priceMxn !== null ? formatMxn(priceMxn) : "—"}
+                      {purchasePriceMxn !== null
+                        ? formatMxn(purchasePriceMxn)
+                        : "—"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between gap-2">
@@ -3669,8 +3873,8 @@ export function ClientesAccordion({
                       Costo por procesamiento
                     </span>
                     <span className="font-medium tabular-nums">
-                      {priceMxn !== null
-                        ? formatMxn(mpProcessingFeeMxn(priceMxn))
+                      {purchasePriceMxn !== null
+                        ? formatMxn(mpProcessingFeeMxn(purchasePriceMxn))
                         : "—"}
                     </span>
                   </div>
@@ -3679,7 +3883,9 @@ export function ClientesAccordion({
                  <div className="flex items-center justify-between gap-2">
                    <span className="text-sm font-medium">Total</span>
                    <span className="text-lg font-semibold tabular-nums">
-                     {priceMxn !== null ? formatMxn(mpTotalMxn(priceMxn)) : "—"}
+                     {purchasePriceMxn !== null
+                       ? formatMxn(mpTotalMxn(purchasePriceMxn))
+                       : "—"}
                    </span>
                  </div>
                </div>
@@ -4090,9 +4296,11 @@ export function ClientesAccordion({
                      <AlertTitle>Saldo en cupones insuficiente</AlertTitle>
                      <AlertDescription>
                        <p>
-                         El cupón debita tu saldo en cupones: la renovación
-                         cuesta{" "}
-                         {priceMxn !== null ? formatMxn(priceMxn) : "—"} y tu
+                          El cupón debita tu saldo en cupones: la renovación
+                          cuesta{" "}
+                          {purchasePriceMxn !== null
+                            ? formatMxn(purchasePriceMxn)
+                            : "—"} y tu
                          saldo es{" "}
                          {saldoCuponesVigente !== null
                            ? formatMxn(saldoCuponesVigente)
@@ -4132,7 +4340,7 @@ export function ClientesAccordion({
                </div>
              ) : null}
 
-            {priceMxn === null ? (
+            {purchasePriceMxn === null ? (
               <Alert variant="warning">
                 <TriangleAlertIcon aria-hidden="true" />
                 <AlertTitle>Pago no configurado</AlertTitle>
@@ -4181,7 +4389,7 @@ export function ClientesAccordion({
                   submittingCoupon ||
                   couponPolling ||
                   couponCode.length !== COUPON_CODE_LENGTH ||
-                  priceMxn === null ||
+                  purchasePriceMxn === null ||
                   couponSaldoInsuficiente
                 }
               >
@@ -4225,7 +4433,7 @@ export function ClientesAccordion({
                   disabled={
                     submittingTransfer ||
                     ticketFiles.files.length === 0 ||
-                    priceMxn === null
+                    purchasePriceMxn === null
                   }
                 >
                   {submittingTransfer ? (
@@ -4246,7 +4454,7 @@ export function ClientesAccordion({
               <Button
                 size="lg"
                 onClick={() => void submitPurchase()}
-                disabled={purchasing || priceMxn === null}
+                disabled={purchasing || purchasePriceMxn === null}
               >
                 {purchasing ? (
                   <>
@@ -4281,7 +4489,289 @@ export function ClientesAccordion({
       </Drawer>
 
       {/*
-       * Bloqueo de renovación (transferencia): cubre toda la app hasta el
+       * Bottom sheet «Detalles» del cliente: se abre al pulsar el nombre en
+       * la fila. Arriba los datos de solo lectura del panel de FlujoTV
+       * (vencimiento, nombre, distribuidor y cuenta, con copia), abajo los
+       * datos propios de la app: alias, WhatsApp y el costo de la licencia
+       * para ESE cliente (editable solo por el admin; null = usa el precio
+       * general, y ese precio especial es el que luego cobran TODOS los
+       * flujos de renovación). Mientras guarda no se cierra.
+       */}
+      <Drawer
+        open={detailsOpen}
+        onOpenChange={(open) => {
+          if (!open && savingMeta) return
+          setDetailsOpen(open)
+        }}
+        showSwipeHandle
+      >
+        <DrawerContent>
+          <DrawerHeader>
+            <DrawerTitle>Detalles del cliente</DrawerTitle>
+            <DrawerDescription>
+              Datos del panel de FlujoTV (solo lectura) y datos locales del
+              cliente.
+            </DrawerDescription>
+          </DrawerHeader>
+          {detailsTarget ? (
+            <div className="no-scrollbar flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+              {/*
+               * Identidad: alias/nombre propio con el estado del semáforo;
+               * la cuenta exacta (tv3user) vive en el bloque de solo lectura.
+               */}
+              <div className="flex items-center gap-3">
+                <Avatar className="size-12">
+                  <AvatarFallback
+                    style={pastelAvatarStyle(
+                      detailsTarget.id || detailsTarget.userName
+                    )}
+                  >
+                    {initials(detailsTarget.userName)}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="truncate text-base font-semibold tracking-tight">
+                    {clientDisplayName(detailsTarget) || detailsTarget.userName}
+                  </span>
+                  <span className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                    <span
+                      role="img"
+                      aria-label={detailsTarget.statusLabel}
+                      className={`size-2 shrink-0 rounded-full ${statusDotClass(detailsTarget.status)}`}
+                    />
+                    {clientEstadoLabel(detailsTarget.statusLabel)}
+                  </span>
+                </div>
+              </div>
+              <Separator />
+              {/*
+               * Datos del panel de FlujoTV: solo lectura, tal como llegan del
+               * listado. La cuenta lleva copia porque es la llave que se
+               * comparte por chat.
+               */}
+              <div
+                role="group"
+                aria-label="Datos del panel de FlujoTV"
+                className="flex flex-col gap-1.5 text-xs"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="shrink-0 text-muted-foreground">
+                    Próximo vencimiento
+                  </span>
+                  <span className="truncate text-right font-medium tabular-nums">
+                    {detailsTarget.expiresAt
+                      ? `vence ${formatFlujoDate(detailsTarget.expiresAt)}`
+                      : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="shrink-0 text-muted-foreground">
+                    Nombre del cliente
+                  </span>
+                  <span className="truncate text-right font-medium">
+                    {clientName(detailsTarget, clientNames) || "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="shrink-0 text-muted-foreground">
+                    Distribuidor
+                  </span>
+                  <span className="truncate text-right font-medium">
+                    {resellerOf(detailsTarget) || "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="shrink-0 text-muted-foreground">Cuenta</span>
+                  <span className="flex min-w-0 items-center gap-1 font-medium tabular-nums">
+                    <span className="truncate">{detailsTarget.userName}</span>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-xs"
+                      onClick={() =>
+                        copyMetaValue(detailsTarget.userName, "usuario")
+                      }
+                      aria-label="Copiar la cuenta"
+                      className="relative after:content-[''] after:absolute after:-inset-2"
+                    >
+                      {metaCopied === "usuario" ? (
+                        <CheckIcon aria-hidden="true" />
+                      ) : (
+                        <CopyIcon aria-hidden="true" />
+                      )}
+                    </Button>
+                  </span>
+                </div>
+              </div>
+              <Separator />
+              {/*
+               * Costo por licencia: el dato que manda en el cobro. El admin lo
+               * edita aquí (vacío = precio general); el distribuidor solo lo
+               * consulta.
+               */}
+              <Field>
+                <FieldLabel htmlFor="client-meta-price">
+                  Costo por licencia
+                </FieldLabel>
+                {isAdmin ? (
+                  <>
+                    <InputGroup className="h-9">
+                      <InputGroupAddon align="inline-start" className="pl-2.5">
+                        $
+                      </InputGroupAddon>
+                      <InputGroupInput
+                        id="client-meta-price"
+                        inputMode="decimal"
+                        value={draftPrice}
+                        onChange={(event) => setDraftPrice(event.target.value)}
+                        placeholder={
+                          priceMxn !== null ? String(priceMxn) : "0.00"
+                        }
+                        aria-invalid={draftPriceInvalid || undefined}
+                        aria-label="Costo por licencia en pesos mexicanos"
+                      />
+                    </InputGroup>
+                    <FieldDescription
+                      className={
+                        draftPriceInvalid ? "text-destructive" : undefined
+                      }
+                    >
+                      {draftPriceInvalid
+                        ? "Escribe un precio válido mayor que 0."
+                        : draftPriceTrim.length === 0
+                          ? priceMxn !== null
+                            ? `Sin precio especial: usa el general (${formatMxn(priceMxn)}).`
+                            : "Sin precio especial: usa el general del servidor."
+                          : `Precio especial para este cliente; déjalo vacío para usar el general${priceMxn !== null ? ` (${formatMxn(priceMxn)})` : ""}.`}
+                    </FieldDescription>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+                      <span className="text-muted-foreground text-xs">
+                        Precio especial
+                      </span>
+                      <span className="text-sm font-medium tabular-nums">
+                        {metaOf(detailsTarget.userName)?.price_mxn != null
+                          ? formatMxn(
+                              metaOf(detailsTarget.userName)?.price_mxn ??
+                                0
+                            )
+                          : "Sin precio especial"}
+                      </span>
+                    </div>
+                    <FieldDescription>
+                      Lo fija el administrador. Vigente para este cliente:{" "}
+                      {effectivePriceMxn(detailsTarget.userName) !== null
+                        ? formatMxn(effectivePriceMxn(detailsTarget.userName) ?? 0)
+                        : "—"}
+                      .
+                    </FieldDescription>
+                  </>
+                )}
+              </Field>
+              {/*
+               * WhatsApp: contacto del cliente. Con número válido se ofrece
+               * abrir el chat directo (wa.me) además de la copia.
+               */}
+              <Field>
+                <FieldLabel htmlFor="client-meta-whatsapp">WhatsApp</FieldLabel>
+                <InputGroup className="h-9">
+                  <InputGroupInput
+                    id="client-meta-whatsapp"
+                    type="tel"
+                    inputMode="tel"
+                    value={draftWhatsapp}
+                    onChange={(event) => setDraftWhatsapp(event.target.value)}
+                    placeholder="+52 55 1234 5678"
+                  />
+                  <InputGroupAddon align="inline-end" className="mr-0 pr-1.5">
+                    <InputGroupButton
+                      size="icon-sm"
+                      className="rounded-full"
+                      onClick={() => {
+                        const value = draftWhatsapp.trim()
+                        if (value.length > 0) copyMetaValue(value, "whatsapp")
+                      }}
+                      disabled={draftWhatsapp.trim().length === 0}
+                      aria-label="Copiar el WhatsApp"
+                    >
+                      {metaCopied === "whatsapp" ? (
+                        <CheckIcon aria-hidden="true" />
+                      ) : (
+                        <CopyIcon aria-hidden="true" />
+                      )}
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                </InputGroup>
+                <FieldDescription>
+                  Con código de país; ej. +5215512345678.
+                </FieldDescription>
+                {whatsappWaLink ? (
+                  <a
+                    href={whatsappWaLink}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex w-fit items-center gap-1.5 text-primary text-xs font-medium underline-offset-2 hover:underline"
+                  >
+                    <ExternalLinkIcon
+                      aria-hidden="true"
+                      className="size-3.5"
+                    />
+                    Abrir chat de WhatsApp
+                  </a>
+                ) : null}
+              </Field>
+              {/*
+               * Alias: nombre propio editable para el listado — el nombre del
+               * panel viene de la columna Notas y no se puede cambiar.
+               */}
+              <Field>
+                <FieldLabel htmlFor="client-meta-alias">Alias</FieldLabel>
+                <Input
+                  id="client-meta-alias"
+                  value={draftAlias}
+                  onChange={(event) => setDraftAlias(event.target.value)}
+                  maxLength={80}
+                  placeholder="Ej. Armando Ortiz"
+                />
+                <FieldDescription>
+                  Nombre propio para tu listado; el del panel es de solo
+                  lectura.
+                </FieldDescription>
+              </Field>
+            </div>
+          ) : null}
+          <DrawerFooter>
+            <Button
+              onClick={() => void saveMetadata()}
+              disabled={savingMeta || draftPriceInvalid || !detailsTarget}
+            >
+              {savingMeta ? (
+                <>
+                  <LoaderCircleIcon
+                    aria-hidden="true"
+                    className="animate-spin"
+                  />
+                  Guardando…
+                </>
+              ) : (
+                "Guardar cambios"
+              )}
+            </Button>
+            <DrawerClose
+              render={
+                <Button variant="outline" disabled={savingMeta}>
+                  Cancelar
+                </Button>
+              }
+            />
+          </DrawerFooter>
+        </DrawerContent>
+      </Drawer>
+
+      {/*
+        * Bloqueo de renovación (transferencia): cubre toda la app hasta el
        * 100% del proceso, con las etapas visibles (comprobante → renovación
        * → resultado). Solo el botón del panel final libera; si el usuario
        * recarga o cierra la pestaña, el bloqueo se restaura desde

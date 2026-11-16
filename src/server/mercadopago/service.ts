@@ -11,6 +11,7 @@ import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
 import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
 import { mpTotalMxn } from "@/lib/mp-pricing"
 import { applySaldoCredit } from "@/server/saldo/service"
+import { clientLicensePriceMxnOrNull } from "@/server/clientes/metadata"
 import {
   newTransactionId,
   recordOrderEventDetached,
@@ -554,8 +555,12 @@ export async function createPaymentOrder(params: {
   const config = resolveMercadoPagoConfig()
   const orderId = randomUUID()
   const bonusMonths = params.bonusMonths ?? 0
+  // Precio vigente del cliente: el especial si lo tiene (client_metadata),
+  // o el general del servidor. La orden congela este importe.
+  const unitPriceMxn =
+    (await clientLicensePriceMxnOrNull(params.userName)) ?? config.licensePriceMxn
   const netAmount =
-    Math.round(config.licensePriceMxn * params.months * 100) / 100
+    Math.round(unitPriceMxn * params.months * 100) / 100
   const amount = mpTotalMxn(netAmount)
   const title =
     bonusMonths > 0
@@ -1757,8 +1762,12 @@ export async function createTransferOrder(params: {
   const orderId = randomUUID()
   const bonusMonths = params.bonusMonths ?? 0
   const amount =
-    Math.round(resolveMercadoPagoConfig().licensePriceMxn * params.months * 100) /
-    100
+    Math.round(
+      ((await clientLicensePriceMxnOrNull(params.userName)) ??
+        resolveMercadoPagoConfig().licensePriceMxn) *
+        params.months *
+        100
+    ) / 100
 
   try {
     await pool.query(
@@ -2219,9 +2228,14 @@ export async function createCouponOrder(params: {
   // comprador: sin ella, dos solicitudes concurrentes con distinto
   // request_id pasan ambas el conteo y crean dos órdenes pagadas (cada canje
   // de paquete regala 7-14 meses, así que la carrera cuesta meses, no pesos).
+  // Precio vigente del cliente: el especial si lo tiene, o el general.
   const amount =
-    Math.round(resolveMercadoPagoConfig().licensePriceMxn * params.months * 100) /
-    100
+    Math.round(
+      ((await clientLicensePriceMxnOrNull(params.userName)) ??
+        resolveMercadoPagoConfig().licensePriceMxn) *
+        params.months *
+        100
+    ) / 100
 
   const tx = await pool.connect()
   let insertedId: string | null = null

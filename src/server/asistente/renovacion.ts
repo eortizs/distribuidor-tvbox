@@ -12,9 +12,9 @@ import {
   formatFlujoDate,
 } from "@/lib/flujotv"
 import {
-  licensePriceMxnOrNull,
   transferBankDataOrNull,
 } from "@/server/mercadopago/config"
+import { clientLicensePriceMxnOrNull } from "@/server/clientes/metadata"
 import {
   createTransferOrder,
   getTransferOrderReplayPayload,
@@ -147,7 +147,9 @@ export async function handleRenovarCommand(input: {
 }): Promise<{ text: string }> {
   const userName = input.name.trim()
 
-  const price = licensePriceMxnOrNull()
+  // Precio vigente del cliente: el especial si lo tiene (client_metadata),
+  // o el general del servidor.
+  const price = await clientLicensePriceMxnOrNull(userName)
   if (price === null) {
     return {
       text: "El pago por transferencia no está disponible en este momento: el servidor no tiene configurado el precio de la licencia. Avisa al administrador.",
@@ -342,7 +344,7 @@ async function receiptGate(input: {
   user: AuthUser
   userName: string
 }): Promise<string | null> {
-  if (licensePriceMxnOrNull() === null) {
+  if ((await clientLicensePriceMxnOrNull(input.userName)) === null) {
     return "El pago por transferencia no está disponible en este momento: el servidor no tiene configurado el precio de la licencia. Avisa al administrador."
   }
   const scope = await resolveClientScope(input.user)
@@ -532,7 +534,7 @@ async function handleComprobanteConCodigo(
     const reply = textConceptoSinComprobante({
       code: concept.code,
       userName: concept.userName,
-      amount: licensePriceMxnOrNull(),
+      amount: await clientLicensePriceMxnOrNull(concept.userName),
     })
     await persistTurns({
       userId: input.user.id,

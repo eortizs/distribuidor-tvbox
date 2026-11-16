@@ -34,6 +34,7 @@ import {
 } from "@/server/finanzas/gastos"
 import { MercadoPagoError } from "@/server/mercadopago/errors"
 import { isCouponQaEnabled, licensePriceMxnOrNull } from "@/server/mercadopago/config"
+import { clientLicensePriceMxnOrNull } from "@/server/clientes/metadata"
 import { createCouponOrder, getMpOrder } from "@/server/mercadopago/service"
 import { getSaldosActual } from "@/server/saldo/service"
 import { listarVista } from "@/server/tickets/service"
@@ -902,7 +903,11 @@ async function quoteRenewal(
         : "Los meses deben ser 1, 3, 6 o 12."
     )
   }
-  const price = licensePriceMxnOrNull()
+  // Precio vigente del cliente: el especial si lo tiene (client_metadata),
+  // o el general del servidor; los paquetes no tienen precio por cliente.
+  const price = paquete
+    ? licensePriceMxnOrNull()
+    : await clientLicensePriceMxnOrNull(userName)
   if (price === null) {
     throw new AppError(
       503,

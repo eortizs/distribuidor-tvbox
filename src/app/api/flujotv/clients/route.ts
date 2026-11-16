@@ -1,4 +1,5 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
+import { listClientMetadata } from "@/server/clientes/metadata"
 import { flujoErrorResponse } from "@/server/flujotv/http"
 import {
   fetchFlujoClientNames,
@@ -58,6 +59,12 @@ export async function GET(request: Request) {
         )
       : null
 
+    // Metadatos locales (alias, WhatsApp, precio especial) acotados al mismo
+    // alcance: alimentan el subtítulo de la fila y el sheet «Detalles».
+    const clientMeta = await listClientMetadata([...scopedUsernames]).catch(
+      () => ({})
+    )
+
     return Response.json({
       ok: true,
       data: {
@@ -65,6 +72,16 @@ export async function GET(request: Request) {
         total: scope.kind === "all" ? result.total : clients.length,
         endpoint: result.endpoint,
         clientNames,
+        clientMeta: Object.fromEntries(
+          Object.entries(clientMeta).map(([username, meta]) => [
+            username,
+            {
+              alias: meta.alias,
+              whatsapp_phone: meta.whatsappPhone,
+              price_mxn: meta.priceMxn,
+            },
+          ])
+        ),
       },
     })
   } catch (error) {

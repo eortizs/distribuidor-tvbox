@@ -96,6 +96,15 @@ export interface FlujoClientsResponse {
    * columna Notas del panel vía `/client_names`; null si esa lectura falló.
    */
   clientNames?: Record<string, string> | null
+  /**
+   * Mapa usuario (en minúsculas) → metadatos locales de la app (tabla
+   * `client_metadata`): alias editable, WhatsApp de contacto y precio
+   * especial por cliente (null = usa el precio general).
+   */
+  clientMeta?: Record<
+    string,
+    { alias: string | null; whatsapp_phone: string | null; price_mxn: number | null }
+  >
 }
 
 export interface FlujoClientName {
