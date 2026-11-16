@@ -108,13 +108,16 @@ export default async function ProfilePage() {
         </TabsContent>
 
         <TabsContent value="informacion" keepMounted>
-          <ProfileForm
-            key={account ? `${account.entityId}:${account.version}` : email}
-            email={email}
-            fullName={account?.fullName ?? ""}
-            phone={account?.phone ?? ""}
-            whatsappPhone={userRow?.whatsappPhone ?? ""}
-          />
+          <div className="flex flex-col gap-6">
+            <ProfileForm
+              key={account ? `${account.entityId}:${account.version}` : email}
+              fullName={account?.fullName ?? ""}
+              whatsappPhone={userRow?.whatsappPhone ?? ""}
+              bankName={account?.bankName ?? ""}
+              bankHolder={account?.bankHolder ?? ""}
+              bankClabe={account?.bankClabe ?? ""}
+            />
+          </div>
         </TabsContent>
 
         <TabsContent value="seguridad" keepMounted>

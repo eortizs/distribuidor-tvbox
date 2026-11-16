@@ -17,6 +17,9 @@ export interface ProfileAccount {
   updatedAt: Date
   fullName: string
   phone: string
+  bankName: string
+  bankHolder: string
+  bankClabe: string
 }
 
 export interface ProfileData {
@@ -26,11 +29,19 @@ export interface ProfileData {
   account: ProfileAccount | null
 }
 
-function findAccountProperties(doc: UmeJson): Pick<ProfileAccount, "fullName" | "phone"> {
+function findAccountProperties(doc: UmeJson): Pick<
+  ProfileAccount,
+  "fullName" | "phone" | "bankName" | "bankHolder" | "bankClabe"
+> {
   const props = doc.dynamicProperties
+  const prop = (key: string): string =>
+    typeof props[key] === "string" ? (props[key] as string) : ""
   return {
-    fullName: typeof props.fullName === "string" ? props.fullName : "",
-    phone: typeof props.phone === "string" ? props.phone : "",
+    fullName: prop("fullName"),
+    phone: prop("phone"),
+    bankName: prop("bankName"),
+    bankHolder: prop("bankHolder"),
+    bankClabe: prop("bankClabe"),
   }
 }
 
@@ -75,25 +86,36 @@ export async function getProfile(userId: string): Promise<ProfileData | null> {
   }
 }
 
+export interface ProfileSaveInput {
+  fullName?: string
+  phone?: string
+  bankName?: string
+  bankHolder?: string
+  bankClabe?: string
+}
+
 /**
  * Persists profile fields on the account's umeJSON entity, keeping the
  * event-sourced history (property.updated with the diff). Creates the entity
- * if it is missing.
+ * if it is missing. Only the keys present in `input` are touched.
  */
 export async function saveProfile(
   user: AuthUser,
-  input: { fullName: string; phone: string }
+  input: ProfileSaveInput
 ): Promise<{ changed: boolean }> {
   const head = await findAccountHead(user.id)
 
   if (!head) {
     const draft = buildAccountDraft(user)
+    const added: Record<string, string> = {}
+    for (const [key, value] of Object.entries(input)) {
+      if (value) added[key] = value
+    }
     const doc: UmeJson = {
       ...draft,
       dynamicProperties: {
         ...draft.dynamicProperties,
-        ...(input.fullName ? { fullName: input.fullName } : {}),
-        ...(input.phone ? { phone: input.phone } : {}),
+        ...added,
       },
     }
 

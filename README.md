@@ -176,15 +176,15 @@ Página `/profile` (enlace **Perfil** en el menú de la cuenta, en la cabecera),
 | Pestaña | Contenido |
 |---|---|
 | **Detalles** (por defecto) | Lectura sola: email, rol (badge), fecha de alta y última actualización de la entidad Cuenta |
-| **Información** | Email (solo lectura: es el identificador de login), nombre completo y teléfono, editables |
+| **Información** | Nombre completo y WhatsApp, editables + sección **Datos bancarios** (banco, destinatario y CLABE) con su propio botón de guardado. El email no está aquí: vive en *Detalles* |
 | **Seguridad** | Cambio de contraseña: actual + nueva (mín. 8, distinta de la actual) + confirmación |
 
 Persistencia y reglas:
 
-- Los datos de perfil (`fullName`, `phone`) viven en `dynamicProperties` de la entidad umeJSON `Cuenta` del usuario (localizada por `dynamicProperties.userId`); no requieren migración de esquema.
-- Cada guardado pasa por `updateProperties` del repositorio: bloqueo optimista por `version` (conflicto → error al usuario) y evento `property.updated` con diff `from`/`to` en `entity_events`, con `actor` = email de la sesión y `reason: "Profile updated"`. Si la entidad Cuenta no existe, se crea con el mismo draft que el registro.
+- Los datos de perfil (`fullName`, `phone`, y los bancarios `bankName`/`bankHolder`/`bankClabe`) viven en `dynamicProperties` de la entidad umeJSON `Cuenta` del usuario (localizada por `dynamicProperties.userId`); no requieren migración de esquema.
+- Cada guardado pasa por `updateProperties` del repositorio: bloqueo optimista por `version` (conflicto → error al usuario) y evento `property.updated` con diff `from`/`to` en `entity_events`, con `actor` = email de la sesión y `reason: "Profile updated"`. Si la entidad Cuenta no existe, se crea con el mismo draft que el registro. `saveProfile` solo toca las claves que recibe: la pestaña *Información* tiene dos forms independientes (personal y bancario, cada uno con su `useActionState`) y el teléfono ya no está en el formulario — la acción omite la clave para no borrar el valor guardado.
 - La contraseña se cambia solo tras verificar la actual contra el hash scrypt; el nuevo hash se escribe con `updatePassword` (`src/server/auth/users.ts`). Las sesiones activas no se invalidan.
-- Validación en el server action (`src/app/actions/profile.ts`): nombre ≤ 100 caracteres, teléfono opcional con formato flexible (`+`, dígitos, espacios, paréntesis, guiones; 7–20), y ninguna mutación sin sesión (`requireUser`).
+- Validación en el server action (`src/app/actions/profile.ts`): nombre ≤ 100 caracteres; datos bancarios (`updateBankingAction`): banco ≤ 60, destinatario ≤ 100 y CLABE de exactamente 18 dígitos (se agrupan en bloques de 3 mientras se escribe y se guardan sin espacios); y ninguna mutación sin sesión (`requireUser`).
 - Formularios cliente con `useActionState`, estado pendiente, error inline (`role="alert"`) y toast de éxito con `router.refresh()` para recargar los datos; los paneles usan `keepMounted` para no perder lo tecleado al cambiar de pestaña.
 - Iniciando sesión con Google, el **nombre completo** (`fullName` de la entidad Cuenta) y la **foto** (`users.google_picture`, avatar del menú de la cabecera) se capturan del perfil de Google: el nombre solo se rellena si el campo está vacío — nunca pisa una edición manual, y cada llenado queda en el historial (`reason: "Nombre completo desde Google"`)— y la foto se refresca en cada inicio si cambió. Ver [Autenticación con Google](#autenticación-con-google).
 
@@ -504,7 +504,7 @@ Distribución del código: config en `src/server/whatsapp/config.ts`, socket y c
 El número **ES la identidad** del canal: los mensajes entrantes se resuelven teléfono → cuenta (índice único parcial `users_whatsapp_phone_uidx`: un número = una cuenta). Se registra de dos vías:
 
 - **Admin**: `/users` (o `/modulos/distribuidores`) → menú de acciones → **Editar** → campo *WhatsApp (agente)* — vacío lo quita; duplicado responde 409.
-- **Auto-servicio**: `/profile` → pestaña *Información* → campo *WhatsApp (agente)*.
+- **Auto-servicio**: `/profile` → pestaña *Información* → campo *WhatsApp*.
 
 Formato: solo dígitos **con código de país**, 11–15 (México = 12, p. ej. `525540049353`). Un número sin código de país se rechaza en el alta: los JIDs entrantes siempre lo traen y un registro de 10 dígitos jamás matchearía.
 

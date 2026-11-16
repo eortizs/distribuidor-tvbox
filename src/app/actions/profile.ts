@@ -17,8 +17,10 @@ export interface ChangePasswordState {
   success: string | null
 }
 
-const PHONE_RE = /^\+?[\d\s().-]{7,20}$/
 const FULL_NAME_MAX = 100
+const BANK_NAME_MAX = 60
+const HOLDER_NAME_MAX = 100
+const CLABE_RE = /^\d{18}$/
 
 export async function updateProfileAction(
   _prev: UpdateProfileState,
@@ -29,7 +31,6 @@ export async function updateProfileAction(
   const fullName = String(formData.get("fullName") ?? "")
     .trim()
     .replace(/\s+/g, " ")
-  const phone = String(formData.get("phone") ?? "").trim()
   const whatsappPhone = String(formData.get("whatsappPhone") ?? "").trim()
 
   if (fullName.length > FULL_NAME_MAX) {
@@ -38,15 +39,11 @@ export async function updateProfileAction(
       success: null,
     }
   }
-  if (phone && !PHONE_RE.test(phone)) {
-    return {
-      error: "Introduce un teléfono válido (7 a 20 dígitos; puede incluir +, espacios, paréntesis o guiones)",
-      success: null,
-    }
-  }
 
   try {
-    const { changed } = await saveProfile(user, { fullName, phone })
+    // El teléfono quedó fuera del formulario: se omite la clave para no
+    // tocar el valor ya guardado en la entidad Cuenta.
+    const { changed } = await saveProfile(user, { fullName })
     // WhatsApp registrado del canal agente: columna propia en `users`
     // (índice único: un número = una cuenta). Solo se escribe si cambió y
     // cuenta en el mensaje de resultado (antes decía «Sin cambios» aunque
@@ -65,6 +62,61 @@ export async function updateProfileAction(
         changed || whatsappChanged
           ? "Perfil actualizado"
           : "Sin cambios que guardar",
+    }
+  } catch (error) {
+    if (error instanceof AppError) {
+      if (error.code === "version_conflict") {
+        return {
+          error: "Los datos se modificaron en otra sesión. Recarga la página e inténtalo de nuevo.",
+          success: null,
+        }
+      }
+      return { error: error.message, success: null }
+    }
+    throw error
+  }
+}
+
+export async function updateBankingAction(
+  _prev: UpdateProfileState,
+  formData: FormData
+): Promise<UpdateProfileState> {
+  const user = await requireUser()
+
+  const bankName = String(formData.get("bankName") ?? "").trim()
+  const bankHolder = String(formData.get("bankHolder") ?? "").trim()
+  const bankClabe = String(formData.get("bankClabe") ?? "")
+    .trim()
+    .replace(/\s+/g, "")
+
+  if (bankName.length > BANK_NAME_MAX) {
+    return {
+      error: `El banco no puede superar ${BANK_NAME_MAX} caracteres`,
+      success: null,
+    }
+  }
+  if (bankHolder.length > HOLDER_NAME_MAX) {
+    return {
+      error: `El destinatario no puede superar ${HOLDER_NAME_MAX} caracteres`,
+      success: null,
+    }
+  }
+  if (bankClabe && !CLABE_RE.test(bankClabe)) {
+    return {
+      error: "La CLABE debe tener exactamente 18 dígitos",
+      success: null,
+    }
+  }
+
+  try {
+    const { changed } = await saveProfile(user, {
+      bankName,
+      bankHolder,
+      bankClabe,
+    })
+    return {
+      error: null,
+      success: changed ? "Datos bancarios actualizados" : "Sin cambios que guardar",
     }
   } catch (error) {
     if (error instanceof AppError) {
