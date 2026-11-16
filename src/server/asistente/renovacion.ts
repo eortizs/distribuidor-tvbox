@@ -71,8 +71,12 @@ import type { AssistantAttachmentMeta } from "./attachments"
  * como el resto de los intercambios del Asistente.
  */
 
-/** Normaliza el texto del mensaje a la forma del código; null si no aplica. */
-function normalizeConceptCode(message: string): string | null {
+/**
+ * Normaliza el texto del mensaje a la forma del código; null si no aplica.
+ * Única implementación del criterio de forma del canal de chat: la usan el
+ * flujo del distribuidor (/tv3) y el de clientes por WhatsApp.
+ */
+export function normalizeConceptCode(message: string): string | null {
   const code = message.replace(/[\s-]+/g, "").toUpperCase()
   return isTransferConceptCodeShape(code) ? code : null
 }
@@ -363,8 +367,16 @@ async function receiptGate(input: {
   return null
 }
 
-/** true si el concepto impreso del comprobante menciona el código (tolerante). */
-function conceptoImpresoCoincide(code: string, texto: string | null): boolean {
+/**
+ * true si el concepto impreso del comprobante menciona el código (tolerante).
+ * Única implementación del criterio de match: distribuidor y clientes deben
+ * reconocer el mismo código impreso idéntico (una tolerancia aplicada a un
+ * solo canal haría matchear en la PWA y no en WhatsApp).
+ */
+export function conceptoImpresoCoincide(
+  code: string,
+  texto: string | null
+): boolean {
   if (!texto) return false
   return normalizarTexto(texto).includes(normalizarTexto(code))
 }

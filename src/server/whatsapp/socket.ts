@@ -26,6 +26,16 @@ import {
   assistantAttachmentsConfigured,
   type AssistantAttachmentMeta,
 } from "@/server/asistente/attachments"
+import {
+  CLIENT_CONCEPT_GUIDE_TEXT,
+  CLIENT_RENEWAL_GUIDE_TEXT,
+  findClientsByWhatsAppPhone,
+  handleClientRenovarCommand,
+  isClientConceptCodeText,
+  maybeHandleClientRenewalReceipt,
+  parseClientRenovarCommand,
+  type ClientWhatsappReply,
+} from "@/server/asistente/renovacion-cliente"
 import { saveUserFile } from "@/server/storage/user-files"
 
 import {
@@ -312,6 +322,199 @@ function courtesyAllowed(phone: string): boolean {
   return true
 }
 
+/** «Escribiendo…» mientras la rama de clientes procesa (escaneo ~25 s). */
+async function withClientComposing<T>(
+  jid: string,
+  job: () => Promise<T>
+): Promise<T> {
+  const socket = state().socket
+  if (!socket) return job()
+  await socket.sendPresenceUpdate("composing", jid).catch(() => undefined)
+  const timer = setInterval(() => {
+    void socket.sendPresenceUpdate("composing", jid).catch(() => undefined)
+  }, 20_000)
+  timer.unref?.()
+  try {
+    return await job()
+  } finally {
+    clearInterval(timer)
+  }
+}
+
+/** Respuesta silenciosa: turno manejado sin responder (tope de ráfagas). */
+const SILENT_CLIENT_REPLY: ClientWhatsappReply = {
+  text: "",
+  buyerUserId: null,
+  cliente: null,
+  silent: true,
+}
+
+const SILENT_CLIENT_RESULT = (inboundText: string, mediaMime: string | null) => ({
+  reply: SILENT_CLIENT_REPLY,
+  inboundText,
+  mediaMime,
+})
+
+/**
+ * Rama de CLIENTES FlujoTV (números sin cuenta de usuario): renuevan por
+ * aquí con su teléfono como identidad — `/renovar` entrega concepto +
+ * importe + datos bancarios del distribuidor y el comprobante entra como
+ * archivo sin mensaje. Devuelve null cuando el teléfono no tiene licencias:
+ * el flujo sigue con la cortesía de número desconocido.
+ */
+async function handleClientIncomingMessage(input: {
+  jid: string
+  phone: string
+  m: WAMessage
+}): Promise<{
+  reply: ClientWhatsappReply
+  inboundText: string
+  mediaMime: string | null
+} | null> {
+  const clients = await findClientsByWhatsAppPhone(input.phone).catch(
+    () => []
+  )
+  if (clients.length === 0) return null
+
+  const text = extractText(input.m.message)
+  const caption = extractCaption(input.m.message)
+  const mediaInfo = extractMediaInfo(input.m.message)
+  const messageText = (text || caption).trim()
+
+  // /renovar [usuario]: comando del cliente (fuera de SLASH_COMMANDS a
+  // propósito; los distribuidores conservan /tv3<usuario>).
+  const renovar = parseClientRenovarCommand(messageText)
+  if (renovar) {
+    if (!allowInbound(input.phone)) {
+      return SILENT_CLIENT_RESULT(messageText, null)
+    }
+    const reply = await withClientComposing(input.jid, () =>
+      handleClientRenovarCommand({ phone: input.phone, arg: renovar.arg })
+    )
+    if (reply === null) {
+      // El comando no resolvió licencias (p. ej. la re-lectura interna falló):
+      // guía fija con cortesía, nunca «no registrado» para un cliente conocido.
+      if (!courtesyAllowed(input.phone)) {
+        return SILENT_CLIENT_RESULT(messageText, null)
+      }
+      return {
+        reply: {
+          text: CLIENT_RENEWAL_GUIDE_TEXT,
+          buyerUserId: null,
+          cliente: null,
+        },
+        inboundText: messageText,
+        mediaMime: null,
+      }
+    }
+    return { reply, inboundText: messageText, mediaMime: null }
+  }
+
+  if (mediaInfo) {
+    // Tipos fuera del catálogo (video, audio, stickers…): aviso de cortesía.
+    if (!SUPPORTED_MEDIA_TYPES.includes(mediaInfo.mimeType)) {
+      if (!courtesyAllowed(input.phone)) {
+        return SILENT_CLIENT_RESULT(messageText, mediaInfo.mimeType)
+      }
+      return {
+        reply: {
+          text: "Por ahora solo puedo recibir la FOTO o el PDF del comprobante de tu transferencia. Para renovar, envía /renovar.",
+          buyerUserId: null,
+          cliente: null,
+        },
+        inboundText: messageText,
+        mediaMime: mediaInfo.mimeType,
+      }
+    }
+    if (!allowInbound(input.phone)) {
+      return SILENT_CLIENT_RESULT(messageText, mediaInfo.mimeType)
+    }
+    const reply = await withClientComposing(input.jid, async () => {
+      const socket = state().socket
+      if (!socket) return null
+      let bytes: Buffer
+      try {
+        bytes = await downloadIncomingMedia(input.m, socket)
+      } catch (error) {
+        log("media_download", error)
+        return {
+          text: "No pude leer el archivo que enviaste (pudo expirar o pesar demasiado). Inténtalo de nuevo.",
+          buyerUserId: null,
+          cliente: null,
+        }
+      }
+      if (
+        bytes.byteLength === 0 ||
+        bytes.byteLength > MAX_ASSISTANT_ATTACHMENT_BYTES
+      ) {
+        return {
+          text: `El archivo supera el límite de ${Math.round(MAX_ASSISTANT_ATTACHMENT_BYTES / (1024 * 1024))} MB. Envía un comprobante más ligero.`,
+          buyerUserId: null,
+          cliente: null,
+        }
+      }
+      return maybeHandleClientRenewalReceipt({
+        phone: input.phone,
+        message: messageText,
+        media: {
+          mimeType: mediaInfo.mimeType,
+          fileName: mediaInfo.fileName,
+          bytes,
+        },
+      })
+    })
+    if (reply === null) {
+      // Cliente CON licencias cuyo adjunto no es un envío de renovación:
+      // guía fija del flujo (con cortesía), nunca la cortesía de «no
+      // registrado» que le diría algo falso sobre su número.
+      if (!courtesyAllowed(input.phone)) {
+        return SILENT_CLIENT_RESULT(messageText, mediaInfo.mimeType)
+      }
+      return {
+        reply: {
+          text: CLIENT_RENEWAL_GUIDE_TEXT,
+          buyerUserId: null,
+          cliente: null,
+        },
+        inboundText: messageText,
+        mediaMime: mediaInfo.mimeType,
+      }
+    }
+    return { reply, inboundText: messageText, mediaMime: mediaInfo.mimeType }
+  }
+
+  // Texto con forma de código de 4 caracteres: guía del paso 3.
+  if (messageText.length > 0 && isClientConceptCodeText(messageText)) {
+    if (!allowInbound(input.phone)) {
+      return SILENT_CLIENT_RESULT(messageText, null)
+    }
+    return {
+      reply: {
+        text: CLIENT_CONCEPT_GUIDE_TEXT,
+        buyerUserId: null,
+        cliente: null,
+      },
+      inboundText: messageText,
+      mediaMime: null,
+    }
+  }
+
+  // Resto de mensajes del cliente: guía fija del flujo, limitada a 1/24 h
+  // (la misma cortesía que raciona los avisos del canal).
+  if (!courtesyAllowed(input.phone)) {
+    return SILENT_CLIENT_RESULT(messageText, null)
+  }
+  return {
+    reply: {
+      text: CLIENT_RENEWAL_GUIDE_TEXT,
+      buyerUserId: null,
+      cliente: null,
+    },
+    inboundText: messageText,
+    mediaMime: null,
+  }
+}
+
 async function handleIncomingMessage(m: WAMessage): Promise<void> {
   const current = state()
   if (!m.key || m.key.fromMe || !m.message) return
@@ -344,6 +547,52 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
 
   const user = await findUserByWhatsAppPhone(phone)
   if (!user) {
+    // Rama de CLIENTES FlujoTV: no son usuarios del panel; renuevan por aquí
+    // con su teléfono como identidad (/renovar → comprobante). Null = el
+    // teléfono no tiene licencias → cortesía de número desconocido.
+    const clientHandled = await handleClientIncomingMessage({
+      jid,
+      phone,
+      m,
+    }).catch((error: unknown) => {
+      log("client_branch", error)
+      return null
+    })
+    if (clientHandled !== null) {
+      logWhatsAppMessageDetached({
+        direction: "in",
+        userId: clientHandled.reply.buyerUserId,
+        phone,
+        text:
+          clientHandled.inboundText ||
+          (clientHandled.mediaMime
+            ? `[archivo: ${clientHandled.mediaMime}]`
+            : ""),
+        meta: {
+          jid,
+          rama: "cliente",
+          cliente: clientHandled.reply.cliente,
+          media: clientHandled.mediaMime,
+        },
+      })
+      if (!clientHandled.reply.silent && clientHandled.reply.text.length > 0) {
+        await sendTextToJid(jid, clientHandled.reply.text).catch(
+          (error: unknown) => log("client_reply", error)
+        )
+        logWhatsAppMessageDetached({
+          direction: "out",
+          userId: clientHandled.reply.buyerUserId,
+          phone,
+          text: clientHandled.reply.text,
+          meta: {
+            jid,
+            source: "client_renewal",
+            cliente: clientHandled.reply.cliente,
+          },
+        })
+      }
+      return
+    }
     // Diagnóstico: el espejo salió bien pero el chat no matchea — dejar la
     // huella del teléfono resuelto para ver la forma del JID entrante.
     log(`incoming_unregistered phone=${phone} jid=${jid}`)

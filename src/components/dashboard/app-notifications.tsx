@@ -112,6 +112,7 @@ const KIND_BADGE: Record<
   transfer_rejected: { label: "Rechazada", variant: "warning-light" },
   alert_hit: { label: "Alerta", variant: "info-light" },
   reminder: { label: "Recordatorio", variant: "primary-light" },
+  client_renewal_notice: { label: "Cliente", variant: "info-light" },
 }
 
 const SKELETON_ROWS = 4

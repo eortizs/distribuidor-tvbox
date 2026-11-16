@@ -348,8 +348,15 @@ export async function reviewTransferReceipt(input: {
    * se vuelve a llamar al modelo: mismo veredicto con una sola llamada.
    */
   preextracted?: ExtraccionLLM
+  /**
+   * Titular receptor esperado (flujo de clientes por WhatsApp: el dinero va a
+   * la cuenta del DISTRIBUIDOR del cliente, no a la del env). Vacío → la
+   * revisión degrada a manual (sin beneficiario contra quién validar).
+   * Ausente → `TRANSFER_HOLDER` del env, el comportamiento de siempre.
+   */
+  holderName?: string
 }): Promise<ReviewOutcome> {
-  const holderName = transferBankDataOrNull()?.holder ?? ""
+  const holderName = input.holderName ?? transferBankDataOrNull()?.holder ?? ""
   if (!receiptScanConfigured() || holderName.length === 0) {
     return { review: "manual", status: "pending", scan: null }
   }

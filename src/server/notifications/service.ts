@@ -29,6 +29,8 @@ export type NotificationKind =
   | "transfer_rejected"
   | "alert_hit"
   | "reminder"
+  /** Aviso al distribuidor sobre una renovación de cliente por WhatsApp. */
+  | "client_renewal_notice"
 
 export interface NotificationRow {
   id: string
@@ -58,6 +60,7 @@ const KINDS: readonly NotificationKind[] = [
   "transfer_rejected",
   "alert_hit",
   "reminder",
+  "client_renewal_notice",
 ]
 
 function logError(context: string, error: unknown): void {
@@ -460,6 +463,31 @@ export function createAlertNotification(input: AlertNotificationInput): void {
     expiresAt: null,
     orderId: null,
   }).catch((error: unknown) => logError("create_alert", error))
+}
+
+export interface ClientRenewalNoticeInput {
+  userId: string
+  title: string
+  body: string
+}
+
+/**
+ * Aviso al distribuidor (o al admin, para clientes sin distribuidor ligado)
+ * de una renovación de CLIENTE por WhatsApp con algo estructural pendiente:
+ * datos bancarios incompletos o saldo en cupones insuficiente para el débito
+ * interno. La campana espeja a WhatsApp vía `insertNotification`, igual que
+ * el resto. Mejor esfuerzo: nunca lanza ni bloquea el flujo del cliente.
+ */
+export function createClientRenewalNotice(input: ClientRenewalNoticeInput): void {
+  void insertNotification({
+    userId: input.userId,
+    kind: "client_renewal_notice",
+    title: input.title,
+    body: input.body,
+    userName: "",
+    expiresAt: null,
+    orderId: null,
+  }).catch((error: unknown) => logError("create_client_renewal_notice", error))
 }
 
 interface NotificationInsert {

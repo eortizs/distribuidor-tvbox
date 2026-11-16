@@ -143,6 +143,25 @@ export async function getClientMetadata(
 }
 
 /**
+ * Teléfono WhatsApp registrado de un cliente (`client_metadata`); null si no
+ * lo tiene. Es la dirección de los avisos de resultado del flujo de
+ * renovación por WhatsApp (los clientes no son usuarios: sin campana, su
+ * canal es este número).
+ */
+export async function getClientWhatsappPhone(
+  userName: string
+): Promise<string | null> {
+  const key = userName.trim().toLowerCase()
+  if (key.length === 0) return null
+  const result = await pool.query(
+    "SELECT whatsapp_phone FROM client_metadata WHERE user_name = $1",
+    [key]
+  )
+  const raw = result.rows[0]?.whatsapp_phone
+  return typeof raw === "string" && raw.length > 0 ? raw : null
+}
+
+/**
  * Mapa usuario (minúsculas) → metadatos para un listado de clientes: una
  * sola consulta acotada a los usuarios dados. Los usuarios sin fila no
  * aparecen en el mapa.

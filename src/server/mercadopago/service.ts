@@ -1,17 +1,24 @@
 import { randomUUID } from "node:crypto"
 
-import { pool } from "@/server/db"
+import { pool, type PoolClientLike } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
-import { createRenewalNotification } from "@/server/notifications/service"
+import {
+  createClientRenewalNotice,
+  createRenewalNotification,
+} from "@/server/notifications/service"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
-import { isRenewalMonths, type RenewalMonths } from "@/lib/flujotv"
+import { isRenewalMonths, type RenewalMonths, formatFlujoDate } from "@/lib/flujotv"
 import { PAQUETE_COUPON_CODE } from "@/lib/paquetes"
 import { mpTotalMxn } from "@/lib/mp-pricing"
 import { applySaldoCredit } from "@/server/saldo/service"
-import { clientLicensePriceMxnOrNull } from "@/server/clientes/metadata"
+import {
+  clientLicensePriceMxnOrNull,
+  getClientWhatsappPhone,
+} from "@/server/clientes/metadata"
+import { enqueueWhatsAppForPhone, WHATSAPP_KIND_CLIENT_RENEWAL } from "@/server/whatsapp/service"
 import {
   newTransactionId,
   recordOrderEventDetached,
@@ -22,6 +29,7 @@ import {
   isCouponQaEnabled,
   couponQaDailyLimit,
   couponQaMonthlyLimit,
+  licensePriceMxnOrNull,
 } from "./config"
 import { mercadoPagoRequest, type MercadoPagoResponse } from "./client"
 import { MercadoPagoError } from "./errors"
@@ -43,6 +51,20 @@ export type MpOrderStatus =
   | "refunded"
 
 export type MpOrderMethod = "mercadopago" | "transferencia" | "cupon"
+
+/**
+ * Origen de las órdenes del flujo de renovación de CLIENTES por WhatsApp:
+ * `wa_cliente` = cliente de un distribuidor (buyer = distribuidor; al aprobar
+ * se debita su saldo en cupones) y `wa_cliente_admin` = cliente del admin
+ * (buyer = admin; cuenta receptora del env, sin débito). NULL = cualquier
+ * flujo existente.
+ */
+export const ORDER_ORIGIN_WA_CLIENTE = "wa_cliente"
+export const ORDER_ORIGIN_WA_CLIENTE_ADMIN = "wa_cliente_admin"
+
+function isClientOrderOrigin(origin: string | null): boolean {
+  return origin === ORDER_ORIGIN_WA_CLIENTE || origin === ORDER_ORIGIN_WA_CLIENTE_ADMIN
+}
 
 /**
  * Vía que disparó un intento de renovación: viaja en cada evento de la
@@ -74,11 +96,16 @@ export interface MpOrderRow {
   preference_id: string | null
   payment_id: number | null
   payment_status: string | null
-   ticket_file_id: string | null
+    ticket_file_id: string | null
     coupon_code: string | null
     /** Concepto de pago ligado (transferencias de la era del concepto). */
     concept_id: string | null
     concept_code: string | null
+    /**
+     * Vía que creó la orden (NULL = flujos existentes; ver los orígenes
+     * `ORDER_ORIGIN_WA_CLIENTE*` del flujo de clientes por WhatsApp).
+     */
+    origin: string | null
     renewal_baseline_expires_at: string | null
     /** Vencimiento nuevo verificado en el panel al marcar `renewed`. */
     renewal_verified_expires_at: string | null
@@ -404,6 +431,39 @@ function notifyOrderChange(
   })
 }
 
+/**
+ * WhatsApp DIRECTO al CLIENTE de una orden `wa_cliente`/`wa_cliente_admin`:
+ * los clientes no son usuarios del panel (no tienen campana), así que el
+ * resultado de su renovación sale por la cola `wa_outbox` con el teléfono
+ * guardado en `client_metadata` y el comprador de la orden como dueño de la
+ * fila (el dispatcher no le añade link al panel a este kind). Best-effort:
+ * nunca lanza ni bloquea la renovación que lo origina.
+ */
+function notifyClientRenewalDetached(
+  order: Pick<MpOrderRow, "origin" | "buyer_user_id" | "user_name">,
+  body: string
+): void {
+  if (!isClientOrderOrigin(order.origin)) return
+  if (!order.buyer_user_id) return
+  const buyerUserId = order.buyer_user_id
+  void (async () => {
+    const rawPhone = await getClientWhatsappPhone(order.user_name)
+    if (!rawPhone) return
+    // La cola envía con onWhatsApp: solo dígitos (el `+` opcional de
+    // client_metadata no viaja).
+    const phone = rawPhone.replace(/\D+/g, "")
+    await enqueueWhatsAppForPhone({
+      userId: buyerUserId,
+      phone,
+      kind: WHATSAPP_KIND_CLIENT_RENEWAL,
+      title: "Renovación de tu servicio de TV",
+      body,
+    })
+  })().catch((error: unknown) =>
+    logError(`client_renewal_notice ${order.user_name}`, error)
+  )
+}
+
 /* -------------------------------------------------------------------------- */
 /*                              Lectura de órdenes                             */
 /* -------------------------------------------------------------------------- */
@@ -443,6 +503,10 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
       row.concept_code === null || row.concept_code === undefined
         ? null
         : String(row.concept_code),
+    origin:
+      row.origin === null || row.origin === undefined
+        ? null
+        : String(row.origin),
     renewal_baseline_expires_at:
       row.renewal_baseline_expires_at === null ||
       row.renewal_baseline_expires_at === undefined
@@ -1085,6 +1149,12 @@ async function runOrderRenewal(
       verifiedExpiresAt: verification.verifiedAt,
       orderId: order.id,
     })
+    // Resultado directo al cliente de una orden de WhatsApp: su licencia
+    // quedó renovada hasta la fecha verificada en el panel.
+    notifyClientRenewalDetached(
+      order,
+      `Tu licencia ${order.user_name} fue renovada hasta ${formatFlujoDate(verification.verifiedAt)}. ¡Gracias por tu pago!`
+    )
     recordOrderEventDetached({
       orderId: order.id,
       transactionId,
@@ -1253,6 +1323,12 @@ async function runOrderRenewal(
           error: message,
           orderId: order.id,
         })
+        // El cliente de WhatsApp también se entera (primer fallo): sin
+        // jerga interna, con la instrucción de contactar a su distribuidor.
+        notifyClientRenewalDetached(
+          order,
+          `Tu pago para ${order.user_name} quedó registrado, pero la renovación no se pudo completar. Tu distribuidor ya fue avisado; te contactará.`
+        )
       }
     }
     recordOrderEventDetached({
@@ -1741,6 +1817,8 @@ export async function createTransferOrder(params: {
   bonusMonths?: number
   conceptId?: string
   conceptCode?: string
+  /** Origen de la orden (`ORDER_ORIGIN_WA_CLIENTE*` en el flujo de clientes). */
+  origin?: string
 }): Promise<CreatedTransferOrder> {
   // Idempotencia por concepto (replay): el concepto es la llave de la
   // intención de compra. Reenviar el comprobante tras una respuesta perdida
@@ -1773,9 +1851,9 @@ export async function createTransferOrder(params: {
     await pool.query(
       `INSERT INTO mp_orders
          (id, status, method, user_name, months, bonus_months, amount, currency, buyer_user_id,
-          external_reference, ticket_file_id, concept_id, concept_code)
+          external_reference, ticket_file_id, concept_id, concept_code, origin)
        VALUES ($1::uuid, 'pending', 'transferencia', $2, $3, $4, $5, 'MXN', $6,
-               $1::text, $7::uuid, $8::uuid, $9)`,
+               $1::text, $7::uuid, $8::uuid, $9, $10)`,
       [
         orderId,
         params.userName,
@@ -1786,6 +1864,7 @@ export async function createTransferOrder(params: {
         params.ticketFileId,
         params.conceptId ?? null,
         params.conceptCode ?? null,
+        params.origin ?? null,
       ]
     )
   } catch (error) {
@@ -1932,6 +2011,184 @@ export async function listPendingTransferOrders(): Promise<
 }
 
 /**
+ * Núcleo compartido del débito de `users.saldo_cupones` (canje de cupón y
+ * renovación de cliente por WhatsApp): débito condicional + `saldo_movimientos`
+ * con `order_id`, cuya clave única es la cerradura contra un débito doble.
+ * Debe correr DENTRO de la transacción que crea/reclama la orden. El advisory
+ * lock del comprador lo toman los llamadores (`pg_advisory_xact_lock` es
+ * reentrante dentro de la misma transacción, así que quien ya lo tomó no
+ * cambia de semántica).
+ */
+async function debitSaldoCuponesInTx(
+  tx: PoolClientLike,
+  input: {
+    userId: string
+    orderId: string
+    amount: number
+    note: string
+    /** Error para saldo insuficiente; recibe el saldo vigente leído. */
+    insufficient: (currentBalance: number) => MercadoPagoError
+  }
+): Promise<void> {
+  const debited = await tx.query(
+    `UPDATE users SET saldo_cupones = saldo_cupones - $2
+      WHERE id = $1::uuid AND saldo_cupones >= $2
+      RETURNING saldo_cupones AS saldo`,
+    [input.userId, input.amount]
+  )
+  if ((debited.rowCount ?? 0) === 0) {
+    const current = await tx.query(
+      "SELECT saldo_cupones FROM users WHERE id = $1::uuid",
+      [input.userId]
+    )
+    throw input.insufficient(Number(current.rows[0]?.saldo_cupones ?? 0))
+  }
+  const balanceAfter = Number(debited.rows[0]?.saldo ?? Number.NaN)
+  if (!Number.isFinite(balanceAfter)) {
+    throw new MercadoPagoError(
+      500,
+      "saldo_lectura_invalida",
+      "La base no devolvió el saldo en cupones actualizado."
+    )
+  }
+  await tx.query(
+    `INSERT INTO saldo_movimientos
+        (user_id, order_id, kind, tipo, amount, balance_after, note)
+      VALUES ($1::uuid, $2::uuid, 'cargo', 'cupones', $3, $4, $5)`,
+    [input.userId, input.orderId, input.amount, balanceAfter, input.note]
+  )
+}
+
+/**
+ * Débito interno al distribuidor por una renovación de CLIENTE: su pago por
+ * WhatsApp llegó a la cuenta del distribuidor, pero el costo de la licencia
+ * se le descuenta de `users.saldo_cupones` (la billetera exclusiva de
+ * licencias FlujoTV). Mismo patrón transaccional de `createCouponOrder`:
+ * advisory lock del comprador (serializa contra abonos, ajustes y canjes de
+ * cupón) + débito atómico del núcleo compartido. Debe correr DENTRO de la
+ * transacción que reclama la orden hacia `paid`: sin saldo, el ROLLBACK del
+ * llamador deja la orden `pending` (revisión admin) y este helper lanza
+ * `saldo_insuficiente_distribuidor`.
+ */
+async function debitDistributorForClientOrder(
+  tx: PoolClientLike,
+  buyerUserId: string,
+  orderId: string,
+  cost: number,
+  userName: string
+): Promise<void> {
+  // Llave de 32 bits derivada del uuid del comprador (la misma de los
+  // abonos y de `createCouponOrder`).
+  await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [buyerUserId])
+
+  const mxn = (value: number) =>
+    value.toLocaleString("es-MX", { style: "currency", currency: "MXN" })
+  await debitSaldoCuponesInTx(tx, {
+    userId: buyerUserId,
+    orderId,
+    amount: cost,
+    note: `Renovación de cliente ${userName} por WhatsApp`,
+    insufficient: (currentBalance) =>
+      new MercadoPagoError(
+        409,
+        "saldo_insuficiente_distribuidor",
+        `Saldo en cupones insuficiente: la renovación del cliente ${userName} debita ${mxn(cost)} de tu saldo, pero tienes ${mxn(currentBalance)}. Abona saldo en cupones desde «Abonar saldo» y aprueba la transferencia en «Transferencias por revisar».`
+      ),
+  })
+}
+
+/**
+ * Aprobación de una transferencia de CLIENTE (`origin='wa_cliente'`): claim
+ * hacia `paid` + débito del saldo del distribuidor en UNA transacción. Sin
+ * saldo suficiente el claim se revierte (la orden sigue `pending` con el
+ * motivo en `error`), el distribuidor recibe el aviso (campana + WhatsApp)
+ * y el cliente se entera de que su renovación llegará en breve; el admin
+ * puede aprobarla a mano después con el mismo débito.
+ */
+async function approveClientTransferOrder(order: MpOrderRow): Promise<MpOrderRow> {
+  const buyerUserId = order.buyer_user_id as string
+  // Costo interno al distribuidor: SIEMPRE el precio general del servidor —
+  // el importe cobrado al cliente puede ser un precio especial de Detalles,
+  // pero el débito interno no lo sigue.
+  const cost = licensePriceMxnOrNull() ?? order.amount
+
+  const tx = await pool.connect()
+  try {
+    await tx.query("BEGIN")
+    const claim = await tx.query(
+      `UPDATE mp_orders SET status = 'paid', updated_at = now()
+        WHERE id = $1 AND status = 'pending'`,
+      [order.id]
+    )
+    if ((claim.rowCount ?? 0) === 0) {
+      throw new MercadoPagoError(
+        409,
+        "order_already_processed",
+        "La transferencia ya fue procesada por otra revisión."
+      )
+    }
+    await debitDistributorForClientOrder(
+      tx,
+      buyerUserId,
+      order.id,
+      cost,
+      order.user_name
+    )
+    await tx.query("COMMIT")
+  } catch (error) {
+    await tx.query("ROLLBACK").catch(() => {})
+    if (error instanceof MercadoPagoError && error.code === "saldo_insuficiente_distribuidor") {
+      // El ROLLBACK ya revirtió el claim: dejar el motivo visible en la fila
+      // `pending` para la revisión del admin.
+      await pool
+        .query(
+          `UPDATE mp_orders SET error = $2, updated_at = now()
+            WHERE id = $1 AND status = 'pending'`,
+          [order.id, error.message.slice(0, 500)]
+        )
+        .catch((updateError: unknown) =>
+          logError("client_transfer_saldo_error", updateError)
+        )
+      createClientRenewalNotice({
+        userId: buyerUserId,
+        title: "Saldo insuficiente para renovar a un cliente",
+        body: `Tu cliente ${order.user_name} pagó su renovación por WhatsApp (${cost.toLocaleString("es-MX", { style: "currency", currency: "MXN" })}) pero tu saldo en cupones no alcanza para el débito interno. Abona saldo y aprueba la transferencia en «Transferencias por revisar».`,
+      })
+      notifyClientRenewalDetached(
+        order,
+        `Tu pago para ${order.user_name} fue recibido. Tu distribuidor completará la renovación en breve; te avisamos por este chat.`
+      )
+      logError(`client_transfer_saldo ${order.id}`, error)
+    }
+    throw error
+  } finally {
+    tx.release()
+  }
+
+  // Transferencia exitosa: el concepto de pago queda anulado (consumed) y la
+  // siguiente transacción del comprador recibe un código nuevo.
+  await consumeTransferConceptByOrder(order.id).catch((error: unknown) =>
+    logError(`transfer_concept_consume ${order.id}`, error)
+  )
+
+  const claimed = (await getMpOrder(order.id)) ?? { ...order, status: "paid" }
+  const outcome = await attemptOrderRenewal(claimed, null, undefined, {
+    trigger: "transfer",
+  })
+
+  log("mercadopago.transfer_review", {
+    order_id: order.id,
+    user_name: order.user_name,
+    origin: order.origin,
+    decision: "approved",
+    outcome,
+  })
+
+  const fresh = await getMpOrder(order.id)
+  return fresh ?? claimed
+}
+
+/**
  * Aprueba una transferencia pendiente: reclama la orden hacia `paid`
  * atómicamente y ejecuta la renovación con la clave determinista
  * `mp-<orderId>`. Con renovación fallida la orden queda `renewal_failed` y
@@ -1955,6 +2212,11 @@ export async function approveTransferOrder(orderId: string): Promise<MpOrderRow>
       "invalid_order_status",
       `Solo se pueden aprobar transferencias pendientes (estado actual: ${order.status}).`
     )
+  }
+
+  // Orden de CLIENTE por WhatsApp: claim + débito interno en una transacción.
+  if (order.origin === ORDER_ORIGIN_WA_CLIENTE && order.buyer_user_id) {
+    return approveClientTransferOrder(order)
   }
 
   const claim = await pool.query(
@@ -2319,52 +2581,26 @@ export async function createCouponOrder(params: {
       // (la cuenta que paga exclusivamente licencias de FlujoTV): el canje
       // debita el importe de la orden. El cargo vive en la MISMA transacción
       // del INSERT: sin saldo suficiente la orden no se crea (ROLLBACK) y el
-      // movimiento queda trazado en `saldo_movimientos` con `order_id`, cuya
-      // clave única es la segunda cerradura contra un débito doble. El
+      // movimiento queda trazado en `saldo_movimientos` con `order_id`. El
       // advisory lock del comprador ya serializa contra abonos y ajustes de
       // saldo (`applySaldoCredit` / `ajustarSaldoAdmin` usan la misma llave),
       // así que la lectura y el débito no tienen carrera. Los reintentos con
       // el mismo request_id caen en el ON CONFLICT de arriba (`insertedId`
       // null) y NO vuelven a debitar.
-      const debited = await tx.query<{ saldo: string }>(
-        `UPDATE users SET saldo_cupones = saldo_cupones - $2
-          WHERE id = $1::uuid AND saldo_cupones >= $2
-          RETURNING saldo_cupones AS saldo`,
-        [params.buyerUserId, amount]
-      )
-      if ((debited.rowCount ?? 0) === 0) {
-        const current = await tx.query<{ saldo_cupones: string }>(
-          "SELECT saldo_cupones FROM users WHERE id = $1::uuid",
-          [params.buyerUserId]
-        )
-        const mxn = (value: number) =>
-          value.toLocaleString("es-MX", { style: "currency", currency: "MXN" })
-        throw new MercadoPagoError(
-          422,
-          "saldo_insuficiente",
-          `Saldo en cupones insuficiente: el cupón debita ese saldo y esta compra cuesta ${mxn(amount)}, pero tu saldo es ${mxn(Number(current.rows[0]?.saldo_cupones ?? 0))}. Abona saldo en cupones desde «Abonar saldo» e inténtalo de nuevo.`
-        )
-      }
-      const balanceAfter = Number(debited.rows[0]?.saldo ?? Number.NaN)
-      if (!Number.isFinite(balanceAfter)) {
-        throw new MercadoPagoError(
-          500,
-          "saldo_lectura_invalida",
-          "La base no devolvió el saldo en cupones actualizado del comprador."
-        )
-      }
-      await tx.query(
-        `INSERT INTO saldo_movimientos
-            (user_id, order_id, kind, tipo, amount, balance_after, note)
-          VALUES ($1::uuid, $2::uuid, 'cargo', 'cupones', $3, $4, $5)`,
-        [
-          params.buyerUserId,
-          insertedId,
-          amount,
-          balanceAfter,
-          `Pago de licencia FlujoTV con cupón ${code} — ${params.userName}`,
-        ]
-      )
+      const mxn = (value: number) =>
+        value.toLocaleString("es-MX", { style: "currency", currency: "MXN" })
+      await debitSaldoCuponesInTx(tx, {
+        userId: params.buyerUserId,
+        orderId: insertedId,
+        amount,
+        note: `Pago de licencia FlujoTV con cupón ${code} — ${params.userName}`,
+        insufficient: (currentBalance) =>
+          new MercadoPagoError(
+            422,
+            "saldo_insuficiente",
+            `Saldo en cupones insuficiente: el cupón debita ese saldo y esta compra cuesta ${mxn(amount)}, pero tu saldo es ${mxn(currentBalance)}. Abona saldo en cupones desde «Abonar saldo» e inténtalo de nuevo.`
+          ),
+      })
     }
     await tx.query("COMMIT")
   } catch (error) {

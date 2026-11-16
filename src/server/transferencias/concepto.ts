@@ -240,6 +240,8 @@ export async function getActiveTransferConcept(input: {
 export interface ActiveConceptByCode extends TransferConcept {
   /** Usuario de FlujoTV que la orden renovará (ligado al emitir el código). */
   userName: string
+  /** Cuenta que emitió el código (para validar que la orden la use). */
+  buyerUserId: string
 }
 
 /**
@@ -256,8 +258,9 @@ export async function findActiveConceptsForBuyer(input: {
     code: string
     period_month: string
     user_name: string
+    buyer_user_id: string
   }>(
-    `SELECT id, code, period_month, user_name
+    `SELECT id, code, period_month, user_name, buyer_user_id
        FROM transfer_concepts
       WHERE buyer_user_id = $1::uuid AND period_month = $2 AND status = 'active'
       ORDER BY created_at ASC`,
@@ -268,6 +271,50 @@ export async function findActiveConceptsForBuyer(input: {
     code: String(row.code),
     periodMonth: String(row.period_month),
     userName: String(row.user_name),
+    buyerUserId: String(row.buyer_user_id),
+  }))
+}
+
+/**
+ * Conceptos activos del mes acotados a UNOS USUARIOS concretos (sin filtro de
+ * comprador: en el descubrimiento del flujo de clientes el comprador aún no
+ * se resolvió — el buyer de cada concepto viaja en el resultado para que el
+ * llamador valide que la orden lo use). Es el scoping del flujo de clientes
+ * por WhatsApp: el comprobante que manda un cliente solo puede descubrir
+ * conceptos de SUS licencias — nunca el de otro cliente del mismo
+ * distribuidor.
+ */
+export async function findActiveConceptsForBuyerUsers(input: {
+  userNames: string[]
+}): Promise<ActiveConceptByCode[]> {
+  const keys = [
+    ...new Set(
+      input.userNames
+        .map((name) => name.trim().toLowerCase())
+        .filter((name) => name.length > 0)
+    ),
+  ]
+  if (keys.length === 0) return []
+  const result = await pool.query<{
+    id: string
+    code: string
+    period_month: string
+    user_name: string
+    buyer_user_id: string
+  }>(
+    `SELECT id, code, period_month, user_name, buyer_user_id
+       FROM transfer_concepts
+      WHERE period_month = $1 AND status = 'active'
+        AND user_name = ANY($2::text[])
+      ORDER BY created_at ASC`,
+    [currentPeriodMonth(), keys]
+  )
+  return result.rows.map((row) => ({
+    id: String(row.id),
+    code: String(row.code),
+    periodMonth: String(row.period_month),
+    userName: String(row.user_name),
+    buyerUserId: String(row.buyer_user_id),
   }))
 }
 
@@ -304,6 +351,41 @@ export async function findConsumedConceptsForBuyer(input: {
 }
 
 /**
+ * Conceptos YA consumidos del mes acotados a unos usuarios (misma variante
+ * filtrada de `findActiveConceptsForBuyerUsers` para el replay del flujo de
+ * clientes: reenviar un comprobante ya usado responde el estado REAL de esa
+ * orden solo si el código pertenece a las licencias del teléfono).
+ */
+export async function findConsumedConceptsForBuyerUsers(input: {
+  userNames: string[]
+}): Promise<ConsumedConceptByCode[]> {
+  const keys = [
+    ...new Set(
+      input.userNames
+        .map((name) => name.trim().toLowerCase())
+        .filter((name) => name.length > 0)
+    ),
+  ]
+  if (keys.length === 0) return []
+  const result = await pool.query<{
+    code: string
+    consumed_by_order_id: string
+  }>(
+    `SELECT code, consumed_by_order_id
+       FROM transfer_concepts
+      WHERE period_month = $1 AND status = 'consumed'
+        AND consumed_by_order_id IS NOT NULL
+        AND user_name = ANY($2::text[])
+      ORDER BY consumed_at DESC`,
+    [currentPeriodMonth(), keys]
+  )
+  return result.rows.map((row) => ({
+    code: String(row.code),
+    orderId: String(row.consumed_by_order_id),
+  }))
+}
+
+/**
  * Resuelve el concepto ACTIVO del comprador por SU código, sin el usuario:
  * es la puerta del envío de comprobante por el Asistente, donde el comprador
  * adjunta el ticket con el código como mensaje (el concepto ya quedó ligado
@@ -321,8 +403,9 @@ export async function findActiveConceptByCodeForBuyer(input: {
     code: string
     period_month: string
     user_name: string
+    buyer_user_id: string
   }>(
-    `SELECT id, code, period_month, user_name
+    `SELECT id, code, period_month, user_name, buyer_user_id
        FROM transfer_concepts
       WHERE buyer_user_id = $1::uuid AND code = $2
         AND period_month = $3 AND status = 'active'
@@ -336,6 +419,7 @@ export async function findActiveConceptByCodeForBuyer(input: {
         code: String(row.code),
         periodMonth: String(row.period_month),
         userName: String(row.user_name),
+        buyerUserId: String(row.buyer_user_id),
       }
     : null
 }

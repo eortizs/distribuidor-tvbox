@@ -76,17 +76,23 @@ export interface EnqueueWhatsAppInput {
 }
 
 /**
- * Encola una copia de notificación para el WhatsApp registrado del usuario.
- * Sin número registrado no hace nada (la mayoría de los usuarios: cero
- * escrituras). Devuelve true si quedó encolada. Los errores se registran y
- * se tragan: la notificación que la originó no debe enterarse.
+ * Kind de los avisos DIRECTOS a clientes FlujoTV (renovación por WhatsApp).
+ * Los clientes no son usuarios del panel: el dispatcher omite el link al
+ * panel para este kind (outbox.ts). Fuente única del literal: lo comparten
+ * el escritor de la cola y el dispatcher.
  */
-export async function enqueueWhatsAppForUser(
-  input: EnqueueWhatsAppInput
-): Promise<boolean> {
+export const WHATSAPP_KIND_CLIENT_RENEWAL = "client_renewal"
+
+/** Inserta la fila de salida compartida por todos los escritores de la cola. */
+async function insertOutboxRow(input: {
+  userId: string
+  notificationId: string | null
+  phone: string
+  kind: string | null
+  title: string
+  body: string
+}): Promise<boolean> {
   try {
-    const phone = await getWhatsAppPhoneOf(input.userId)
-    if (!phone) return false
     await pool.query(
       `INSERT INTO wa_outbox
          (id, user_id, notification_id, phone, title, body, kind)
@@ -95,7 +101,7 @@ export async function enqueueWhatsAppForUser(
         randomUUID(),
         input.userId,
         input.notificationId,
-        phone,
+        input.phone,
         input.title,
         input.body,
         input.kind,
@@ -108,11 +114,56 @@ export async function enqueueWhatsAppForUser(
         ts: new Date().toISOString(),
         error: `whatsapp: enqueue: ${
           error instanceof Error ? error.message : String(error)
-        }`,
+        }`
       })
     )
     return false
   }
+}
+
+/**
+ * Encola una copia de notificación para el WhatsApp registrado del usuario.
+ * Sin número registrado no hace nada (la mayoría de los usuarios: cero
+ * escrituras). Devuelve true si quedó encolada. Los errores se registran y
+ * se tragan: la notificación que la originó no debe enterarse.
+ */
+export async function enqueueWhatsAppForUser(
+  input: EnqueueWhatsAppInput
+): Promise<boolean> {
+  const phone = await getWhatsAppPhoneOf(input.userId)
+  if (!phone) return false
+  return insertOutboxRow({
+    userId: input.userId,
+    notificationId: input.notificationId,
+    phone,
+    kind: input.kind,
+    title: input.title,
+    body: input.body,
+  })
+}
+
+/**
+ * Igual que `enqueueWhatsAppForUser`, pero con el teléfono EXPLÍCITO: es la
+ * vía de los avisos a CLIENTES de FlujoTV (no son usuarios; su número vive
+ * en `client_metadata`). El teléfono debe venir ya en forma de envío (solo
+ * dígitos con código de país).
+ */
+export async function enqueueWhatsAppForPhone(input: {
+  userId: string
+  phone: string
+  kind: string | null
+  title: string
+  body: string
+}): Promise<boolean> {
+  if (input.phone.length === 0) return false
+  return insertOutboxRow({
+    userId: input.userId,
+    notificationId: null,
+    phone: input.phone,
+    kind: input.kind,
+    title: input.title,
+    body: input.body,
+  })
 }
 
 /** Igual que `enqueueWhatsAppForUser`, sin esperar el resultado. */

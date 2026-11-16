@@ -1,7 +1,10 @@
 import { pool, withTransaction } from "@/server/db"
 import { publicSiteUrl } from "@/server/site-url"
 
-import { logWhatsAppMessageDetached } from "./service"
+import {
+  WHATSAPP_KIND_CLIENT_RENEWAL,
+  logWhatsAppMessageDetached,
+} from "./service"
 import { getWhatsAppStatus, sendWhatsAppText } from "./socket"
 
 /*
@@ -39,6 +42,7 @@ export interface OutboxClaimRow {
   phone: string
   title: string
   body: string
+  kind: string | null
   attempts: number
 }
 
@@ -46,15 +50,23 @@ let timer: ReturnType<typeof setInterval> | null = null
 let ticking = false
 let lastPruneAt = 0
 
-/** Texto de WhatsApp para un espejo de notificación (título + cuerpo + link). */
+/**
+ * Texto de WhatsApp para un envío de la cola. Los espejos de notificación
+ * llevan el link al panel; los avisos DIRECTOS a clientes
+ * (`kind='client_renewal'`, renovación por WhatsApp) no: el cliente no es
+ * usuario del panel y un enlace que no puede usar solo confunde.
+ */
 function mirrorMessage(row: OutboxClaimRow): string {
-  return `${row.title}\n${row.body}\n\nPanel: ${publicSiteUrl()}`
+  const base = `${row.title}\n${row.body}`
+  return row.kind === WHATSAPP_KIND_CLIENT_RENEWAL
+    ? base
+    : `${base}\n\nPanel: ${publicSiteUrl()}`
 }
 
 async function claimBatch(): Promise<OutboxClaimRow[]> {
   return withTransaction(async (client) => {
     const result = await client.query(
-      `SELECT id, phone, title, body, attempts
+      `SELECT id, phone, title, body, kind, attempts
          FROM wa_outbox
         WHERE status = 'pending' AND next_attempt_at <= now()
         ORDER BY created_at
@@ -79,6 +91,7 @@ async function claimBatch(): Promise<OutboxClaimRow[]> {
       phone: String(row.phone),
       title: String(row.title ?? ""),
       body: String(row.body ?? ""),
+      kind: typeof row.kind === "string" ? row.kind : null,
       attempts: Number(row.attempts ?? 0),
     }))
   })
