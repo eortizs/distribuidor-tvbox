@@ -950,10 +950,16 @@ async function cotizarRenovacion(args: ToolCallArgs, userId: string) {
  * request_id determinista por intención (comprador + cliente + plazo + hora
  * de Ciudad de México): un reintento dentro de la hora devuelve la orden
  * original en lugar de crear otra y volver a debitar (createCouponOrder es
- * idempotente por request_id). Una renovación deliberada más tarde abre
- * una intención nueva.
+ * idempotente por request_id). Una renovación deliberada más tarde abre una
+ * intención nueva. Compartido con el canje por slash command (`/tv3 -c`) para
+ * que ambas vías replaysen la MISMA intención dentro de la hora.
  */
-function renewalRequestId(quote: RenewalQuote): string {
+export function assistantRenewalRequestId(input: {
+  userId: string
+  userName: string
+  months: number
+  paquete: boolean
+}): string {
   const stamp = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Mexico_City",
     year: "numeric",
@@ -965,8 +971,17 @@ function renewalRequestId(quote: RenewalQuote): string {
     .format(new Date())
     .replace(/[^0-9]/g, "")
     .slice(0, 10)
-  const cliente = quote.userName.toLowerCase().replace(/[^a-z0-9]/g, "")
-  return `asistente-${quote.user.id.slice(0, 8)}-${cliente}-${quote.months}${quote.paquete ? "p" : ""}-${stamp}`
+  const cliente = input.userName.toLowerCase().replace(/[^a-z0-9]/g, "")
+  return `asistente-${input.userId.slice(0, 8)}-${cliente}-${input.months}${input.paquete ? "p" : ""}-${stamp}`
+}
+
+function renewalRequestId(quote: RenewalQuote): string {
+  return assistantRenewalRequestId({
+    userId: quote.user.id,
+    userName: quote.userName,
+    months: quote.months,
+    paquete: quote.paquete,
+  })
 }
 
 async function canjearRenovacion(args: ToolCallArgs, userId: string) {

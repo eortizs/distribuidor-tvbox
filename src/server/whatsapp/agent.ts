@@ -8,6 +8,7 @@ import { EmailAliases } from "@/server/asistente/emails"
 import { executeAssistantTool } from "@/server/asistente/tools"
 import { executeSlashCommand } from "@/server/asistente/commands"
 import { maybeHandleRenewalReceipt } from "@/server/asistente/renovacion"
+import { maybeHandleCouponRedemption } from "@/server/asistente/cupon"
 import {
   appendConversationMessage,
   loadConversation,
@@ -270,6 +271,26 @@ export async function runWhatsAppTurn(input: {
       }
       return interceptorFailureReply(input.user.id, error)
     }
+  }
+
+  // Canje de cupón (paso 2 de /tv3<usuario> -c): con un prompt pendiente, el
+  // mensaje que es SOLO el código (o «cancelar») canjea sin pasar por el
+  // modelo. Antes del interceptor de transferencias (intención explícita
+  // recién creada por el propio comando) y con la misma guarda de fallos:
+  // nunca silencio.
+  let couponReply: string | null
+  try {
+    couponReply = await maybeHandleCouponRedemption({
+      user: input.user,
+      message: text,
+      attachments: input.attachmentMetas,
+      channel: "whatsapp",
+    })
+  } catch (error) {
+    return interceptorFailureReply(input.user.id, error)
+  }
+  if (couponReply !== null) {
+    return { text: commandReplyText(couponReply), llmUsed: false }
   }
 
   // Comprobante de renovación (paso 3): adjunto sin mensaje, o el código

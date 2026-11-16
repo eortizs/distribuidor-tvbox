@@ -35,7 +35,7 @@ export const SLASH_COMMANDS: readonly SlashCommandMeta[] = [
   {
     name: "tv3",
     description:
-      "Renovación por transferencia: /tv3<usuario> — ej. /tv3baltazar (1 mes).",
+      "Renovación: /tv3<usuario> (transferencia) o /tv3<usuario> -c (cupón) — ej. /tv3baltazar (1 mes).",
   },
 ] as const
 

@@ -118,7 +118,7 @@ async function persistTurns(input: {
 }
 
 /** Estado legible del cliente para el paso 1 (el mismo semáforo de /clientes). */
-function clienteEstadoLinea(input: {
+export function clienteEstadoLinea(input: {
   statusLabel: string
   expiresAt: string | null
   daysRemaining: number | null

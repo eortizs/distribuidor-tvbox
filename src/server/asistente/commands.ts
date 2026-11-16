@@ -17,6 +17,10 @@ import {
 } from "./conversations"
 import { listClientsInScope } from "./tools"
 import { handleRenovarCommand } from "./renovacion"
+import {
+  handleRenovarCuponCommand,
+  isCuponFlag,
+} from "./cupon"
 import { isRenovarCommandName } from "@/lib/asistente-commands"
 
 /*
@@ -158,18 +162,19 @@ const handlers: Record<SlashCommandName, SlashCommandHandler> = {
   tv3: async ({ user, args }) => {
     // Ayuda del comando dinámico de renovación: `/tv3` solo no renueva nada,
     // enseña la sintaxis. El comando REAL es el usuario completo del cliente
-    // (/tv3baltazar) y lo resuelve la ruta dinámica de executeSlashCommand.
+    // (/tv3baltazar) y lo resuelve la ruta dinámica de executeSlashCommand;
+    // el flag `-c` elige el método de pago cupón (saldo en cupones).
     void user
     void args
     return {
       text: [
-        "**Renovación por transferencia desde el chat**",
+        "**Renovación desde el chat**",
         "",
         "Escribe el comando con el usuario EXACTO de la licencia de tu cliente:",
         "",
-        "`/tv3baltazar`",
+        "`/tv3baltazar` — pago por **transferencia**: te entrego el concepto de pago (código de 4 caracteres), el importe (plazo fijo de 1 mes) y los datos bancarios. Después de pagar, **adjunta el comprobante aquí SIN mensaje (solo el archivo)**: lo escaneo, el concepto de pago impreso identifica la renovación y, si la fecha, el importe y el beneficiario también pasan, la aplico en automático.",
         "",
-        "Te entrego el concepto de pago (código de 4 caracteres), el importe (plazo fijo de 1 mes) y los datos bancarios. Después de pagar, **adjunta el comprobante aquí SIN mensaje (solo el archivo)**: lo escaneo, el concepto de pago impreso identifica la renovación y, si la fecha, el importe y el beneficiario también pasan, la aplico en automático; si algo falla, te digo qué fue.",
+        "`/tv3baltazar -c` — pago con **cupón**: valida que tu saldo en cupones alcance (debita esa billetera) y te pide el código del cupón; si es válido, la renovación se aplica en automático.",
       ].join("\n"),
     }
   },
@@ -206,11 +211,27 @@ export async function executeSlashCommand(
     (handlers as Record<string, SlashCommandHandler | undefined>)[parsed.name] ??
     // Comando dinámico de renovación: el usuario del cliente ES el comando
     // (/tv3baltazar → «tv3baltazar»). No vive en el registro (sería uno por
-    // cliente); la regla compartida del prefijo lo enruta aquí. Args
-    // ignorados: el usuario es el nombre completo del comando.
+    // cliente); la regla compartida del prefijo lo enruta aquí. Sin args es
+    // la transferencia del sheet; `-c` elige el método de pago cupón (paso 1
+    // del canje); cualquier otro arg guía del uso.
     (isRenovarCommandName(parsed.name)
-      ? async ({ user }: SlashCommandContext) =>
-          handleRenovarCommand({ user, name: parsed.name })
+      ? async ({ user, args }: SlashCommandContext) => {
+          if (args.trim().length === 0) {
+            return handleRenovarCommand({ user, name: parsed.name })
+          }
+          if (isCuponFlag(args)) {
+            return handleRenovarCuponCommand({ user, name: parsed.name })
+          }
+          return {
+            text: [
+              `No entiendo los argumentos \`${args}\` del comando.`,
+              "",
+              "Uso:",
+              "- `/tv3<usuario>` — renovación por **transferencia** (ej. `/tv3baltazar`)",
+              "- `/tv3<usuario> -c` — renovación con **cupón** (ej. `/tv3baltazar -c`)",
+            ].join("\n"),
+          }
+        }
       : undefined)
   if (!handler) {
     const available = SLASH_COMMAND_NAMES.map((name) => `/${name}`).join(", ")

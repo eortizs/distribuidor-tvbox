@@ -17,6 +17,7 @@ import {
 import { parseSlashCommand } from "@/lib/asistente-commands"
 import { executeSlashCommand } from "@/server/asistente/commands"
 import { maybeHandleRenewalReceipt } from "@/server/asistente/renovacion"
+import { maybeHandleCouponRedemption } from "@/server/asistente/cupon"
 import { errorResponse, readJsonBody } from "@/server/http"
 import { AppError } from "@/server/umejson/types"
 
@@ -153,6 +154,23 @@ export async function POST(request: Request) {
           "validation_error",
           "Escribe un mensaje o adjunta un archivo."
         )
+      }
+
+      /*
+       * Canje de cupón (paso 2 de /tv3<usuario> -c): con un prompt pendiente,
+       * el mensaje que es SOLO el código del cupón (o «cancelar») intercepta
+       * el turno y canjea sin pasar por el modelo. Antes del interceptor de
+       * transferencias: el prompt es intención explícita recién creada por el
+       * propio comando.
+       */
+      const couponReply = await maybeHandleCouponRedemption({
+        user,
+        message,
+        attachments: attachmentMetas,
+        channel: "web",
+      })
+      if (couponReply !== null) {
+        return new Response(couponReply, { headers: PLAIN_TEXT_HEADERS })
       }
 
       /*
