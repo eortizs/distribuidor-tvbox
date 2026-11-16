@@ -170,6 +170,28 @@ export const MODULE_PERMISSION_KEYS: string[] = MODULOS.filter(
   (modulo) => !modulo.adminOnly
 ).map((modulo) => modulo.href)
 
+/**
+ * Hrefs que nacen VISIBLES por defecto para las cuentas no-admin: el catálogo
+ * ajustable completo existente cuando el default pasó a «oculto» (16/nov
+ * 2026). Congelado a propósito — NO se deriva de `MODULOS`. Al crear un
+ * módulo nuevo: se agrega a `MODULOS` (el sheet «Módulos» de
+ * `/modulos/distribuidores` lo lista solo) y NO va aquí, así nace OCULTO
+ * para todas las cuentas no-admin hasta que el admin lo haga visible.
+ */
+export const MODULES_DEFAULT_VISIBLE_HREFS: ReadonlySet<string> = new Set([
+  "/modulos/alertas",
+  "/modulos/imagenes",
+  "/modulos/animacion",
+  "/modulos/conectores",
+  "/modulos/calculadora",
+  "/modulos/cronometro",
+  "/modulos/lista-de-compras",
+  "/modulos/paquetes-flujotv",
+  "/modulos/actualizacion-flujotv",
+  "/modulos/alta-de-tickets",
+  "/modulos/abonar-saldo",
+])
+
 const MODULE_PERMISSION_KEYS_SET = new Set(MODULE_PERMISSION_KEYS)
 
 /** True si el href pertenece al catálogo ajustable por usuario. */

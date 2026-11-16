@@ -1189,7 +1189,8 @@ function ModulesVisibilityList({ user }: { user: UserListItem }) {
         <SheetTitle>Módulos de {user.username}</SheetTitle>
         <SheetDescription>
           Elige qué módulos del hub ve esta cuenta al entrar. Los cambios se
-          aplican al instante.
+          aplican al instante; los módulos nuevos del catálogo nacen ocultos
+          hasta que los activas aquí.
         </SheetDescription>
       </SheetHeader>
       <div
