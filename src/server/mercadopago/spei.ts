@@ -1,5 +1,6 @@
 import { mercadoPagoGatewayRequest } from "./client"
 import { MercadoPagoError } from "./errors"
+import { resolveConceptsForDeposits } from "@/server/transferencias/concepto"
 
 /**
  * Reporte SPEI (`/modulos/reporte-spei`): depósitos por transferencia
@@ -47,6 +48,16 @@ export interface SpeiDepositRow {
   payerEmail: string | null
   /** Referencia externa si el depósito la trajo (no es lo usual). */
   externalReference: string | null
+  /**
+   * Concepto de pago resuelto contra `transfer_concepts` (MP no expone el
+   * concepto escrito por el pagador): código único o varios unidos con «·»
+   * cuando el casado es ambiguo. null = sin coincidencia.
+   */
+  conceptCode: string | null
+  /** Cliente FlujoTV del concepto, si todos los coincidentes comparten uno. */
+  conceptUserName: string | null
+  /** true si más de un concepto calza con el depósito. */
+  conceptAmbiguous: boolean
 }
 
 export interface SpeiDayReport {
@@ -191,6 +202,9 @@ function toDepositRow(payment: Record<string, unknown>): SpeiDepositRow {
     payerName,
     payerEmail: stringOrNull(payer.email),
     externalReference: stringOrNull(payment.external_reference),
+    conceptCode: null,
+    conceptUserName: null,
+    conceptAmbiguous: false,
   }
 }
 
@@ -265,6 +279,35 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
 
     if (results.length < PAGE_LIMIT) break
     if (page === PAGE_MAX - 1) truncated = true
+  }
+
+  // Columna «Concepto»: cruza cada depósito con los conceptos de pago
+  // emitidos (ventana de tiempo + importe). Mejor esfuerzo: un fallo de BD
+  // deja la columna vacía sin romper el reporte.
+  if (deposits.length > 0) {
+    try {
+      const matches = await resolveConceptsForDeposits({
+        windowStartIso: beginIso,
+        windowEndIso: endIso,
+        deposits: deposits.map((deposit) => ({
+          id: deposit.id,
+          atIso: deposit.dateApproved,
+          amountMxn: deposit.amountMxn,
+        })),
+      })
+      for (const deposit of deposits) {
+        const match = matches.get(deposit.id)
+        if (!match) continue
+        deposit.conceptCode = match.code
+        deposit.conceptUserName = match.userName
+        deposit.conceptAmbiguous = match.ambiguous
+      }
+    } catch (error) {
+      log("spei.concept_match_failed", {
+        day,
+        cause: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   const totalMxn =

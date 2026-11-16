@@ -515,3 +515,138 @@ export async function consumeTransferConceptByOrder(orderId: string): Promise<vo
     [orderId]
   )
 }
+
+/* ------------------------------------------------------------------------ */
+/*         Conciliación con depósitos SPEI (reporte /modulos/reporte-spei)   */
+/* ------------------------------------------------------------------------ */
+
+/**
+ * Tolerancia para casar el instante del depósito acreditado con la ventana
+ * del concepto: el reloj del banco que originó la transferencia y el del
+ * servidor no coinciden, y el comprobante se aprueba ~1 min después de la
+ * acreditación (caso real: depósito 22:19:53, orden aprobada 22:20:52).
+ */
+const DEPOSIT_MATCH_TOLERANCE_MS = 120_000
+
+/** Casado depósito → concepto para la columna «Concepto» del reporte SPEI. */
+export interface DepositConceptMatch {
+  /**
+   * Código(s) de concepto; varios unidos con «·» cuando el casado es
+   * ambiguo (más de un concepto calza con el mismo depósito).
+   */
+  code: string
+  /** Cliente FlujoTV si todos los coincidentes comparten uno; null si difieren. */
+  userName: string | null
+  /** true si más de un concepto calza con el depósito. */
+  ambiguous: boolean
+}
+
+interface ConceptCandidate {
+  code: string
+  userName: string
+  /** Ventana cerrada [creado, consumido] en ms de época, ya con tolerancia. */
+  startMs: number
+  endMs: number
+  /** Importe de la orden ligada (`mp_orders.concept_id`); null si no hay. */
+  amount: number | null
+}
+
+function amountsEqual(a: number, b: number): boolean {
+  return Math.abs(a - b) < 0.005
+}
+
+/**
+ * Cruza depósitos acreditados con conceptos de pago para la tabla del
+ * reporte SPEI. Mercado Pago NO expone el concepto escrito por el pagador
+ * (verificado en el payload de `/v1/payments`: el código impreso no viaja),
+ * así que el casado es por ventana de tiempo e importe contra los conceptos
+ * CONSUMIDOS únicamente:
+ *
+ *   - Ventana cerrada del concepto: desde su emisión (`created_at`, el
+ *     comprador lo recibe ANTES de transferir) hasta su anulación
+ *     (`consumed_at`, la orden se aprueba/rechaza DESPUÉS de la
+ *     acreditación del dinero). Los conceptos aún activos NO participan:
+ *     su ventana abierta reclamaría cualquier depósito posterior (caso
+ *     real: 9 códigos latentes por depósito) y solo la subida del
+ *     comprobante confirma a qué dinero corresponde; al consumirse, el
+ *     reporte lo muestra tras refrescar.
+ *   - El importe manda: un depósito que calza por importe (el de la orden
+ *     ligada vía `mp_orders.concept_id`) gana sobre uno que solo calza por
+ *     ventana; dentro del mismo nivel, >1 coincidencia es ambiguo y se
+ *     muestran todos los códigos.
+ */
+export async function resolveConceptsForDeposits(input: {
+  windowStartIso: string
+  windowEndIso: string
+  deposits: { id: string; atIso: string | null; amountMxn: number }[]
+}): Promise<Map<string, DepositConceptMatch>> {
+  const matches = new Map<string, DepositConceptMatch>()
+  if (input.deposits.length === 0) return matches
+
+  const createdBefore = new Date(
+    Date.parse(input.windowEndIso) + DEPOSIT_MATCH_TOLERANCE_MS
+  )
+  const consumedAfter = new Date(
+    Date.parse(input.windowStartIso) - DEPOSIT_MATCH_TOLERANCE_MS
+  )
+
+  const result = await pool.query<{
+    id: string
+    code: string
+    user_name: string
+    created_at: Date
+    consumed_at: Date
+    bound_amount: string | number | null
+  }>(
+    `SELECT c.id, c.code, c.user_name, c.created_at, c.consumed_at,
+            bound.amount AS bound_amount
+       FROM transfer_concepts c
+       LEFT JOIN LATERAL (
+         SELECT o.amount
+           FROM mp_orders o
+          WHERE o.concept_id = c.id
+          ORDER BY o.created_at DESC
+          LIMIT 1
+       ) bound ON true
+      WHERE c.status = 'consumed' AND c.consumed_at IS NOT NULL
+        AND c.created_at <= $1::timestamptz
+        AND c.consumed_at >= $2::timestamptz`,
+    [createdBefore, consumedAfter]
+  )
+
+  const candidates: ConceptCandidate[] = result.rows.map((row) => {
+    const rawAmount = row.bound_amount
+    const bound = rawAmount === null || rawAmount === undefined ? null : Number(rawAmount)
+    return {
+      code: String(row.code),
+      userName: String(row.user_name),
+      startMs: new Date(row.created_at).getTime() - DEPOSIT_MATCH_TOLERANCE_MS,
+      endMs: new Date(row.consumed_at).getTime() + DEPOSIT_MATCH_TOLERANCE_MS,
+      amount: Number.isFinite(bound) ? bound : null,
+    }
+  })
+
+  for (const deposit of input.deposits) {
+    if (!deposit.atIso) continue
+    const atMs = Date.parse(deposit.atIso)
+    if (Number.isNaN(atMs)) continue
+    const inWindow = candidates.filter(
+      (candidate) => atMs >= candidate.startMs && atMs <= candidate.endMs
+    )
+    const byAmount = inWindow.filter(
+      (candidate) =>
+        candidate.amount !== null &&
+        amountsEqual(candidate.amount, deposit.amountMxn)
+    )
+    const level = byAmount.length > 0 ? byAmount : inWindow
+    if (level.length === 0) continue
+    const names = [...new Set(level.map((candidate) => candidate.userName))]
+    matches.set(deposit.id, {
+      code: level.map((candidate) => candidate.code).join(" · "),
+      userName: names.length === 1 ? names[0] : null,
+      ambiguous: level.length > 1,
+    })
+  }
+
+  return matches
+}

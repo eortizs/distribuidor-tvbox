@@ -191,6 +191,39 @@ export function ReporteSpeiView({
         size: 150,
       },
       {
+        accessorKey: "conceptCode",
+        id: "concept",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Concepto" />
+        ),
+        cell: ({ row }) => {
+          const code = row.original.conceptCode
+          if (!code) {
+            return <span className="text-muted-foreground text-xs">—</span>
+          }
+          return (
+            <div
+              className="flex flex-col"
+              title={
+                row.original.conceptAmbiguous
+                  ? "Varios conceptos calzan con este depósito"
+                  : undefined
+              }
+            >
+              <span className="text-foreground font-mono text-xs font-medium tracking-wider">
+                {code}
+              </span>
+              {row.original.conceptUserName ? (
+                <span className="text-muted-foreground text-xs">
+                  {row.original.conceptUserName}
+                </span>
+              ) : null}
+            </div>
+          )
+        },
+        size: 140,
+      },
+      {
         accessorKey: "id",
         id: "id",
         header: ({ column }) => (
@@ -273,6 +306,9 @@ export function ReporteSpeiView({
         <FrameDescription>
           Depósitos por transferencia bancaria (SPEI a la CLABE) acreditados
           en la cuenta de Mercado Pago, por día calendario de Ciudad de México.
+          El concepto corresponde al código de pago que la app entrega al
+          comprador; el «motivo» escrito a mano en el banco no lo expone la
+          API de Mercado Pago.
         </FrameDescription>
       </FrameHeader>
 
