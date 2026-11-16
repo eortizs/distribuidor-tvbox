@@ -7,7 +7,6 @@ import {
   createRenewalNotification,
 } from "@/server/notifications/service"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
-import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
 import { isRenewalMonths, type RenewalMonths, formatFlujoDate } from "@/lib/flujotv"
@@ -193,12 +192,15 @@ const STUCK_PAID_AFTER_MS = 10 * 60_000
 const RENEWAL_VERIFY_ATTEMPTS = 3
 const RENEWAL_VERIFY_RETRY_DELAY_MS = 1_500
 /**
- * Presupuesto por lectura de verificación. `/find_user` consulta el panel
- * real de FlujoTV (scrapeo en vivo) y tarda ~20 s por lectura en producción:
- * el timeout debe cubrir eso con margen, sin llegar al presupuesto de las
- * compras.
+ * Presupuesto por lectura del panel (línea base y verificación).
+ * `/find_user` consulta el panel real de FlujoTV (scrapeo en vivo) y tarda
+ * ~20 s por lectura en producción, con picos de hasta 60 s (el mismo techo
+ * que documenta la guarda de compras en `flujotv/client.ts`): un timeout
+ * menor corta lecturas que el panel terminaría. Caso real 495a040a: la línea
+ * base murió a los 45 s, el reintento del scheduler aplicó la renovación a
+ * los ~3 min y el sondeo del comprador (2 min) ya había vencido.
  */
-const RENEWAL_VERIFY_READ_TIMEOUT_MS = 45_000
+const RENEWAL_VERIFY_READ_TIMEOUT_MS = 60_000
 
 /**
  * Tope de rotación de la clave de idempotencia (`mp-<id>` → `mp-<id>-r2` →
@@ -2696,7 +2698,12 @@ export async function createCouponOrder(params: {
           coupon: code,
         },
       })
-      void attemptOrderRenewal(order, null, FLUJO_PURCHASE_TIMEOUT_MS, {
+      // Renovación sin tope de compras: el canje ya no sostiene la respuesta
+      // HTTP (desacoplada), así que el POST al panel usa el default largo
+      // (300 s) igual que webhook, scheduler y transferencias. El cap de
+      // 60 s anterior abortaba POSTs lentos que el panel terminaría
+      // aplicando, gastando un reintento de backoff innecesario.
+      void attemptOrderRenewal(order, null, undefined, {
         transactionId,
         trigger: "coupon",
       })

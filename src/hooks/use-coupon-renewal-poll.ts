@@ -17,11 +17,15 @@ import {
 } from "@/components/entities/pago-api"
 
 /**
- * Ventana del sondeo: cubre el reintento automático de 60 s del scheduler
- * más la ejecución del intento; al agotarse el mensaje invita a re-pulsar
+ * Ventana del sondeo (180 × 2 s = 6 min): debe cubrir un intento lento
+ * completo (línea base + POST al panel + verificación tardan 1-4 min con el
+ * panel lento), el backoff de 60 s del primer reintento automático y la
+ * latencia del tick del scheduler (30 s). Caso real 495a040a: la renovación
+ * quedó `renewed` a los ~3 min y la ventana anterior de 2 min vencía antes
+ * (falso negativo percibido). Al agotarse el mensaje invita a re-pulsar
  * «Aplicar cupón», que consulta la misma orden sin crear otra.
  */
-export const COUPON_POLL_ATTEMPTS = 60
+export const COUPON_POLL_ATTEMPTS = 180
 export const COUPON_POLL_INTERVAL_MS = 2000
 
 /** Mensaje al agotar la ventana de sondeo sin estado final (idéntico en ambas vistas). */
