@@ -6,7 +6,8 @@
  * está tipado 1:1 contra esta lista, así que sin su handler no compila.
  *
  * Los comandos se ejecutan en el servidor SIN pasar por el LLM (doble
- * mecanismo de atención). Solo aplican al chat web del panel.
+ * mecanismo de atención), tanto en el chat web del panel como en el agente
+ * de WhatsApp (runWhatsAppTurn aplica el mismo contrato).
  */
 
 export interface SlashCommandMeta {

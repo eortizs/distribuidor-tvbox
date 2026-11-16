@@ -39,7 +39,7 @@ import {
 import { normalizarTexto } from "@/server/transferencias/verificar"
 import { getUserFile, userFilePath } from "@/server/storage/user-files"
 
-import { appendConversationMessage } from "./conversations"
+import { appendConversationMessage, type AssistantChannel } from "./conversations"
 import type { AssistantAttachmentMeta } from "./attachments"
 
 /*
@@ -100,19 +100,20 @@ async function persistTurns(input: {
   message: string
   reply: string
   attachments: readonly AssistantAttachmentMeta[]
+  channel: AssistantChannel
 }): Promise<void> {
   await appendConversationMessage({
     userId: input.userId,
     role: "user",
     content: input.message,
-    channel: "web",
+    channel: input.channel,
     attachments: [...input.attachments],
   })
   await appendConversationMessage({
     userId: input.userId,
     role: "assistant",
     content: input.reply,
-    channel: "web",
+    channel: input.channel,
   })
 }
 
@@ -458,24 +459,27 @@ async function registrarYRevisar(input: {
  *     el escaneo valida el impreso contra ella (variante explícita).
  *   - Código solo, sin adjuntos → guía del paso 3.
  *
- * Cuando responde, SIEMPRE persiste ambos turnos (user + assistant, canal
- * web); el turno del usuario conserva el comprobante como chip.
+ * Cuando responde, SIEMPRE persiste ambos turnos (user + assistant, con el
+ * canal de origen); el turno del usuario conserva el comprobante como chip.
  */
 export async function maybeHandleRenewalReceipt(input: {
   user: AuthUser
   message: string
   /** Adjuntos ya validados (propiedad, tipos y límites) por la ruta. */
   attachments: readonly AssistantAttachmentMeta[]
+  /** Canal de origen de los turnos persistidos (default: web). */
+  channel?: AssistantChannel
 }): Promise<string | null> {
+  const channel: AssistantChannel = input.channel ?? "web"
   const sinMensaje = input.message.length === 0
   const code = normalizeConceptCode(input.message)
 
   if (sinMensaje) {
     if (input.attachments.length === 0) return null
-    return handleComprobanteSinMensaje(input)
+    return handleComprobanteSinMensaje({ ...input, channel })
   }
   if (code === null) return null
-  return handleComprobanteConCodigo(input, code)
+  return handleComprobanteConCodigo({ ...input, channel }, code)
 }
 
 /** Variante explícita: el código escrito por el comprador liga la orden. */
@@ -484,6 +488,7 @@ async function handleComprobanteConCodigo(
     user: AuthUser
     message: string
     attachments: readonly AssistantAttachmentMeta[]
+    channel: AssistantChannel
   },
   code: string
 ): Promise<string | null> {
@@ -515,6 +520,7 @@ async function handleComprobanteConCodigo(
           message: input.message,
           reply,
           attachments: input.attachments,
+          channel: input.channel,
         })
         return reply
       }
@@ -533,6 +539,7 @@ async function handleComprobanteConCodigo(
       message: input.message,
       reply,
       attachments: input.attachments,
+      channel: input.channel,
     })
     return reply
   }
@@ -548,6 +555,7 @@ async function handleComprobanteConCodigo(
       message: input.message,
       reply,
       attachments: input.attachments,
+      channel: input.channel,
     })
     return reply
   }
@@ -560,7 +568,7 @@ async function handleComprobanteConCodigo(
     userId: input.user.id,
     role: "user",
     content: input.message,
-    channel: "web",
+    channel: input.channel,
     attachments: [ticket],
   })
 
@@ -600,7 +608,7 @@ async function handleComprobanteConCodigo(
     userId: input.user.id,
     role: "assistant",
     content: reply,
-    channel: "web",
+    channel: input.channel,
   })
   return reply
 }
@@ -615,6 +623,7 @@ async function handleComprobanteSinMensaje(input: {
   user: AuthUser
   message: string
   attachments: readonly AssistantAttachmentMeta[]
+  channel: AssistantChannel
 }): Promise<string | null> {
   const activeConcepts = await findActiveConceptsForBuyer({
     buyerUserId: input.user.id,
@@ -632,6 +641,7 @@ async function handleComprobanteSinMensaje(input: {
       message: input.message,
       reply,
       attachments: input.attachments,
+      channel: input.channel,
     })
     return reply
   }
@@ -702,6 +712,7 @@ async function handleComprobanteSinMensaje(input: {
           message: input.message,
           reply,
           attachments: input.attachments,
+          channel: input.channel,
         })
         return reply
       }
@@ -721,6 +732,7 @@ async function handleComprobanteSinMensaje(input: {
       message: input.message,
       reply,
       attachments: input.attachments,
+      channel: input.channel,
     })
     return reply
   }
@@ -741,6 +753,7 @@ async function handleComprobanteSinMensaje(input: {
       message: input.message,
       reply,
       attachments: input.attachments,
+      channel: input.channel,
     })
     return reply
   }
@@ -760,7 +773,7 @@ async function handleComprobanteSinMensaje(input: {
     userId: input.user.id,
     role: "user",
     content: input.message,
-    channel: "web",
+    channel: input.channel,
     attachments: [ticket],
   })
 
@@ -789,7 +802,7 @@ async function handleComprobanteSinMensaje(input: {
     userId: input.user.id,
     role: "assistant",
     content: reply,
-    channel: "web",
+    channel: input.channel,
   })
   return reply
 }

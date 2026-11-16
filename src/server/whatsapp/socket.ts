@@ -24,7 +24,6 @@ import pino from "pino"
 import { MAX_ASSISTANT_ATTACHMENT_BYTES } from "@/lib/attachments"
 import {
   assistantAttachmentsConfigured,
-  describeAssistantAttachments,
   type AssistantAttachmentMeta,
 } from "@/server/asistente/attachments"
 import { saveUserFile } from "@/server/storage/user-files"
@@ -33,7 +32,7 @@ import {
   findUserByWhatsAppPhone,
   logWhatsAppMessageDetached,
 } from "./service"
-import { enqueueAgentTurn, runWhatsAppAgent } from "./agent"
+import { enqueueAgentTurn, runWhatsAppTurn } from "./agent"
 import { canonicalWhatsAppDigits, whatsappAgentNumber } from "./config"
 
 /*
@@ -402,10 +401,11 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
   if (!socket) return
 
   /*
-   * Adjunto del turno: bajar el archivo, guardarlo en el almacenamiento del
-   * usuario (mismo `user_files` que el Asistente de la PWA) y transcribirlo
-   * con visión ANTES del turno. La transcripción viaja con el turno (bloque
-   * de datos) y queda en la conversación unificada: la PWA ve los chips.
+   * Adjunto del turno: bajar el archivo y guardarlo en el almacenamiento del
+   * usuario (mismo `user_files` que el Asistente de la PWA). La transcripción
+   * con visión NO se hace aquí: runWhatsAppTurn la reserva para los turnos
+   * que no intercepta (comando o comprobante de renovación hacen su propia
+   * lectura), igual que la ruta del chat web.
    */
   let attachments: AssistantAttachmentMeta[] = []
   if (mediaInfo) {
@@ -435,7 +435,7 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
         mimeType: mediaInfo.mimeType,
         bytes,
       })
-      attachments = await describeAssistantAttachments(user.id, [
+      attachments = [
         {
           fileId: file.id,
           fileName: file.fileName,
@@ -443,7 +443,7 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
           sizeBytes: file.sizeBytes,
           description: null,
         },
-      ])
+      ]
     } catch (error) {
       log("media_store", error)
       await sendTextToJid(
@@ -478,20 +478,17 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
 
   try {
     // Turno encolado (convivencia Baileys ↔ agente): serializado por teléfono
-    // y con tope global de concurrencia; el socket nunca espera al LLM.
-    let reply = await enqueueAgentTurn(phone, () =>
-      runWhatsAppAgent(
-        { id: user.id, username: user.username, role: user.role },
-        effectiveText,
-        attachments
-      )
+    // y con tope global de concurrencia para el LLM; el socket nunca espera.
+    // runWhatsAppTurn ejecuta ANTES los interceptores del chat web (comandos
+    // / y comprobante de renovación), degrada sus fallos a una respuesta de
+    // error (nunca silencio) y solo lo no interceptado va al modelo.
+    const reply = await enqueueAgentTurn(phone, () =>
+      runWhatsAppTurn({
+        user: { id: user.id, username: user.username, role: user.role },
+        text: effectiveText,
+        attachmentMetas: attachments,
+      })
     )
-    if (!reply) {
-      reply = {
-        text: "El agente está atendiendo varios chats a la vez; inténtalo de nuevo en un momento.",
-        llmUsed: false,
-      }
-    }
     await sendTextToJid(jid, reply.text)
     logWhatsAppMessageDetached({
       direction: "out",

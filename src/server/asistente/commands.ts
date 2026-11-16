@@ -10,7 +10,11 @@ import {
   getWhatsAppPhoneOf,
 } from "@/server/whatsapp/service"
 
-import { appendConversationMessage, loadConversation } from "./conversations"
+import {
+  appendConversationMessage,
+  loadConversation,
+  type AssistantChannel,
+} from "./conversations"
 import { listClientsInScope } from "./tools"
 import { handleRenovarCommand } from "./renovacion"
 import { isRenovarCommandName } from "@/lib/asistente-commands"
@@ -178,6 +182,9 @@ const handlers: Record<SlashCommandName, SlashCommandHandler> = {
  * - string: respuesta ya ejecutada (turnos user/assistant persistidos), lista
  *   para devolverse como cuerpo text/plain.
  *
+ * `channel` marca el origen de los turnos persistidos (web o WhatsApp): el
+ * canal de WhatsApp llama aquí ANTES de su agente, con el mismo contrato.
+ *
  * Un nombre desconocido lanza 422 `comando_desconocido` (defensa en
  * profundidad: el cliente valida antes de enviar).
  *
@@ -188,7 +195,8 @@ const handlers: Record<SlashCommandName, SlashCommandHandler> = {
  */
 export async function executeSlashCommand(
   user: AuthUser,
-  rawMessage: string
+  rawMessage: string,
+  channel: AssistantChannel = "web"
 ): Promise<string | null> {
   const parsed = parseSlashCommand(rawMessage)
   if (!parsed) return null
@@ -229,7 +237,7 @@ export async function executeSlashCommand(
       userId: user.id,
       role: "assistant",
       content: text,
-      channel: "web",
+      channel,
     })
     return text
   }
@@ -238,14 +246,14 @@ export async function executeSlashCommand(
     userId: user.id,
     role: "user",
     content: trimmed,
-    channel: "web",
+    channel,
   })
   const result = await handler({ user, args: parsed.args })
   await appendConversationMessage({
     userId: user.id,
     role: "assistant",
     content: result.text,
-    channel: "web",
+    channel,
   })
   return result.text
 }

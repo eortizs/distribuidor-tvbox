@@ -3,8 +3,11 @@ import { generateText, stepCountIs, tool } from "ai"
 import { z } from "zod"
 
 import { EXPENSE_CATEGORIES } from "@/lib/finanzas"
+import { parseSlashCommand } from "@/lib/asistente-commands"
 import { EmailAliases } from "@/server/asistente/emails"
 import { executeAssistantTool } from "@/server/asistente/tools"
+import { executeSlashCommand } from "@/server/asistente/commands"
+import { maybeHandleRenewalReceipt } from "@/server/asistente/renovacion"
 import {
   appendConversationMessage,
   loadConversation,
@@ -12,9 +15,11 @@ import {
 } from "@/server/asistente/conversations"
 import {
   attachmentContextBlock,
+  describeAssistantAttachments,
   type AssistantAttachmentMeta,
 } from "@/server/asistente/attachments"
 import type { AuthUser } from "@/server/auth/types"
+import { AppError } from "@/server/umejson/types"
 
 import { whatsappAgentLlmConfigured, whatsappAgentModel } from "./config"
 
@@ -54,12 +59,20 @@ const HISTORY_TURNS = 20
 const ZONA = "America/Mexico_City"
 
 /*
- * Convivencia Baileys ↔ agente: los turnos del LLM se serializan POR TELÉFONO
- * (las respuestas nunca se entrelazan) y se acota la concurrencia global:
- * una ráfaga de mensajes de varios chats no dispara N llamadas simultáneas
- * al proveedor ni satura el pool de Postgres con ejecuciones de
- * herramientas. El socket de Baileys nunca espera estas colas — los turnos
- * se encolan detached y su ciclo de eventos sigue libre.
+ * Convivencia Baileys ↔ agente: los turnos se serializan POR TELÉFONO
+ * (las respuestas nunca se entrelazan) y la llamada al LLM se acota con un
+ * semáforo global: una ráfaga de mensajes de varios chats no dispara N
+ * llamadas simultáneas al proveedor ni satura el pool de Postgres con
+ * ejecuciones de herramientas. El socket de Baileys nunca espera estas
+ * colas — los turnos se encolan detached y su ciclo de eventos sigue libre.
+ *
+ * El semáforo cubre SOLO la llamada al LLM (runWhatsAppAgent): los
+ * interceptores del turno (comandos, comprobante de renovación con su
+ * escaneo de visión y lecturas del panel FlujoTV) y la transcripción de
+ * adjuntos son I/O externo de hasta ~2 min que no debe ocupar uno de los 3
+ * slots — con 3 comprobantes lentos en vuelo, los demás chats no pueden
+ * quedar en «ocupado» por culpa de un cerrojo que solo protege al proveedor
+ * del modelo. Por teléfono ya hay serialización de todos modos.
  */
 const MAX_CONCURRENT_TURNS = 3
 const MAX_QUEUED_TURNS = 20
@@ -82,16 +95,25 @@ async function withTurnSlot<T>(job: () => Promise<T>): Promise<T | null> {
   }
 }
 
+/** Respuesta de «ocupado» cuando el cerrojo global del LLM está saturado. */
+function busyReply(): AgentReply {
+  return {
+    text: "El agente está atendiendo varios chats a la vez; inténtalo de nuevo en un momento.",
+    llmUsed: false,
+  }
+}
+
 /**
- * Encola un turno del agente: encadenado por teléfono + semáforo global.
- * Devuelve null si la cola está saturada (el canal responde «ocupado»).
+ * Encola un turno del agente: encadenado por teléfono (sin semáforo — el
+ * cerrojo global lo toma internamente la parte del LLM y su saturación se
+ * responde como turno «ocupado», no como null).
  */
 export async function enqueueAgentTurn<T>(
   phone: string,
   job: () => Promise<T>
-): Promise<T | null> {
+): Promise<T> {
   const previous = perPhoneChain.get(phone) ?? Promise.resolve()
-  const chain = previous.then(() => withTurnSlot(job))
+  const chain = previous.then(() => job())
   const settled = chain.then(
     () => undefined,
     () => undefined
@@ -202,6 +224,121 @@ export async function runWhatsAppAgent(
     await persistTurn(user.id, "assistant", fallback)
     return { text: fallback, llmUsed: false }
   }
+}
+
+/*
+ * Turno de WhatsApp con la MISMA doble vía de atención que la ruta del chat
+ * web (POST /api/asistente/chat): los slash commands se ejecutan
+ * DIRECTAMENTE en el servidor (sin LLM) y el comprobante de renovación del
+ * paso 3 de /tv3<usuario> intercepta el turno antes del modelo. Sin estos
+ * interceptores el comando llegaba como texto al LLM, que respondía «no
+ * reconozco ese comando» — el canal depende de la ejecución directa, no de
+ * que el modelo adivine la sintaxis.
+ *
+ * Los adjuntos llegan SIN transcribir (la visión del chat se gasta solo
+ * cuando el turno NO se intercepta, como en la ruta web: el escaneo de la
+ * renovación hace SU propia extracción).
+ */
+export async function runWhatsAppTurn(input: {
+  user: AuthUser
+  text: string
+  /** Adjuntos ya guardados en user_files y validados por el socket. */
+  attachmentMetas: AssistantAttachmentMeta[]
+}): Promise<AgentReply> {
+  const text = input.text.trim()
+
+  // Slash commands: el mismo contrato de la ruta web. Un texto con forma de
+  // comando + adjuntos se rechaza con guía (el comprobante de renovación va
+  // SOLO, sin mensaje); un nombre desconocido responde con su mensaje 422.
+  if (text.startsWith("/") && parseSlashCommand(text) !== null) {
+    if (input.attachmentMetas.length > 0) {
+      return {
+        text: commandReplyText(
+          "Los comandos no admiten adjuntos: envía el comando solo (solo texto). El comprobante de una renovación se manda después como archivo SIN mensaje: lo escaneo y el concepto de pago impreso identifica la renovación."
+        ),
+        llmUsed: false,
+      }
+    }
+    try {
+      const reply = await executeSlashCommand(input.user, text, "whatsapp")
+      if (reply !== null) {
+        return { text: commandReplyText(reply), llmUsed: false }
+      }
+    } catch (error) {
+      if (error instanceof AppError) {
+        return { text: commandReplyText(error.message), llmUsed: false }
+      }
+      return interceptorFailureReply(input.user.id, error)
+    }
+  }
+
+  // Comprobante de renovación (paso 3): adjunto sin mensaje, o el código
+  // como mensaje. Devuelve null cuando el turno no es un envío de renovación.
+  // Un fallo de infraestructura (p. ej. la BD al persistir el veredicto)
+  // JAMÁS deja al comprador sin respuesta: el canal no tiene la barra de
+  // error del navegador, y el silencio tras pagar es lo que duplica pagos.
+  let renewalReply: string | null
+  try {
+    renewalReply = await maybeHandleRenewalReceipt({
+      user: input.user,
+      message: text,
+      attachments: input.attachmentMetas,
+      channel: "whatsapp",
+    })
+  } catch (error) {
+    return interceptorFailureReply(input.user.id, error)
+  }
+  if (renewalReply !== null) {
+    return { text: commandReplyText(renewalReply), llmUsed: false }
+  }
+
+  // Turno normal del agente: la visión describe los adjuntos (tardío a
+  // propósito) y el LLM corre bajo el semáforo global — lo demás del turno
+  // (interceptores, visión) ya no ocupa un slot del cerrojo.
+  const attachments = await describeAssistantAttachments(
+    input.user.id,
+    input.attachmentMetas
+  )
+  const slotted = await withTurnSlot(() =>
+    runWhatsAppAgent(input.user, text, attachments)
+  )
+  return slotted ?? busyReply()
+}
+
+/**
+ * Fallo de infraestructura de un interceptor (comando o comprobante): nunca
+ * dejar al comprador sin respuesta. Se registra, se persista el aviso (mejor
+ * esfuerzo, como todo persistTurn) y se devuelve el fallback genérico. Si el
+ * fallo fue DESPUÉS de crear la orden de renovación, el resultado real le
+ * llega igual por la campana espejo (insertNotification → wa_outbox).
+ */
+async function interceptorFailureReply(
+  userId: string,
+  error: unknown
+): Promise<AgentReply> {
+  console.error(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      error: `whatsapp: interceptor: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    })
+  )
+  const fallback =
+    "Tuve un problema procesando tu mensaje. Intenta de nuevo en un momento; " +
+    "si persiste, revisa la app web."
+  await persistTurn(userId, "assistant", fallback)
+  return { text: fallback, llmUsed: false }
+}
+
+/**
+ * Respuestas directas (comandos y veredictos de renovación) al formato de
+ * WhatsApp: el panel usa la negrita de Markdown (**texto**) y WhatsApp pinta
+ * la negrita con UN asterisco; además se respeta el tope de longitud del
+ * canal para listados largos (/clientes).
+ */
+function commandReplyText(text: string): string {
+  return capReply(text.replace(/\*\*([^*\n]+)\*\*/g, "*$1*"))
 }
 
 /** Persiste el turno del usuario (mejor esfuerzo) y devuelve la ventana de historia. */
