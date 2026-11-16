@@ -1,6 +1,7 @@
 import {
   MERCADOPAGO_API_BASE,
   resolveMercadoPagoConfig,
+  resolveMercadoPagoGateway,
 } from "./config"
 import { MercadoPagoError, toMercadoPagoError } from "./errors"
 
@@ -41,6 +42,27 @@ export async function mercadoPagoRequest<T = unknown>(
   init: MercadoPagoRequestInit = {}
 ): Promise<MercadoPagoResponse<T>> {
   const { accessToken } = resolveMercadoPagoConfig()
+  return mercadoPagoRequestWithToken<T>(accessToken, path, init)
+}
+
+/**
+ * Como `mercadoPagoRequest`, pero solo exige la credencial del vendedor sin
+ * el precio de licencia (`resolveMercadoPagoGateway`): para lecturas que no
+ * cobran nada, p. ej. el reporte SPEI de `/modulos/reporte-spei`.
+ */
+export async function mercadoPagoGatewayRequest<T = unknown>(
+  path: string,
+  init: MercadoPagoRequestInit = {}
+): Promise<MercadoPagoResponse<T>> {
+  const { accessToken } = resolveMercadoPagoGateway()
+  return mercadoPagoRequestWithToken<T>(accessToken, path, init)
+}
+
+async function mercadoPagoRequestWithToken<T = unknown>(
+  accessToken: string,
+  path: string,
+  init: MercadoPagoRequestInit
+): Promise<MercadoPagoResponse<T>> {
   const url = `${MERCADOPAGO_API_BASE}${path}`
 
   const headers: Record<string, string> = {

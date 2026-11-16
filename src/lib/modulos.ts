@@ -3,6 +3,7 @@ import {
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
+  LandmarkIcon,
   MessageCircleIcon,
   MonitorDownIcon,
   PackageIcon,
@@ -131,6 +132,14 @@ export const MODULOS: Modulo[] = [
       "Elige tokens (herramientas con APIs) o cupones (licencias FlujoTV), define el monto y paga con Mercado Pago, transferencia o cupón.",
     href: "/modulos/abonar-saldo",
     icon: PiggyBankIcon,
+  },
+  {
+    title: "Reporte SPEI",
+    description:
+      "Depósitos por transferencia SPEI a la CLABE acreditados en Mercado Pago, del día actual o de un día específico.",
+    href: "/modulos/reporte-spei",
+    icon: LandmarkIcon,
+    adminOnly: true,
   },
   {
     title: "Distribuidores",
