@@ -94,7 +94,6 @@ import {
   parseAbonoAmount,
   parseSaldoTipo,
   saldoTipoLabel,
-  SALDO_TIPOS,
   type AbonoAmountOk,
   type SaldoTipo,
 } from "@/lib/saldo"
@@ -136,9 +135,16 @@ const COUPON_POLL_INTERVAL_MS = 2000
 const MONTOS_RAPIDOS = [100, 200, 500, 1000]
 
 /**
- * Categorías de saldo del selector: metadatos de presentación. Los tokens
- * van primero (la novedad del módulo) y quedan preseleccionados; las
- * descripciones dejan inequívoco para qué sirve cada billetera.
+ * Orden de presentación de este módulo: «saldo en cupones» primero (el
+ * default) y «saldo en tokens» debajo. No altera el catálogo canónico
+ * `SALDO_TIPOS` (compartido con el panel de admins).
+ */
+const SALDO_TIPOS_VISTA: readonly SaldoTipo[] = ["cupones", "tokens"]
+
+/**
+ * Categorías de saldo del selector: metadatos de presentación. El default es
+ * «saldo en cupones» (el uso principal del módulo); las descripciones dejan
+ * inequívoco para qué sirve cada billetera.
  */
 const SALDO_TIPO_META: Record<
   SaldoTipo,
@@ -237,7 +243,7 @@ export function AbonarSaldoView({
 
   // Monto, tipo de saldo y sheet de pago.
   const [amountInput, setAmountInput] = useState("")
-  const [saldoTipo, setSaldoTipo] = useState<SaldoTipo>("tokens")
+  const [saldoTipo, setSaldoTipo] = useState<SaldoTipo>("cupones")
   const [checkoutOpen, setCheckoutOpen] = useState(false)
   const [payMethod, setPayMethod] = useState<PayMethod | null>(null)
   const [payError, setPayError] = useState<string | null>(null)
@@ -809,18 +815,6 @@ export function AbonarSaldoView({
         <div className="grid gap-x-4 gap-y-3 sm:grid-cols-2">
           <div className="flex flex-col gap-1">
             <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
-              <CoinsIcon aria-hidden="true" className="size-3.5" />
-              Saldo en tokens
-            </span>
-            <span className="text-2xl font-semibold tracking-tight tabular-nums">
-              {formatMxn(saldos.tokens)}
-            </span>
-            <span className="text-muted-foreground text-xs">
-              Para herramientas con APIs (fal.ai, OpenRouter…)
-            </span>
-          </div>
-          <div className="flex flex-col gap-1">
-            <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
               <TvIcon aria-hidden="true" className="size-3.5" />
               Saldo en cupones
             </span>
@@ -829,6 +823,18 @@ export function AbonarSaldoView({
             </span>
             <span className="text-muted-foreground text-xs">
               Para comprar y renovar licencias de FlujoTV
+            </span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-muted-foreground flex items-center gap-1.5 text-xs font-medium">
+              <CoinsIcon aria-hidden="true" className="size-3.5" />
+              Saldo en tokens
+            </span>
+            <span className="text-2xl font-semibold tracking-tight tabular-nums">
+              {formatMxn(saldos.tokens)}
+            </span>
+            <span className="text-muted-foreground text-xs">
+              Para herramientas con APIs (fal.ai, OpenRouter…)
             </span>
           </div>
         </div>
@@ -852,7 +858,7 @@ export function AbonarSaldoView({
             aria-label="Tipo de saldo a abonar"
           >
             <FieldGroup className="gap-0 rounded-lg border">
-              {SALDO_TIPOS.map((tipo, index) => {
+              {SALDO_TIPOS_VISTA.map((tipo, index) => {
                 const meta = SALDO_TIPO_META[tipo]
                 const Icon = tipo === "tokens" ? CoinsIcon : TvIcon
                 return (
