@@ -178,6 +178,24 @@ export function ReporteSpeiView({
         size: 110,
       },
       {
+        accessorKey: "rail",
+        id: "rail",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Vía" />
+        ),
+        cell: ({ row }) =>
+          row.original.rail === "wallet" ? (
+            <Badge size="sm" radius="full" variant="info-light">
+              Billetera MP
+            </Badge>
+          ) : (
+            <Badge size="sm" radius="full" variant="secondary">
+              SPEI
+            </Badge>
+          ),
+        size: 120,
+      },
+      {
         accessorKey: "amountMxn",
         id: "amountMxn",
         header: ({ column }) => (
@@ -304,11 +322,11 @@ export function ReporteSpeiView({
       <FrameHeader>
         <FrameTitle className="text-xl font-semibold">Reporte SPEI</FrameTitle>
         <FrameDescription>
-          Depósitos por transferencia bancaria (SPEI a la CLABE) acreditados
-          en la cuenta de Mercado Pago, por día calendario de Ciudad de México.
-          El concepto corresponde al código de pago que la app entrega al
-          comprador; el «motivo» escrito a mano en el banco no lo expone la
-          API de Mercado Pago.
+          Depósitos acreditados en la cuenta de Mercado Pago por día calendario
+          de Ciudad de México, en dos vías: SPEI a la CLABE y transferencia
+          desde el saldo de otra cuenta MP. El concepto corresponde al código
+          de pago que la app entrega al comprador; el «motivo» escrito a mano
+          en el banco no lo expone la API de Mercado Pago.
         </FrameDescription>
       </FrameHeader>
 
@@ -420,7 +438,7 @@ export function ReporteSpeiView({
           emptyMessage={
             loading
               ? "Consultando Mercado Pago…"
-              : "Sin depósitos SPEI acreditados este día."
+              : "Sin depósitos acreditados este día."
           }
         >
           <DataGridContainer>

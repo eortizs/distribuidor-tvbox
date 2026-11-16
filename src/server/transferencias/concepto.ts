@@ -570,10 +570,14 @@ function amountsEqual(a: number, b: number): boolean {
  *     real: 9 códigos latentes por depósito) y solo la subida del
  *     comprobante confirma a qué dinero corresponde; al consumirse, el
  *     reporte lo muestra tras refrescar.
- *   - El importe manda: un depósito que calza por importe (el de la orden
- *     ligada vía `mp_orders.concept_id`) gana sobre uno que solo calza por
- *     ventana; dentro del mismo nivel, >1 coincidencia es ambiguo y se
- *     muestran todos los códigos.
+ *   - El importe es OBLIGATORIO: el depósito debe coincidir con el de la
+ *     orden ligada (`mp_orders.concept_id`). Sin coincidencia por importe
+ *     el depósito queda «—» aunque la ventana calce — las ventanas de un
+ *     día con varios pagos se traslapan y el fallback «solo ventana»
+ *     ligaba depósitos ajenos al concepto (caso real: cargas propias de
+ *     $10 y $60.07 quedaron pintadas como el concepto de $100 del día).
+ *     >1 coincidencia por importe es ambiguo y se muestran todos los
+ *     códigos.
  */
 export async function resolveConceptsForDeposits(input: {
   windowStartIso: string
@@ -630,21 +634,20 @@ export async function resolveConceptsForDeposits(input: {
     if (!deposit.atIso) continue
     const atMs = Date.parse(deposit.atIso)
     if (Number.isNaN(atMs)) continue
-    const inWindow = candidates.filter(
-      (candidate) => atMs >= candidate.startMs && atMs <= candidate.endMs
-    )
-    const byAmount = inWindow.filter(
+    const matched = candidates.filter(
       (candidate) =>
+        atMs >= candidate.startMs &&
+        atMs <= candidate.endMs &&
         candidate.amount !== null &&
         amountsEqual(candidate.amount, deposit.amountMxn)
     )
-    const level = byAmount.length > 0 ? byAmount : inWindow
-    if (level.length === 0) continue
-    const names = [...new Set(level.map((candidate) => candidate.userName))]
+    if (matched.length === 0) continue
+    const names = [...new Set(matched.map((candidate) => candidate.userName))]
+    const codes = [...new Set(matched.map((candidate) => candidate.code))]
     matches.set(deposit.id, {
-      code: level.map((candidate) => candidate.code).join(" · "),
+      code: codes.join(" · "),
       userName: names.length === 1 ? names[0] : null,
-      ambiguous: level.length > 1,
+      ambiguous: matched.length > 1,
     })
   }
 

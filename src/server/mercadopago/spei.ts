@@ -4,28 +4,40 @@ import { resolveConceptsForDeposits } from "@/server/transferencias/concepto"
 
 /**
  * Reporte SPEI (`/modulos/reporte-spei`): depósitos por transferencia
- * bancaria (SPEI a la CLABE) ACREDITADOS en la cuenta de Mercado Pago del
- * vendedor, para el día actual o un día específico. Consulta viva a
+ * ACREDITADOS en la cuenta de Mercado Pago del vendedor, para el día actual
+ * o un día específico, en DOS RIELES: SPEI a la CLABE (`clabe`/
+ * `bank_transfer` con `operation_type = account_fund`) y transferencia desde
+ * el saldo de otra cuenta MP (`operation_type = money_transfer`; la mayoría
+ * de las renovaciones reales llega por aquí). Consulta viva a
  * `GET /v1/payments/search` — no hay registro en BD: lo acreditado en MP es
  * la verdad y la API cubre días anteriores sin límite práctico.
  *
- * La CLABE no tiene un riel dedicado en la API: la carga de saldo llega como
- * pago `clabe`/`bank_transfer` con `operation_type = account_fund`, así que
- * el filtro de operación se aplica aquí, en backend, sobre los resultados.
+ * Ninguno de los dos rieles tiene un filtro dedicado en la API: el filtro de
+ * operación se aplica aquí, en backend, sobre los resultados de cada
+ * consulta. El riel billetera solo contiene ENTRADAS (verificado en el
+ * histórico: los gastos con saldo y las compras llegan como
+ * `regular_payment`, no como `money_transfer`).
  */
 
-/** Cargas de saldo (account_fund) confirmadas y acreditadas. */
+/** Cargas de saldo SPEI (CLABE) confirmadas y acreditadas. */
 const SPEI_OPERATION_TYPE = "account_fund"
+
+/** Transferencias desde el saldo de otra cuenta MP (billetera → cuenta). */
+const WALLET_OPERATION_TYPE = "money_transfer"
+
+/** Riel de entrada de un depósito del reporte. */
+export type SpeiDepositRail = "spei" | "wallet"
 
 /** Página de `payments/search` y tope defensivo (20 páginas = 1000 pagos). */
 const PAGE_LIMIT = 50
 const PAGE_MAX = 20
 
 /**
- * Presupuesto total de la consulta paginada y timeout por página: MP suele
- * responder en 1-2 s, así que un MP degradado corta por presupuesto antes de
- * agotar el request (~100 s de Cloudflare) y lo que alcanzó a leer sale
- * marcado `truncated` en vez de colgar el módulo.
+ * Presupuesto total de las consultas paginadas (COMPARTIDO entre los dos
+ * rieles) y timeout por página: MP suele responder en 1-2 s, así que un MP
+ * degradado corta por presupuesto antes de agotar el request (~100 s de
+ * Cloudflare; el peor caso acotado es presupuesto + una página por riel) y
+ * lo que alcanzó a leer sale marcado `truncated` en vez de colgar el módulo.
  */
 const QUERY_BUDGET_MS = 45_000
 const PAGE_TIMEOUT_MS = 10_000
@@ -42,6 +54,8 @@ export interface SpeiDepositRow {
   amountMxn: number
   /** Neto recibido si MP lo reporta; null si no viene. */
   netAmountMxn: number | null
+  /** Riel de entrada: SPEI a la CLABE o billetera de otra cuenta MP. */
+  rail: SpeiDepositRail
   /** Nombre del pagador si MP lo devuelve (en account_fund a veces falta). */
   payerName: string | null
   /** Correo del pagador si MP lo devuelve. */
@@ -186,7 +200,14 @@ function isSpeiLoad(payment: Record<string, unknown>): boolean {
   return payment.operation_type === SPEI_OPERATION_TYPE
 }
 
-function toDepositRow(payment: Record<string, unknown>): SpeiDepositRow {
+function isWalletLoad(payment: Record<string, unknown>): boolean {
+  return payment.operation_type === WALLET_OPERATION_TYPE
+}
+
+function toDepositRow(
+  payment: Record<string, unknown>,
+  rail: SpeiDepositRail
+): SpeiDepositRow {
   const payer = isRecord(payment.payer) ? payment.payer : {}
   const firstName = stringOrNull(payer.first_name)
   const lastName = stringOrNull(payer.last_name)
@@ -199,6 +220,7 @@ function toDepositRow(payment: Record<string, unknown>): SpeiDepositRow {
     dateApproved: stringOrNull(payment.date_approved),
     amountMxn: numberOrNull(payment.transaction_amount) ?? 0,
     netAmountMxn: numberOrNull(payment.net_received_amount),
+    rail,
     payerName,
     payerEmail: stringOrNull(payer.email),
     externalReference: stringOrNull(payment.external_reference),
@@ -213,11 +235,14 @@ interface SearchPage {
 }
 
 /**
- * Depósitos SPEI (CLABE) acreditados del día indicado en CDMX:
- * `payment_method_id=clabe`, `payment_type_id=bank_transfer`,
- * `status=approved`, `status_detail=accredited`, acotado por
- * `date_approved`, con paginación hasta el tope defensivo y el filtro
- * backend de operación «carga de saldo» (`account_fund`).
+ * Depósitos acreditados del día indicado en CDMX en los dos rieles de
+ * entrada: SPEI a la CLABE (`payment_method_id=clabe`,
+ * `payment_type_id=bank_transfer`, `operation_type=account_fund`) y
+ * transferencia desde el saldo de otra cuenta MP
+ * (`operation_type=money_transfer`), ambos `status=approved`,
+ * `status_detail=accredited` y acotados por `date_approved`, con paginación
+ * hasta el tope defensivo, presupuesto compartido, dedupe por ID y orden
+ * final por fecha desc.
  */
 export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport> {
   if (!isValidSpeiDay(day)) {
@@ -229,9 +254,7 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
   }
 
   const { beginIso, endIso } = cdmxDayRange(day)
-  const query = new URLSearchParams({
-    payment_method_id: "clabe",
-    payment_type_id: "bank_transfer",
+  const baseQuery = {
     status: "approved",
     status_detail: "accredited",
     range: "date_approved",
@@ -240,7 +263,30 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
     sort: "date_approved",
     criteria: "desc",
     limit: String(PAGE_LIMIT),
-  })
+  }
+  const rails: {
+    query: URLSearchParams
+    accept: (payment: Record<string, unknown>) => boolean
+    rail: SpeiDepositRail
+  }[] = [
+    {
+      query: new URLSearchParams({
+        ...baseQuery,
+        payment_method_id: "clabe",
+        payment_type_id: "bank_transfer",
+      }),
+      accept: isSpeiLoad,
+      rail: "spei",
+    },
+    {
+      query: new URLSearchParams({
+        ...baseQuery,
+        operation_type: WALLET_OPERATION_TYPE,
+      }),
+      accept: isWalletLoad,
+      rail: "wallet",
+    },
+  ]
 
   const deposits: SpeiDepositRow[] = []
   const seenIds = new Set<string>()
@@ -248,38 +294,44 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
   let pages = 0
   const startedAt = Date.now()
 
-  for (let page = 0; page < PAGE_MAX; page += 1) {
-    // El presupuesto se revisa antes de CADA página adicional: el peor caso
-    // queda acotado a QUERY_BUDGET_MS + un timeout de página, no 20 × 20 s.
-    if (page > 0 && Date.now() - startedAt > QUERY_BUDGET_MS) {
-      truncated = true
-      break
-    }
-    query.set("offset", String(page * PAGE_LIMIT))
-    const response = await mercadoPagoGatewayRequest<SearchPage>(
-      `/v1/payments/search?${query.toString()}`,
-      { timeoutMs: PAGE_TIMEOUT_MS }
-    )
-    const results = Array.isArray(response.data?.results)
-      ? response.data.results
-      : []
-    pages += 1
+  for (const rail of rails) {
+    for (let page = 0; page < PAGE_MAX; page += 1) {
+      // El presupuesto (compartido entre rieles) se revisa antes de CADA
+      // página adicional: la primera de cada riel corre siempre — el peor
+      // caso queda acotado a QUERY_BUDGET_MS + un timeout por riel.
+      if (page > 0 && Date.now() - startedAt > QUERY_BUDGET_MS) {
+        truncated = true
+        break
+      }
+      rail.query.set("offset", String(page * PAGE_LIMIT))
+      const response = await mercadoPagoGatewayRequest<SearchPage>(
+        `/v1/payments/search?${rail.query.toString()}`,
+        { timeoutMs: PAGE_TIMEOUT_MS }
+      )
+      const results = Array.isArray(response.data?.results)
+        ? response.data.results
+        : []
+      pages += 1
 
-    for (const row of results) {
-      if (!isRecord(row)) continue
-      if (!isSpeiLoad(row)) continue
-      const deposit = toDepositRow(row)
-      // Dedupe por ID: el feed está vivo y ordenado por fecha desc, y un
-      // depósito acreditado a mitad de la paginación corre los offsets y
-      // duplica la fila de la frontera — sin esto el total del día se infla.
-      if (deposit.id.length === 0 || seenIds.has(deposit.id)) continue
-      seenIds.add(deposit.id)
-      deposits.push(deposit)
-    }
+      for (const row of results) {
+        if (!isRecord(row)) continue
+        if (!rail.accept(row)) continue
+        const deposit = toDepositRow(row, rail.rail)
+        // Dedupe por ID: el feed está vivo y ordenado por fecha desc, y un
+        // depósito acreditado a mitad de la paginación corre los offsets y
+        // duplica la fila de la frontera — sin esto el total del día se infla.
+        if (deposit.id.length === 0 || seenIds.has(deposit.id)) continue
+        seenIds.add(deposit.id)
+        deposits.push(deposit)
+      }
 
-    if (results.length < PAGE_LIMIT) break
-    if (page === PAGE_MAX - 1) truncated = true
+      if (results.length < PAGE_LIMIT) break
+      if (page === PAGE_MAX - 1) truncated = true
+    }
   }
+
+  // Dos rieles paginados por separado: ordena el día completo por fecha desc.
+  deposits.sort((a, b) => (b.dateApproved ?? "").localeCompare(a.dateApproved ?? ""))
 
   // Columna «Concepto»: cruza cada depósito con los conceptos de pago
   // emitidos (ventana de tiempo + importe). Mejor esfuerzo: un fallo de BD
@@ -319,6 +371,8 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
     day,
     count: deposits.length,
     total_mxn: totalMxn,
+    spei: deposits.filter((deposit) => deposit.rail === "spei").length,
+    wallet: deposits.filter((deposit) => deposit.rail === "wallet").length,
     pages,
     truncated,
   })
