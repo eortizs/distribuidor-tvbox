@@ -38,6 +38,10 @@ import {
 } from "@/server/transferencias/scan"
 import { normalizarTexto } from "@/server/transferencias/verificar"
 import { getUserFile, userFilePath } from "@/server/storage/user-files"
+import {
+  findPaymentOrderForReceiptConcept,
+  maybeHandlePaymentOrderReceipt,
+} from "@/server/orden-pago/whatsapp"
 
 import { appendConversationMessage, type AssistantChannel } from "./conversations"
 import type { AssistantAttachmentMeta } from "./attachments"
@@ -506,17 +510,91 @@ export async function maybeHandleRenewalReceipt(input: {
   attachments: readonly AssistantAttachmentMeta[]
   /** Canal de origen de los turnos persistidos (default: web). */
   channel?: AssistantChannel
+  /**
+   * Teléfono WhatsApp del turno (el real en el canal de WhatsApp; el
+   * registrado en el perfil para la PWA). Solo se usa para DELEGAR al canal
+   * de órdenes de pago cuando el concepto del comprobante pertenece a una:
+   * sin teléfono no hay delegación (el binding del pagador lo requiere).
+   */
+  phone?: string | null
 }): Promise<string | null> {
   const channel: AssistantChannel = input.channel ?? "web"
+  const phone = input.phone ?? null
   const sinMensaje = input.message.length === 0
   const code = normalizeConceptCode(input.message)
 
   if (sinMensaje) {
     if (input.attachments.length === 0) return null
-    return handleComprobanteSinMensaje({ ...input, channel })
+    return handleComprobanteSinMensaje({ ...input, channel, phone })
   }
   if (code === null) return null
-  return handleComprobanteConCodigo({ ...input, channel }, code)
+  return handleComprobanteConCodigo({ ...input, channel, phone }, code)
+}
+
+/**
+ * Delegación al canal de ÓRDENES DE PAGO (cobros abiertos): el concepto del
+ * comprobante (impreso o escrito) NO pertenece a ninguna renovación propia
+ * pero SÍ a una orden de pago — los dos formatos de pago por transferencia
+ * comparten este interceptor y el concepto decide a cuál pertenece el
+ * comprobante. Persiste el turno del usuario con su adjunto, corre el canal
+ * del pagador con la extracción ya hecha (sin segundo gasto de visión) y
+ * persiste la respuesta en la historia. Null = el concepto no corresponde a
+ * ninguna orden de pago (el turno sigue el curso de renovación).
+ */
+async function delegarAOrdenDePago(
+  input: {
+    user: AuthUser
+    message: string
+    attachments: readonly AssistantAttachmentMeta[]
+    channel: AssistantChannel
+    phone: string | null
+  },
+  concepto: string,
+  ticket: AssistantAttachmentMeta,
+  bytes: Uint8Array,
+  preextracted: ExtraccionLLM | null
+): Promise<string | null> {
+  if (!input.phone) return null
+  const order = await findPaymentOrderForReceiptConcept(concepto).catch(
+    () => null
+  )
+  if (!order) return null
+  logEvent("asistente.renovar_receipt_delegada_orden_pago", {
+    actor: `user:${input.user.username}`,
+    order_id: order.id,
+    code: order.code,
+    status: order.status,
+  })
+  // El turno del usuario (con su comprobante) se persiste ANTES de correr
+  // el canal de órdenes de pago: la historia queda completa pase lo que
+  // pase (el canal del pagador no persiste en assistant_messages).
+  await appendConversationMessage({
+    userId: input.user.id,
+    role: "user",
+    content: input.message,
+    channel: input.channel,
+    attachments: [ticket],
+  })
+  const reply = await maybeHandlePaymentOrderReceipt({
+    phone: input.phone,
+    text: input.message,
+    media: {
+      mimeType: ticket.mimeType,
+      fileName: ticket.fileName,
+      bytes,
+    },
+    preextracted: preextracted ?? undefined,
+  })
+  const text =
+    reply?.text ??
+    "Recibí tu comprobante y quedó registrado; en unos minutos te confirmo el estado de tu pago."
+  await appendConversationMessage({
+    userId: input.user.id,
+    role: "assistant",
+    content: text,
+    channel: input.channel,
+  })
+  return text
 }
 
 /** Variante explícita: el código escrito por el comprador liga la orden. */
@@ -526,6 +604,7 @@ async function handleComprobanteConCodigo(
     message: string
     attachments: readonly AssistantAttachmentMeta[]
     channel: AssistantChannel
+    phone: string | null
   },
   code: string
 ): Promise<string | null> {
@@ -560,6 +639,28 @@ async function handleComprobanteConCodigo(
           channel: input.channel,
         })
         return reply
+      }
+    }
+    // Ni concepto de renovación activo ni consumido: ¿el código escrito es
+    // una ORDEN DE PAGO? Delega al canal del pagador (con el adjunto, el
+    // comprobante se valida contra esa orden).
+    if (input.attachments.length === 1 && input.phone) {
+      const ticket = input.attachments[0]
+      const file = await getUserFile(input.user.id, ticket.fileId).catch(
+        () => null
+      )
+      const bytes = file
+        ? await readFile(userFilePath(file)).catch(() => null)
+        : null
+      if (bytes !== null) {
+        const delegada = await delegarAOrdenDePago(
+          input,
+          code,
+          ticket,
+          new Uint8Array(bytes),
+          null
+        )
+        if (delegada !== null) return delegada
       }
     }
     return null
@@ -661,6 +762,7 @@ async function handleComprobanteSinMensaje(input: {
   message: string
   attachments: readonly AssistantAttachmentMeta[]
   channel: AssistantChannel
+  phone: string | null
 }): Promise<string | null> {
   const activeConcepts = await findActiveConceptsForBuyer({
     buyerUserId: input.user.id,
@@ -753,6 +855,20 @@ async function handleComprobanteSinMensaje(input: {
         })
         return reply
       }
+    }
+    // El concepto impreso no es de renovación: ¿es una ORDEN DE PAGO? Con
+    // teléfono disponible se delega al canal del pagador (el MISMO archivo
+    // ya fue leído: sin segundo gasto de visión); sin él, la guía de
+    // siempre.
+    if (conceptoImpreso) {
+      const delegada = await delegarAOrdenDePago(
+        input,
+        conceptoImpreso,
+        ticket,
+        bytes,
+        extraccion
+      )
+      if (delegada !== null) return delegada
     }
     const reply = [
       conceptoImpreso

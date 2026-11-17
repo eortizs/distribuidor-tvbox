@@ -18,6 +18,7 @@ import { parseSlashCommand } from "@/lib/asistente-commands"
 import { executeSlashCommand } from "@/server/asistente/commands"
 import { maybeHandleRenewalReceipt } from "@/server/asistente/renovacion"
 import { maybeHandleCouponRedemption } from "@/server/asistente/cupon"
+import { getWhatsAppPhoneOf } from "@/server/whatsapp/service"
 import { errorResponse, readJsonBody } from "@/server/http"
 import { AppError } from "@/server/umejson/types"
 
@@ -186,6 +187,7 @@ export async function POST(request: Request) {
         user,
         message,
         attachments: attachmentMetas,
+        phone: await getWhatsAppPhoneOf(user.id).catch(() => null),
       })
       if (renewalReply !== null) {
         return new Response(renewalReply, { headers: PLAIN_TEXT_HEADERS })

@@ -179,6 +179,8 @@ function parsePaymentOrderRequestAmount(text: string): number | null {
 /** Replay honesto del estado de una orden ya resuelta o cancelada. */
 function textoEstadoResuelto(order: PaymentOrder): string {
   switch (order.status) {
+    case "verifying":
+      return textoVerificandoDeposito(order)
     case "paid":
       return [
         `La orden de pago *${order.code}* ya está pagada`,
@@ -194,6 +196,15 @@ function textoEstadoResuelto(order: PaymentOrder): string {
     default:
       return `La orden de pago *${order.code}* ya no está activa (estado: ${order.status}).`
   }
+}
+
+/** Estado de una orden EN VERIFICACIÓN de depósito (replay honesto). */
+function textoVerificandoDeposito(order: PaymentOrder): string {
+  return [
+    `Tu pago de la orden *${order.code}* (${money(order.amountMxn)}) está *en verificación*: el comprobante ya pasó la validación y estamos confirmando la acreditación del depósito en la cuenta.`,
+    "",
+    "Te avisaremos aquí mismo en cuanto se confirme (suele tardar minutos; según tu banco puede tardar más). No es necesario reenviar el comprobante.",
+  ].join("\n")
 }
 
 /** Guía cuando la solicitud no resolvió una orden concreta. */
@@ -243,7 +254,18 @@ export async function maybeHandlePaymentOrderText(input: {
       phone: maskPhone(input.phone),
       order_id: order.id,
       code: order.code,
+      status: order.status,
     })
+    // Orden en verificación de depósito: replay del estado en lugar de
+    // re-enviar instrucciones de pago (el pago ya fue hecho y validado).
+    if (order.status === "verifying") {
+      return {
+        text: textoVerificandoDeposito(order),
+        orderId: order.id,
+        inboundText: input.text,
+        mediaMime: null,
+      }
+    }
     return respuestaConCodigo(order, input.text)
   }
 
@@ -341,7 +363,23 @@ export async function maybeHandlePaymentOrderText(input: {
   }
 
   // SIN binding aquí: ligar el pagador requiere identidad fuerte (código
-  // explícito arriba o comprobante abajo); el monto solo no lo es.
+  // explícito arriba o comprobante abajo); el monto solo no lo es. Una
+  // candidata en VERIFICACIÓN no recibe instrucciones de nuevo (induciría un
+  // doble pago): responde su estado.
+  if (candidata.status === "verifying") {
+    logEvent("orden_pago.whatsapp_request_verifying", {
+      phone: maskPhone(input.phone),
+      order_id: candidata.id,
+      code: candidata.code,
+      monto,
+    })
+    return {
+      text: textoVerificandoDeposito(candidata),
+      orderId: candidata.id,
+      inboundText: input.text,
+      mediaMime: null,
+    }
+  }
   logEvent("orden_pago.whatsapp_request", {
     phone: maskPhone(input.phone),
     order_id: candidata.id,
@@ -360,9 +398,21 @@ function textoVeredicto(input: {
   switch (input.outcome.review) {
     case "auto_approved":
       return [
-        `*Pago confirmado* — el comprobante de tu ${orden} pasó la verificación (fecha, concepto, importe y beneficiario).`,
+        `*Pago confirmado* — el comprobante de tu ${orden} pasó la verificación (concepto e importe) y el depósito quedó acreditado en la cuenta.`,
         "",
         "Gracias. Este es tu comprobante de pago confirmado.",
+      ].join("\n")
+    case "verifying_deposit":
+      return [
+        `Comprobante recibido y validado para tu ${orden}: concepto e importe correctos.`,
+        "",
+        "Estoy confirmando la acreditación de tu depósito en la cuenta; te aviso aquí mismo en cuanto se confirme (suele tardar minutos, según tu banco puede tardar más).",
+      ].join("\n")
+    case "awaiting_creator":
+      return [
+        `Comprobante recibido y validado para tu ${orden}: concepto e importe correctos.`,
+        "",
+        "Quien emitió la orden confirmará la recepción de tu pago y te avisará por este chat.",
       ].join("\n")
     case "auto_rejected": {
       const reasons = input.outcome.scan.reasons
@@ -534,13 +584,58 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   phone: string
   text: string
   media: { mimeType: string; fileName: string | null; bytes: Uint8Array }
+  /**
+   * Extracción de visión ya corrida por el llamador (delegación del canal
+   * de renovación: el MISMO archivo ya fue leído una vez) — evita un
+   * segundo gasto de visión.
+   */
+  preextracted?: ExtraccionLLM
 }): Promise<PaymentOrderTurnResult | null> {
-  // Pendientes y tokens primero (baratos): con la tabla vacía de pendientes
-  // y sin tokens en el caption no hay nada que descubrir — ni gasto de
-  // visión ni consultas extra.
+  // Pendientes y tokens primero (baratos): con la tabla vacía de activas
+  // (pending + verifying) y sin tokens en el caption no hay nada que
+  // descubrir — ni gasto de visión ni consultas extra. Con extracción
+  // delegada también cuentan los tokens del concepto impreso ya leído.
   const pending = await listPendingPaymentOrders().catch(() => [])
   const tokens = findPaymentOrderCodeTokens(input.text)
-  if (pending.length === 0 && tokens.length === 0) return null
+  const delegadoTokens =
+    input.preextracted?.datos?.concepto
+      ? findPaymentOrderCodeTokens(input.preextracted.datos.concepto)
+      : []
+  if (
+    pending.length === 0 &&
+    tokens.length === 0 &&
+    delegadoTokens.length === 0
+  ) {
+    return null
+  }
+
+  // Replay barato de una orden ya EN VERIFICACIÓN: si el teléfono tiene
+  // EXACTAMENTE una orden activa y está verifying (y ningún token apunta a
+  // una pendiente), responde el estado SIN gastar visión — el comprobante ya
+  // fue aprobado y el resultado llega cuando el depósito se acredite.
+  const delTelefono = pending.filter((order) => order.payerPhone === input.phone)
+  const tokensApuntanAPendiente = tokens.some((token) =>
+    pending.some((order) => order.status === "pending" && order.code === token)
+  )
+  if (
+    delTelefono.length === 1 &&
+    delTelefono[0].status === "verifying" &&
+    !tokensApuntanAPendiente
+  ) {
+    const verifying = delTelefono[0]
+    logEvent("orden_pago.whatsapp_verifying_replay", {
+      phone: maskPhone(input.phone),
+      order_id: verifying.id,
+      code: verifying.code,
+      barato: true,
+    })
+    return {
+      text: textoVerificandoDeposito(verifying),
+      orderId: verifying.id,
+      inboundText: input.text,
+      mediaMime: input.media.mimeType,
+    }
+  }
 
   // Cuota de escaneo por teléfono (gasta visión): sin cupo solo se responde
   // si el turno apunta a una orden pendiente real; si no, cortesía.
@@ -557,9 +652,11 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   }
 
   // La visión solo sirve para descubrir entre PENDIENTES (con la tabla
-  // vacía no hay nada que leer: el replay de resueltas va por tokens).
-  let extraccion: ExtraccionLLM | null = null
-  if (pending.length > 0 && receiptScanConfigured()) {
+  // vacía no hay nada que leer: el replay de resueltas va por tokens). Con
+  // extracción delegada NO se vuelve a gastar visión: el llamador ya leyó
+  // el MISMO archivo.
+  let extraccion: ExtraccionLLM | null = input.preextracted ?? null
+  if (extraccion === null && pending.length > 0 && receiptScanConfigured()) {
     try {
       extraccion = await extraerComprobanteDeArchivo({
         bytes: input.media.bytes,
@@ -663,6 +760,24 @@ export async function maybeHandlePaymentOrderReceipt(input: {
 
   await touchPaymentOrderPayer(candidate.id, input.phone).catch(() => {})
 
+  // Orden ya EN VERIFICACIÓN de depósito (comprobante aprobado por el
+  // escaneo): replay del estado SIN re-escanear — ni gasto de visión ni
+  // segunda orden ni doble notificación; el resultado llega por WhatsApp
+  // cuando el depósito se acredite (o escale a las 24 h).
+  if (candidate.status === "verifying") {
+    logEvent("orden_pago.whatsapp_verifying_replay", {
+      phone: maskPhone(input.phone),
+      order_id: candidate.id,
+      code: candidate.code,
+    })
+    return {
+      text: textoVerificandoDeposito(candidate),
+      orderId: candidate.id,
+      inboundText: input.text,
+      mediaMime: input.media.mimeType,
+    }
+  }
+
   // El archivo no es un comprobante: no se liga a la orden (el pagador subió
   // algo equivocado y puede reintentar con la foto correcta).
   if (extraccion && !extraccion.esComprobante) {
@@ -760,4 +875,31 @@ export async function maybeHandlePaymentOrderReceipt(input: {
     inboundText: input.text,
     mediaMime: input.media.mimeType,
   }
+}
+
+/**
+ * ¿El concepto pertenece a una ORDEN DE PAGO (activa o ya resuelta)? Es la
+ * puerta de DELEGACIÓN del interceptor de comprobantes de renovación: los
+ * dos formatos de pago por transferencia (renovaciones tv3 y cobros
+ * abiertos) comparten el canal y el concepto impreso decide a cuál pertenece
+ * el comprobante. Orden del más específico al más débil: activa por
+ * concepto impreso (misma tolerancia del descubrimiento), activa por token
+ * exacto, resuelta por token (replay honesto). Null = no es una orden de
+ * pago: el turno sigue el curso de renovación.
+ */
+export async function findPaymentOrderForReceiptConcept(
+  concepto: string
+): Promise<PaymentOrder | null> {
+  const normalized = concepto.trim()
+  if (normalized.length === 0) return null
+  const pending = await listPendingPaymentOrders().catch(() => [])
+  const porImpreso = pending.find((order) =>
+    conceptoImpresoCoincide(order.code, normalized)
+  )
+  if (porImpreso) return porImpreso
+  const tokens = findPaymentOrderCodeTokens(normalized)
+  if (tokens.length === 0) return null
+  const porToken = pending.find((order) => tokens.includes(order.code))
+  if (porToken) return porToken
+  return findResolvedPaymentOrderByAnyCode(tokens).catch(() => null)
 }

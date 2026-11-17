@@ -62,6 +62,7 @@ const STATUS_BADGE: Record<
   { variant: "warning-light" | "success-light" | "destructive-light" | "secondary" }
 > = {
   pending: { variant: "warning-light" },
+  verifying: { variant: "warning-light" },
   paid: { variant: "success-light" },
   rejected: { variant: "destructive-light" },
   cancelled: { variant: "secondary" },
@@ -120,8 +121,11 @@ export function OrdenPagoView({
   const [approveTarget, setApproveTarget] = useState<PaymentOrderListItem | null>(null)
   const [creating, startCreating] = useTransition()
 
-  const pendingCount = useMemo(
-    () => orders.filter((order) => order.status === "pending").length,
+  const activeCount = useMemo(
+    () =>
+      orders.filter(
+        (order) => order.status === "pending" || order.status === "verifying"
+      ).length,
     [orders]
   )
 
@@ -285,8 +289,8 @@ export function OrdenPagoView({
               {isAdmin ? "Órdenes" : "Mis órdenes"}
               {orders.length > 0 ? (
                 <span className="ml-2 font-normal text-muted-foreground text-sm">
-                  {orders.length} · {pendingCount} pendiente
-                  {pendingCount === 1 ? "" : "s"}
+                  {orders.length} · {activeCount} activa
+                  {activeCount === 1 ? "" : "s"}
                 </span>
               ) : null}
             </FrameTitle>
@@ -381,6 +385,37 @@ export function OrdenPagoView({
                                 : "Aún no contacta"}
                             </dd>
                           </div>
+                          {order.status === "verifying" ? (
+                            <div className="flex flex-col gap-0.5">
+                              <dt className="text-muted-foreground text-xs">Verificación de depósito</dt>
+                              <dd>
+                                Desde{" "}
+                                {order.verifyingSince
+                                  ? dateFormatter.format(new Date(order.verifyingSince))
+                                  : "—"}
+                              </dd>
+                              <dd className="text-muted-foreground text-xs">
+                                {order.depositEscalatedAt
+                                  ? "Sin depósito tras 24 h: resuelve manualmente."
+                                  : `Esperando la acreditación del depósito en la cuenta (${order.depositChecks} ${
+                                      order.depositChecks === 1 ? "sondeo" : "sondeos"
+                                    }).`}
+                              </dd>
+                            </div>
+                          ) : null}
+                          {order.mpPaymentId ? (
+                            <div className="flex flex-col gap-0.5">
+                              <dt className="text-muted-foreground text-xs">Depósito (Mercado Pago)</dt>
+                              <dd className="break-all font-mono text-xs">
+                                {order.mpPaymentId}
+                              </dd>
+                              {order.mpDepositAt ? (
+                                <dd className="text-muted-foreground text-xs">
+                                  Acreditado {dateFormatter.format(new Date(order.mpDepositAt))}
+                                </dd>
+                              ) : null}
+                            </div>
+                          ) : null}
                         </dl>
 
                         {checks.length > 0 ? (
@@ -438,7 +473,7 @@ export function OrdenPagoView({
                           </p>
                         ) : null}
 
-                        {order.status === "pending" ? (
+                        {order.status === "pending" || order.status === "verifying" ? (
                           <div className="flex flex-wrap items-center gap-2">
                             <Button
                               size="lg"

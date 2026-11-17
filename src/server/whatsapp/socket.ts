@@ -944,6 +944,7 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
     const reply = await enqueueAgentTurn(phone, () =>
       runWhatsAppTurn({
         user: { id: user.id, username: user.username, role: user.role },
+        phone,
         text: effectiveText,
         attachmentMetas: attachments,
       })

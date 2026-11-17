@@ -242,6 +242,8 @@ export async function runWhatsAppAgent(
  */
 export async function runWhatsAppTurn(input: {
   user: AuthUser
+  /** Teléfono WhatsApp del turno (identidad para el canal de órdenes de pago). */
+  phone: string
   text: string
   /** Adjuntos ya guardados en user_files y validados por el socket. */
   attachmentMetas: AssistantAttachmentMeta[]
@@ -305,6 +307,7 @@ export async function runWhatsAppTurn(input: {
       message: text,
       attachments: input.attachmentMetas,
       channel: "whatsapp",
+      phone: input.phone,
     })
   } catch (error) {
     return interceptorFailureReply(input.user.id, error)

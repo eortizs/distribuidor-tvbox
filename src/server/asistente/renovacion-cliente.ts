@@ -31,6 +31,7 @@ import {
 } from "@/server/transferencias/scan"
 import { saveUserFile } from "@/server/storage/user-files"
 import { canonicalWhatsAppDigits } from "@/server/whatsapp/config"
+import { maybeHandlePaymentOrderReceipt } from "@/server/orden-pago/whatsapp"
 
 import { clienteEstadoLinea, conceptoImpresoCoincide, normalizeConceptCode } from "./renovacion"
 
@@ -653,6 +654,29 @@ export async function maybeHandleClientRenewalReceipt(input: {
           buyerUserId: null,
           cliente: null,
         }
+      }
+    }
+    // El concepto impreso no es de renovación del teléfono: ¿es una ORDEN
+    // DE PAGO (cobro abierto)? Delega al canal del pagador — el MISMO
+    // archivo ya fue leído, sin segundo gasto de visión. Null = no lo es y
+    // el turno sigue con la guía de siempre.
+    if (conceptoImpreso) {
+      const paymentReply = await maybeHandlePaymentOrderReceipt({
+        phone: input.phone,
+        text: input.message,
+        media: {
+          mimeType: input.media.mimeType,
+          fileName: input.media.fileName,
+          bytes: new Uint8Array(input.media.bytes),
+        },
+        preextracted: extraccion,
+      }).catch(() => null)
+      if (paymentReply !== null) {
+        logEvent("cliente.renovar_receipt_delegada_orden_pago", {
+          phone: maskPhone(input.phone),
+          order_id: paymentReply.orderId,
+        })
+        return { text: paymentReply.text, buyerUserId: null, cliente: null }
       }
     }
     const lines = [

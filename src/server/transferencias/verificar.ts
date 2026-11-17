@@ -95,21 +95,33 @@ function parseImporte(value: string | null): number | null {
  * código de pago entregado al comprador (vacío solo en órdenes de la era
  * previa al concepto: entonces no se evalúa esa condición). `now` se
  * inyecta para poder probar; en producción es el momento del escaneo.
+ *
+ * `modo` elige el set de condiciones:
+ *   - "completo" (default): fecha del mes + concepto + importe ≥ +
+ *     beneficiario tolerante — el flujo de RENOVACIONES de FlujoTV.
+ *   - "pago_libre": SOLO concepto + importe EXACTO (a centavos) — órdenes
+ *     de pago (cobros abiertos): el comprobante de un pagador externo no
+ *     siempre imprime fecha o beneficiario, y la confirmación real del
+ *     dinero no la da el papel sino el DEPÓSITO acreditado en la cuenta
+ *     (importe exacto + ventana, ver orden-pago/deposit-check.ts).
  */
 export function evaluarCondiciones(input: {
   datos: DatosComprobante
   conceptCode: string
   amountMxn: number
-  holderName: string
+  /** Titular esperado; solo se evalúa en modo "completo". */
+  holderName?: string
   now?: Date
+  modo?: "completo" | "pago_libre"
 }): CondicionEvaluada[] {
   const now = input.now ?? new Date()
+  const modo = input.modo ?? "completo"
   const conceptCode = input.conceptCode.trim().toUpperCase()
   const expected = {
     fecha: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`,
     codigo: conceptCode,
     importe: input.amountMxn.toFixed(2),
-    beneficiario: input.holderName,
+    beneficiario: input.holderName ?? "",
   }
 
   // 1. Fecha dentro del mes actual (año y mes iguales; el día puede ser
@@ -132,42 +144,34 @@ export function evaluarCondiciones(input: {
     )
 
   // 3. Importe leído ≥ importe de la orden (pago exacto o a favor; un
-  //    faltante no autoriza). Sin importe legible, falla.
+  //    faltante no autoriza). Sin importe legible, falla. En modo
+  //    "pago_libre" el importe debe ser EXACTO (a centavos): es el mismo
+  //    criterio del casado del depósito en la cuenta.
   const importe = parseImporte(input.datos.importe)
-  const importeOk = importe !== null && importe >= input.amountMxn - AMOUNT_TOLERANCE_MXN
+  const importeOk =
+    importe !== null &&
+    (modo === "pago_libre"
+      ? Math.abs(importe - input.amountMxn) <= AMOUNT_TOLERANCE_MXN
+      : importe >= input.amountMxn - AMOUNT_TOLERANCE_MXN)
 
   // 4. Beneficiario TOLERANTE (no estricto): cada palabra del titular debe
   //    aparecer completa en el nombre impreso O como inicial suelta
   //    («E. Ortiz» cubre a Enrique; «Enrique O» cubre a Ortiz); sin
   //    beneficiario legible no bloquea. Un nombre ajeno completo sin ninguna
-  //    coincidencia sí rechaza (otra persona, otra cuenta).
-  const holderWords = input.holderName
-    .split(/\s+/)
-    .map((word) => normalizarTexto(word))
-    .filter((word) => word.length > 0)
-  const beneficiarioTokens =
-    input.datos.beneficiario !== null
-      ? tokensDeNombre(input.datos.beneficiario)
-      : []
-  const beneficiarioNorm = beneficiarioTokens.join("")
-  const beneficiarioOk =
-    holderWords.length === 0 ||
-    beneficiarioNorm.length === 0 ||
-    holderWords.every((word) =>
-      beneficiarioNorm.includes(word) ||
-      beneficiarioTokens.some(
-        (token) => token.length === 1 && token[0] === word[0]
-      )
-    )
+  //    coincidencia sí rechaza (otra persona, otra cuenta). SOLO en modo
+  //    "completo" (se evalúa dentro del push de condiciones).
 
-  const condiciones: CondicionEvaluada[] = [
-    {
+  const condiciones: CondicionEvaluada[] = []
+  // Fecha dentro del mes actual: SOLO en modo "completo" (renovaciones). El
+  // comprobante de un pagador externo no siempre imprime la fecha.
+  if (modo === "completo") {
+    condiciones.push({
       key: "fecha",
       label: "Fecha del comprobante (mes actual)",
       passed: fechaOk,
       detail: `esperado ${expected.fecha}; leído ${input.datos.fecha ?? "ilegible"}`,
-    },
-  ]
+    })
+  }
   // Condición del código de pago: solo con órdenes de la era del concepto
   // (las previas conservan el flujo de verificación original).
   if (conceptCode.length > 0) {
@@ -178,14 +182,42 @@ export function evaluarCondiciones(input: {
       detail: `esperado '${conceptCode}'; leído ${input.datos.concepto ? `«${input.datos.concepto}»` : "ilegible"}`,
     })
   }
-  condiciones.push(
-    {
-      key: "importe",
-      label: `Importe de ${expected.importe} MXN`,
-      passed: importeOk,
-      detail: `esperado ≥ ${expected.importe}; leído ${input.datos.importe ?? "ilegible"}`,
-    },
-    {
+  condiciones.push({
+    key: "importe",
+    label:
+      modo === "pago_libre"
+        ? `Importe exacto de ${expected.importe} MXN`
+        : `Importe de ${expected.importe} MXN`,
+    passed: importeOk,
+    detail: `esperado ${modo === "pago_libre" ? "" : "≥ "}${expected.importe}; leído ${input.datos.importe ?? "ilegible"}`,
+  })
+  // Beneficiario TOLERANTE (no estricto): cada palabra del titular debe
+  // aparecer completa en el nombre impreso O como inicial suelta
+  // («E. Ortiz» cubre a Enrique; «Enrique O» cubre a Ortiz); sin
+  // beneficiario legible no bloquea. Un nombre ajeno completo sin ninguna
+  // coincidencia sí rechaza (otra persona, otra cuenta). SOLO en modo
+  // "completo": el pagador de una orden de pago no siempre imprime el
+  // beneficiario y el dinero se confirma por el depósito en la cuenta.
+  if (modo === "completo") {
+    const holderWords = (input.holderName ?? "")
+      .split(/\s+/)
+      .map((word) => normalizarTexto(word))
+      .filter((word) => word.length > 0)
+    const beneficiarioTokens =
+      input.datos.beneficiario !== null
+        ? tokensDeNombre(input.datos.beneficiario)
+        : []
+    const beneficiarioNorm = beneficiarioTokens.join("")
+    const beneficiarioOk =
+      holderWords.length === 0 ||
+      beneficiarioNorm.length === 0 ||
+      holderWords.every((word) =>
+        beneficiarioNorm.includes(word) ||
+        beneficiarioTokens.some(
+          (token) => token.length === 1 && token[0] === word[0]
+        )
+      )
+    condiciones.push({
       key: "beneficiario",
       label: `Beneficiario ${expected.beneficiario} (tolerante)`,
       passed: beneficiarioOk,
@@ -194,7 +226,7 @@ export function evaluarCondiciones(input: {
           ? `«${input.datos.beneficiario}»`
           : "ilegible (no bloquea)"
       }`,
-    }
-  )
+    })
+  }
   return condiciones
 }

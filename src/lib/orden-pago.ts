@@ -22,6 +22,16 @@ export interface PaymentOrderListItem {
   resolvedAt: string | null
   rejectionReason: string | null
   createdAt: string
+  /** ID del pago de MP que confirmó el depósito (exclusivo por orden). */
+  mpPaymentId: string | null
+  /** Fecha de acreditación del depósito según MP. */
+  mpDepositAt: string | null
+  /** Cuándo entró en verificación de depósito. */
+  verifyingSince: string | null
+  /** Sondeos del verificador sin hallazgo. */
+  depositChecks: number
+  /** Escalamiento a resolución manual ya avisado. */
+  depositEscalatedAt: string | null
 }
 
 /** Límites del monto de una orden (espejo del CHECK de la tabla). */
@@ -50,6 +60,11 @@ export function toPaymentOrderListItem(order: PaymentOrder): PaymentOrderListIte
     resolvedAt: order.resolvedAt,
     rejectionReason: order.rejectionReason,
     createdAt: order.createdAt,
+    mpPaymentId: order.mpPaymentId,
+    mpDepositAt: order.mpDepositAt,
+    verifyingSince: order.verifyingSince,
+    depositChecks: order.depositChecks,
+    depositEscalatedAt: order.depositEscalatedAt,
   }
 }
 
@@ -58,6 +73,8 @@ export function paymentOrderStatusLabel(status: PaymentOrder["status"]): string 
   switch (status) {
     case "pending":
       return "Pendiente"
+    case "verifying":
+      return "Verificando depósito"
     case "paid":
       return "Pagada"
     case "rejected":

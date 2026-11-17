@@ -147,9 +147,11 @@ function money(amount: number): string {
 }
 
 /**
- * Resuelve una orden pendiente desde la UI (creador o admin): aprobar
- * marca el cobro como pagado y avisa al pagador; rechazar pide motivo y
- * avisa a ambos. El claim atómico evita dobles resoluciones.
+ * Resuelve una orden ACTIVA desde la UI (creador o admin): aprobar marca el
+ * cobro como pagado y avisa al pagador; rechazar pide motivo y avisa a
+ * ambos. Funciona desde 'pending' Y desde 'verifying' (el override manual
+ * del creador no espera la confirmación del depósito: la verificación es
+ * red de seguridad, no jaula). El claim atómico evita dobles resoluciones.
  */
 export async function resolvePaymentOrderAction(input: {
   orderId: string
@@ -163,7 +165,7 @@ export async function resolvePaymentOrderAction(input: {
   if (user.role !== "admin" && order.creatorUserId !== user.id) {
     return { error: "Solo el creador de la orden o un administrador puede resolverla." }
   }
-  if (order.status !== "pending") {
+  if (order.status !== "pending" && order.status !== "verifying") {
     return { error: "La orden ya está resuelta." }
   }
 
@@ -225,8 +227,9 @@ export async function resolvePaymentOrderAction(input: {
 }
 
 /**
- * Cancela una orden pendiente (creador o admin): el código queda libre y la
- * orden queda 'cancelled' para la bitácora. Sin pago en vuelo asumible.
+ * Cancela una orden activa (creador o admin, pendiente o en verificación):
+ * el código queda libre y la orden queda 'cancelled' para la bitácora. Sin
+ * pago en vuelo asumible.
  */
 export async function cancelPaymentOrderAction(input: {
   orderId: string
@@ -238,7 +241,7 @@ export async function cancelPaymentOrderAction(input: {
   if (user.role !== "admin" && order.creatorUserId !== user.id) {
     return { error: "Solo el creador de la orden o un administrador puede cancelarla." }
   }
-  if (order.status !== "pending") {
+  if (order.status !== "pending" && order.status !== "verifying") {
     return { error: "La orden ya está resuelta." }
   }
 

@@ -15,13 +15,23 @@ import { AppError } from "@/server/umejson/types"
  * Ciclo de vida:
  *   - 'pending': activa. El código de 4 caracteres (mismo alfabeto sin
  *     ambigüedad que transfer_concepts) es ÚNICO GLOBAL solo entre las
- *     pendientes (índice único parcial): es el namespace que el pagador
- *     escribe como concepto y por el que el comprobante descubre la orden.
+ *     ACTIVAS (pending + verifying, índice único parcial): es el namespace
+ *     que el pagador escribe como concepto y por el que el comprobante
+ *     descubre la orden.
+ *   - 'verifying': comprobante válido (escaneo aprobado), esperando la
+ *     confirmación del DEPÓSITO en la cuenta de Mercado Pago (misma fuente
+ *     que /modulos/reporte-spei, ambos rieles). MP no expone el concepto
+ *     escrito por el pagador, así que el depósito se casa por importe
+ *     exacto + ventana y el ID del pago de MP queda reservado en exclusiva
+ *     (mp_payment_id, índice único parcial): un depósito valida una sola
+ *     orden. Tras 24 h sin depósito el verificador escala a manual.
  *   - 'paid' | 'rejected': resueltas (automático o manual con quién en
  *     reviewed_by). El código queda libre para una orden futura; la fila
  *     histórica conserva su código y su comprobante (dedup por sha256).
  *   - 'cancelled': cancelada por el creador sin pago.
- *   Sin caducidad: queda activa hasta resolverse o cancelarse.
+ *   Sin caducidad: queda activa hasta resolverse o cancelarse (el creador
+ *   puede resolver manualmente desde 'verifying': la verificación del
+ *   depósito es red de seguridad, no jaula).
  *
  * El snapshot bancario (banco/cuenta/titular) y el monto se congelan al
  * crear: ediciones posteriores del perfil del creador no cambian órdenes
@@ -29,7 +39,12 @@ import { AppError } from "@/server/umejson/types"
  * beneficiario del comprobante.
  */
 
-export type PaymentOrderStatus = "pending" | "paid" | "rejected" | "cancelled"
+export type PaymentOrderStatus =
+  | "pending"
+  | "verifying"
+  | "paid"
+  | "rejected"
+  | "cancelled"
 
 export interface PaymentOrder {
   id: string
@@ -49,15 +64,27 @@ export interface PaymentOrder {
   resolvedAt: string | null
   rejectionReason: string | null
   createdAt: string
+  /** ID del pago de MP que confirmó el depósito (exclusivo por orden). */
+  mpPaymentId: string | null
+  /** Fecha de acreditación del depósito según MP. */
+  mpDepositAt: string | null
+  /** Cuándo entró en verificación de depósito (base del tope de 24 h). */
+  verifyingSince: string | null
+  /** Próximo sondeo programado del verificador (backoff). */
+  depositNextCheckAt: string | null
+  /** Sondeos sin hallazgo (elige el tramo de backoff). */
+  depositChecks: number
+  /** Escalamiento a resolución manual ya avisado (una sola vez). */
+  depositEscalatedAt: string | null
 }
 
 /** Límites del monto libre (CHECK de la tabla como respaldo duro). */
 export { PAYMENT_ORDER_MAX_MXN, PAYMENT_ORDER_MIN_MXN } from "@/lib/orden-pago"
 
 /**
- * Tope de órdenes PENDIENTES simultáneas por creador: un cobrador legítimo
- * acumula pocas órdenes sin pagar; una cuenta que supera el tope está
- * acuñando códigos del namespace global, no cobrando.
+ * Tope de órdenes ACTIVAS simultáneas por creador (pending + verifying): un
+ * cobrador legítimo acumula pocas órdenes sin pagar; una cuenta que supera
+ * el tope está acuñando códigos del namespace global, no cobrando.
  */
 export const MAX_PENDING_PAYMENT_ORDERS = 20
 
@@ -162,6 +189,15 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
         ? null
         : String(row.rejection_reason),
     createdAt: new Date(row.created_at as string).toISOString(),
+    mpPaymentId:
+      row.mp_payment_id === null || row.mp_payment_id === undefined
+        ? null
+        : String(row.mp_payment_id),
+    mpDepositAt: isoOrNull(row.mp_deposit_at),
+    verifyingSince: isoOrNull(row.verifying_since),
+    depositNextCheckAt: isoOrNull(row.deposit_next_check_at),
+    depositChecks: Number(row.deposit_checks ?? 0),
+    depositEscalatedAt: isoOrNull(row.deposit_escalated_at),
   }
 }
 
@@ -170,7 +206,8 @@ const SELECT_COLUMNS = `
          o.amount_mxn, o.note, o.status, o.bank_name, o.bank_account,
          o.bank_holder, o.payer_phone, o.ticket_file_id, o.ticket_sha256,
          o.scan_status, o.scan_result, o.resolved_at, o.rejection_reason,
-         o.created_at
+         o.created_at, o.mp_payment_id, o.mp_deposit_at, o.verifying_since,
+         o.deposit_next_check_at, o.deposit_checks, o.deposit_escalated_at
     FROM payment_orders o
     LEFT JOIN users u ON u.id = o.creator_user_id`
 
@@ -185,11 +222,12 @@ export async function createPaymentOrder(input: {
   note: string | null
   bank: { bank: string; account: string; holder: string }
 }): Promise<PaymentOrder> {
-  // Tope por creador antes de acuñar.
+  // Tope por creador antes de acuñar (las ACTIVAS cuentan: pending +
+  // verifying reservan código y namespace igual).
   const active = await pool.query<{ n: number }>(
     `SELECT count(*)::int AS n
        FROM payment_orders
-      WHERE creator_user_id = $1::uuid AND status = 'pending'`,
+      WHERE creator_user_id = $1::uuid AND status IN ('pending','verifying')`,
     [input.creatorUserId]
   )
   if ((active.rows[0]?.n ?? 0) >= MAX_PENDING_PAYMENT_ORDERS) {
@@ -245,11 +283,13 @@ export async function getPaymentOrder(id: string): Promise<PaymentOrder | null> 
 }
 
 /**
- * Primera orden pendiente que matchee CUALQUIERA de los códigos dados (la
- * más vieja: determinista si dos códigos coincidieran). Es la puerta única
- * del canal WhatsApp para los tokens de un mensaje: UNA consulta por turno,
- * no una por token (un mensaje grande con decenas de palabras con forma de
- * código no debe sondear la tabla token a token).
+ * Primera orden ACTIVA (pending o verifying) que matchee CUALQUIERA de los
+ * códigos dados (la más vieja: determinista si dos códigos coincidieran).
+ * Es la puerta única del canal WhatsApp para los tokens de un mensaje: UNA
+ * consulta por turno, no una por token (un mensaje grande con decenas de
+ * palabras con forma de código no debe sondear la tabla token a token). Una
+ * orden en 'verifying' sigue activa: el pagador puede reenviar su código y
+ * el código no fue liberado.
  */
 export async function findPendingPaymentOrderByAnyCode(
   codes: string[]
@@ -262,7 +302,7 @@ export async function findPendingPaymentOrderByAnyCode(
   if (normalized.length === 0) return null
   const result = await pool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
-      WHERE o.code = ANY($1) AND o.status = 'pending'
+      WHERE o.code = ANY($1) AND o.status IN ('pending','verifying')
       ORDER BY o.created_at ASC LIMIT 1`,
     [normalized]
   )
@@ -270,9 +310,10 @@ export async function findPendingPaymentOrderByAnyCode(
 }
 
 /**
- * Primera orden NO pendiente que matchee cualquiera de los códigos (replay
- * honesto, la más recientemente resuelta). Null = ningún código corresponde
- * a una orden resuelta.
+ * Primera orden RESUELTA (paid/rejected/cancelled; 'verifying' NO lo es)
+ * que matchee cualquiera de los códigos (replay honesto, la más
+ * recientemente resuelta). Null = ningún código corresponde a una orden
+ * resuelta.
  */
 export async function findResolvedPaymentOrderByAnyCode(
   codes: string[]
@@ -285,7 +326,7 @@ export async function findResolvedPaymentOrderByAnyCode(
   if (normalized.length === 0) return null
   const result = await pool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
-      WHERE o.code = ANY($1) AND o.status <> 'pending'
+      WHERE o.code = ANY($1) AND o.status IN ('paid','rejected','cancelled')
       ORDER BY o.resolved_at DESC NULLS LAST LIMIT 1`,
     [normalized]
   )
@@ -293,11 +334,11 @@ export async function findResolvedPaymentOrderByAnyCode(
 }
 
 /**
- * TODAS las órdenes pendientes de UN monto exacto (del más viejo al más
- * nuevo, con tope de seguridad). Es la puerta del canal WhatsApp para la
- * SOLICITUD prellenada de la liga («Solicito una orden de pago por $X»),
- * que viaja sin código: la orden se descubre por el importe que el
- * cobrador definió.
+ * TODAS las órdenes ACTIVAS (pending + verifying) de UN monto exacto (del
+ * más viejo al más nuevo, con tope de seguridad). Es la puerta del canal
+ * WhatsApp para la SOLICITUD prellenada de la liga («Solicito una orden de
+ * pago por $X»), que viaja sin código: la orden se descubre por el importe
+ * que el cobrador definió.
  */
 export async function listPendingPaymentOrdersByAmount(
   amountMxn: number,
@@ -307,7 +348,7 @@ export async function listPendingPaymentOrdersByAmount(
   const capped = Math.min(Math.max(Math.trunc(limit), 1), 500)
   const result = await pool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
-      WHERE o.status = 'pending' AND o.amount_mxn = $1::numeric
+      WHERE o.status IN ('pending','verifying') AND o.amount_mxn = $1::numeric
       ORDER BY o.created_at ASC LIMIT $2`,
     [amount, capped]
   )
@@ -315,17 +356,17 @@ export async function listPendingPaymentOrdersByAmount(
 }
 
 /**
- * Última orden NO pendiente ligada al teléfono del pagador (la más
+ * Última orden RESUELTA ligada al teléfono del pagador (la más
  * recientemente resuelta). Replay honesto de una solicitud por monto cuyo
- * código ya no está entre las pendientes: el pagador que reenvía la
- * solicitud tras un pago resuelto recibe el estado REAL de su orden.
+ * código ya no está entre las activas: el pagador que reenvía la solicitud
+ * tras un pago resuelto recibe el estado REAL de su orden.
  */
 export async function findLatestResolvedPaymentOrderByPayerPhone(
   phone: string
 ): Promise<PaymentOrder | null> {
   const result = await pool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
-      WHERE o.payer_phone = $1 AND o.status <> 'pending'
+      WHERE o.payer_phone = $1 AND o.status IN ('paid','rejected','cancelled')
       ORDER BY o.resolved_at DESC NULLS LAST LIMIT 1`,
     [phone]
   )
@@ -333,15 +374,16 @@ export async function findLatestResolvedPaymentOrderByPayerPhone(
 }
 
 /**
- * TODAS las órdenes pendientes, del más viejo al más nuevo, con tope de
- * seguridad. Es la base del descubrimiento por comprobante: el código
- * IMPRESO en el comprobante se busca entre estas órdenes para identificar
- * a cuál pertenece el pago (sin pedirle nada más al pagador).
+ * TODAS las órdenes activas (pending + verifying), del más viejo al más
+ * nuevo, con tope de seguridad. Es la base del descubrimiento por
+ * comprobante: el código IMPRESO en el comprobante se busca entre estas
+ * órdenes para identificar a cuál pertenece el pago (sin pedirle nada más
+ * al pagador).
  */
 export async function listPendingPaymentOrders(limit = 200): Promise<PaymentOrder[]> {
   const capped = Math.min(Math.max(Math.trunc(limit), 1), 500)
   const result = await pool.query<Record<string, unknown>>(
-    `${SELECT_COLUMNS} WHERE o.status = 'pending' ORDER BY o.created_at ASC LIMIT $1`,
+    `${SELECT_COLUMNS} WHERE o.status IN ('pending','verifying') ORDER BY o.created_at ASC LIMIT $1`,
     [capped]
   )
   return result.rows.map(mapRow)
@@ -419,11 +461,12 @@ export async function savePaymentOrderScan(input: {
 }
 
 /**
- * Reclama la orden pendiente y la resuelve (`pending → paid | rejected |
- * cancelled`) de forma atómica: solo UN llamador gana aunque dos revisores
- * actúen a la vez (escaneo automático concurrente con el botón del
- * creador). Devuelve la orden ya resuelta, o null si otro la resolvió
- * primero.
+ * Reclama la orden ACTIVA (pending o verifying — el override manual del
+ * creador funciona también durante la verificación de depósito) y la
+ * resuelve (`→ paid | rejected | cancelled`) de forma atómica: solo UN
+ * llamador gana aunque dos revisores actúen a la vez (escaneo automático
+ * concurrente con el botón del creador). Devuelve la orden ya resuelta, o
+ * null si otro la resolvió primero.
  */
 export async function resolvePaymentOrder(input: {
   orderId: string
@@ -434,8 +477,9 @@ export async function resolvePaymentOrder(input: {
   const result = await pool.query(
     `UPDATE payment_orders
         SET status = $2, reviewed_by = $3::uuid, resolved_at = now(),
-            rejection_reason = $4, updated_at = now()
-      WHERE id = $1::uuid AND status = 'pending'
+            rejection_reason = $4,
+            deposit_next_check_at = NULL, updated_at = now()
+      WHERE id = $1::uuid AND status IN ('pending','verifying')
       RETURNING id`,
     [
       input.orderId,
@@ -449,7 +493,7 @@ export async function resolvePaymentOrder(input: {
 }
 
 /**
- * Cancela una orden pendiente (solo el creador o un admin): el código queda
+ * Cancela una orden activa (solo el creador o un admin): el código queda
  * libre y el pagador que llegue tarde recibe el replay de «orden
  * cancelada». El claim atómico es el mismo de `resolvePaymentOrder`.
  */
@@ -463,4 +507,159 @@ export async function cancelPaymentOrder(input: {
     reviewedBy: input.reviewedBy,
     rejectionReason: null,
   })
+}
+
+/**
+ * True si el creador es ADMIN: sus órdenes son las ÚNICAS cuya verificación
+ * automática de depósito es posible — el pagador de una orden de
+ * distribuidor paga a la CLABE del snapshot del creador (su propia cuenta),
+ * que el token de Mercado Pago de la plataforma no ve. Para distribuidores
+ * el comprobante válido queda en la orden y el creador confirma la
+ * recepción en su cuenta y resuelve manualmente.
+ */
+export async function isPlatformPaymentOrderCreator(userId: string): Promise<boolean> {
+  const result = await pool.query<{ role: string }>(
+    `SELECT role FROM users WHERE id = $1::uuid LIMIT 1`,
+    [userId]
+  )
+  return result.rows[0]?.role === "admin"
+}
+
+/* -------------------------------------------------------------------------- */
+/*          Verificación de depósito (reporte SPEI sobre la orden)            */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Claim atómico `pending → verifying` tras un comprobante válido: fija el
+ * inicio de la verificación (base del tope de 24 h) y programa el primer
+ * sondeo del verificador con el primer tramo de backoff — el chequeo
+ * inmediato ya corre dentro del turno que aprueba el comprobante; sondear
+ * de nuevo al instante duplicaría esa consulta y podría ganar la carrera
+ * contra él (avisos contradictorios).
+ * Null = otro actor ya resolvió la orden.
+ */
+export async function markPaymentOrderVerifying(orderId: string): Promise<PaymentOrder | null> {
+  const result = await pool.query(
+    `UPDATE payment_orders
+        SET status = 'verifying', verifying_since = now(),
+            deposit_next_check_at = now() + interval '2 minutes', deposit_checks = 0,
+            deposit_escalated_at = NULL, updated_at = now()
+      WHERE id = $1::uuid AND status = 'pending'
+      RETURNING id`,
+    [orderId]
+  )
+  if ((result.rowCount ?? 0) === 0) return null
+  return getPaymentOrder(orderId)
+}
+
+/**
+ * Órdenes en 'verifying' con sondeo vencido y sin escalar (la cola del
+ * verificador), la más atrasada primero, con tope por tick. SOLO creadores
+ * admin: sus cobros apuntan a la cuenta de Mercado Pago de la plataforma
+ * (el token que lee el reporte SPEI); el pagador de una orden de
+ * distribuidor paga a la CLABE del snapshot del creador — una cuenta que el
+ * token de la plataforma no ve — y su verificación es manual por diseño.
+ */
+export async function listDueVerifyingOrders(limit = 4): Promise<PaymentOrder[]> {
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 20)
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.status = 'verifying' AND deposit_escalated_at IS NULL
+        AND deposit_next_check_at IS NOT NULL AND deposit_next_check_at <= now()
+        AND EXISTS (
+          SELECT 1 FROM users u2
+           WHERE u2.id = o.creator_user_id AND u2.role = 'admin'
+        )
+      ORDER BY o.deposit_next_check_at ASC LIMIT $1`,
+    [capped]
+  )
+  return result.rows.map(mapRow)
+}
+
+/**
+ * Registra el resultado de un sondeo sin hallazgo: incrementa el contador
+ * (elige el tramo de backoff) y programa el siguiente intento. Solo toca
+ * órdenes aún en 'verifying'.
+ */
+export async function savePaymentOrderDepositCheck(input: {
+  orderId: string
+  checks: number
+  nextCheckAt: Date
+}): Promise<void> {
+  await pool.query(
+    `UPDATE payment_orders
+        SET deposit_checks = $2, deposit_next_check_at = $3, updated_at = now()
+      WHERE id = $1::uuid AND status = 'verifying'`,
+    [input.orderId, input.checks, input.nextCheckAt]
+  )
+}
+
+/**
+ * Escalamiento una sola vez tras el tope de espera: sella la fecha y saca
+ * la orden de la cola de sondeo (deposit_next_check_at = NULL). Devuelve
+ * true solo para el primer llamador (los avisos salen una vez).
+ */
+export async function markDepositEscalated(orderId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE payment_orders
+        SET deposit_escalated_at = now(), deposit_next_check_at = NULL, updated_at = now()
+      WHERE id = $1::uuid AND status = 'verifying' AND deposit_escalated_at IS NULL
+      RETURNING id`,
+    [orderId]
+  )
+  return (result.rowCount ?? 0) > 0
+}
+
+/**
+ * Confirmación atómica del depósito: reclama la orden en 'verifying' y la
+ * resuelve `paid` reservando el ID del pago de MP (índice único parcial: si
+ * otra orden ya consumió ese depósito, la UPDATE viola la unique y devuelve
+ * null — el llamador sigue verificando su propio depósito).
+ * `reviewedBy` es el propio creador (aprobación automática con quién).
+ */
+export async function confirmPaymentOrderDeposit(input: {
+  orderId: string
+  mpPaymentId: string
+  mpDepositAt: string | null
+  reviewedBy: string
+}): Promise<PaymentOrder | null> {
+  try {
+    const result = await pool.query(
+      `UPDATE payment_orders
+          SET status = 'paid', reviewed_by = $4::uuid, resolved_at = now(),
+              mp_payment_id = $2, mp_deposit_at = $3::timestamptz,
+              deposit_next_check_at = NULL, updated_at = now()
+        WHERE id = $1::uuid AND status = 'verifying' AND mp_payment_id IS NULL
+        RETURNING id`,
+      [input.orderId, input.mpPaymentId, input.mpDepositAt, input.reviewedBy]
+    )
+    if ((result.rowCount ?? 0) === 0) return null
+    return getPaymentOrder(input.orderId)
+  } catch (error) {
+    if (isUniqueViolation(error)) return null
+    throw error
+  }
+}
+
+/**
+ * Códigos de órdenes de pago ligados a IDs de pagos de MP (columna
+ * «Concepto» del reporte SPEI): el link es DETERMINISTA (el depósito que
+ * confirmó la orden), no una inferencia por ventana.
+ */
+export async function findPaymentOrdersByMpPaymentIds(
+  mpPaymentIds: string[]
+): Promise<Map<string, string>> {
+  const ids = [...new Set(mpPaymentIds.filter((id) => id.length > 0))]
+  const result = new Map<string, string>()
+  if (ids.length === 0) return result
+  const rows = await pool.query<{ id: string; mp_payment_id: string; code: string }>(
+    `SELECT id::text, mp_payment_id, code
+       FROM payment_orders
+      WHERE mp_payment_id = ANY($1)`,
+    [ids]
+  )
+  for (const row of rows.rows) {
+    result.set(String(row.mp_payment_id), String(row.code))
+  }
+  return result
 }

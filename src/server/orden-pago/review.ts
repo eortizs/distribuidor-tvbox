@@ -14,22 +14,47 @@ import { createPaymentOrderNotification } from "@/server/notifications/service"
 
 import {
   getPaymentOrder,
-  resolvePaymentOrder,
+  isPlatformPaymentOrderCreator,
+  markPaymentOrderVerifying,
   savePaymentOrderScan,
   type PaymentOrder,
 } from "./repository"
+import { tryConfirmOrderDeposit } from "./deposit-check"
 
 /*
- * Revisión del comprobante de una orden de pago: el MISMO motor del flujo
- * de transferencias (extracción LLM con RECEIPT_SCAN_MODEL + condiciones
- * determinísticas) pero sobre `payment_orders`:
+ * Revisión del comprobante de una orden de pago: el MISMO motor de
+ * extracción LLM del flujo de transferencias (RECEIPT_SCAN_MODEL) pero con
+ * la validación REDUCIDA del cobro libre (`evaluarCondiciones` modo
+ * "pago_libre"):
  *
- *   1. Fecha dentro del mes actual.
- *   2. Concepto impreso con el código de la orden (el pagador lo recibió en
+ *   1. Concepto impreso con el código de la orden (el pagador lo recibió en
  *      la liga wa.me y lo escribió como concepto en su SPEI).
- *   3. Importe ≥ al monto libre congelado de la orden.
- *   4. Beneficiario tolerante contra el bankHolder del SNAPSHOT bancario
- *      del creador (la cuenta que él definió al crear la orden).
+ *   2. Importe EXACTO al monto congelado de la orden (a centavos — el mismo
+ *      criterio del casado del depósito).
+ *
+ * Fecha y beneficiario NO se evalúan: el comprobante de un pagador externo
+ * no siempre los imprime, y la confirmación real del dinero la da el
+ * DEPÓSITO acreditado en la cuenta (ver deposit-check.ts), no el papel.
+ * Las renovaciones de FlujoTV conservan la validación completa.
+ *
+ * Con el comprobante válido la orden NO se declara `paid`. GATE DE CUENTA
+ * PLATAFORMA: la verificación de depósito consulta la cuenta de Mercado
+ * Pago del vendedor (token único) — solo alcanza los cobros de creadores
+ * ADMIN, cuya snapshot bancaria es esa cuenta:
+ *
+ *   - ADMIN: la orden pasa a 'verifying' y solo se resuelve cuando el
+ *     DEPÓSITO aparece acreditado (misma fuente que /modulos/reporte-spei;
+ *     MP no expone el concepto escrito por el pagador, así que el depósito
+ *     se casa por importe exacto + ventana y el ID queda reservado en
+ *     exclusiva — ver deposit-check.ts). Chequeo inmediato con presupuesto
+ *     corto dentro del turno; si no acredita, el verificador en background
+ *     (deposit-verifier.ts) sondea con backoff y publica el resultado por
+ *     WhatsApp.
+ *   - DISTRIBUIDOR: el pagador paga a la CLABE del snapshot del creador (su
+ *     propia cuenta, invisible para el token de la plataforma) — la
+ *     verificación automática no aplica: el comprobante válido queda en la
+ *     orden (outcome `awaiting_creator`), campana al creador para confirmar
+ *     la recepción en SU cuenta y resolver manualmente.
  *
  * Diferencias con las renovaciones (a propósito):
  *   - Sin guardia anti-doble-renovación (no hay renovación que duplicar).
@@ -41,6 +66,12 @@ import {
  *     pagador DIRECTO por `wa_outbox` (kind 'payment_order', sin link al
  *     panel: no es usuario).
  */
+
+/** Presupuesto del chequeo inmediato de depósito dentro del turno. */
+const IMMEDIATE_DEPOSIT_BUDGET_MS = 8_000
+
+/** Timeout por página del chequeo inmediato (acota el peor caso del turno). */
+const IMMEDIATE_PAGE_TIMEOUT_MS = 5_000
 
 function money(amount: number): string {
   return `$${amount.toFixed(2)} MXN`
@@ -116,6 +147,8 @@ function notifyPayer(
 
 export type PaymentReviewOutcome =
   | { review: "auto_approved" }
+  | { review: "verifying_deposit" }
+  | { review: "awaiting_creator" }
   | { review: "auto_rejected"; scan: ScanResult }
   | { review: "manual"; scan: ScanResult | null }
   | { review: "already_resolved"; status: PaymentOrder["status"] }
@@ -148,8 +181,7 @@ export async function reviewPaymentReceipt(input: {
   preextracted?: ExtraccionLLM
 }): Promise<PaymentReviewOutcome> {
   const order = input.order
-  const holderName = order.bank.holder.trim()
-  if (!receiptScanConfigured() || holderName.length === 0) {
+  if (!receiptScanConfigured()) {
     return { review: "manual", scan: null }
   }
 
@@ -220,7 +252,7 @@ export async function reviewPaymentReceipt(input: {
     datos: extraccion.datos,
     conceptCode: order.code,
     amountMxn: order.amountMxn,
-    holderName,
+    modo: "pago_libre",
   })
   const reasons = checks
     .filter((check) => !check.passed)
@@ -300,14 +332,36 @@ export async function reviewPaymentReceipt(input: {
     return { review: "manual", scan }
   }
 
-  const resolved = await resolvePaymentOrder({
-    orderId: order.id,
-    decision: "paid",
-    reviewedBy: order.creatorUserId,
-  }).catch(() => null)
-  if (!resolved) {
-    // Otro actor (creador, admin o un reenvío concurrente) la resolvió
-    // primero: responder el estado REAL de la orden, sin segundo aviso.
+  // GATE DE CUENTA PLATAFORMA: el pagador de una orden de DISTRIBUIDOR
+  // paga a la CLABE del snapshot del creador (su propia cuenta, invisible
+  // para el token de la plataforma) — la verificación de depósito por MP no
+  // aplica. El comprobante válido queda en la orden (sigue 'pending') y el
+  // creador confirma la recepción en su cuenta y resuelve manualmente.
+  const platformCreator = await isPlatformPaymentOrderCreator(
+    order.creatorUserId
+  ).catch(() => false)
+  if (!platformCreator) {
+    logEvent("orden_pago.review_approved_creator", {
+      order_id: order.id,
+      code: order.code,
+      amount: order.amountMxn,
+    })
+    notifyCreator(
+      order,
+      "Comprobante validado",
+    `El pagador${pagador} de tu orden ${order.code} (${money(
+      order.amountMxn
+    )}) envió un comprobante válido (concepto e importe). Confirma la recepción del depósito en TU cuenta y marca la orden como pagada en Módulos → Orden de pago.`
+    )
+    return { review: "awaiting_creator" }
+  }
+
+  // El comprobante válido pasa la orden a VERIFICACIÓN DE DEPÓSITO (el
+  // código sigue reservado: verifying es activa, no resuelta). Null = otro
+  // actor (creador, admin, reenvío concurrente) la resolvió primero:
+  // responder el estado REAL sin segundo aviso.
+  const verifying = await markPaymentOrderVerifying(order.id).catch(() => null)
+  if (!verifying) {
     const current = await getPaymentOrder(order.id).catch(() => null)
     return {
       review: "already_resolved",
@@ -315,24 +369,74 @@ export async function reviewPaymentReceipt(input: {
     }
   }
 
-  logEvent("orden_pago.review_approved", {
+  // Chequeo INMEDIATO con presupuesto corto: el pago suele ser previo al
+  // comprobante, así que el depósito puede estar ya acreditado y la
+  // confirmación sale al instante. Si aún no acredita, el verificador en
+  // background sondea con backoff (el primer poll queda agendado a +2 min
+  // por markPaymentOrderVerifying) y publica el resultado por WhatsApp.
+  const confirmed = await tryConfirmOrderDeposit({
+    order: verifying,
+    budgetMs: IMMEDIATE_DEPOSIT_BUDGET_MS,
+    pageTimeoutMs: IMMEDIATE_PAGE_TIMEOUT_MS,
+  }).catch(() => null)
+
+  if (confirmed) {
+    logEvent("orden_pago.deposit_confirmed", {
+      order_id: order.id,
+      code: order.code,
+      amount: order.amountMxn,
+      mp_payment_id: confirmed.mpPaymentId,
+      source: "inmediato",
+    })
+    notifyDepositConfirmed(confirmed)
+    return { review: "auto_approved" }
+  }
+
+  // Carrera con el verificador o con una resolución manual: si la orden ya
+  // no está en verificación, responder el estado REAL en lugar de anunciar
+  // "esperando depósito" para un pago ya confirmado.
+  const current = await getPaymentOrder(order.id).catch(() => null)
+  if (current && current.status !== "verifying") {
+    return { review: "already_resolved", status: current.status }
+  }
+
+  logEvent("orden_pago.review_verifying", {
     order_id: order.id,
     code: order.code,
     amount: order.amountMxn,
   })
   notifyCreator(
     order,
-    "Cobro recibido",
+    "Comprobante validado, esperando depósito",
+    `El pagador${pagador} envió un comprobante válido para tu orden ${order.code} (${money(
+      order.amountMxn
+    )}). Falta ver la acreditación del depósito en tu cuenta; te avisamos al confirmarse (si en 24 h no aparece, la orden pasa a revisión manual).`
+  )
+  return { review: "verifying_deposit" }
+}
+
+/**
+ * Aviso de DEPÓSITO CONFIRMADO: campana al creador («Cobro confirmado») y
+ * WhatsApp directo al pagador. Lo comparten el chequeo inmediato y el
+ * verificador en background.
+ */
+export function notifyDepositConfirmed(order: PaymentOrder): void {
+  const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
+  const deposito = order.mpDepositAt
+    ? ` acreditado el ${new Date(order.mpDepositAt).toLocaleString("es-MX")}`
+    : ""
+  notifyCreator(
+    order,
+    "Cobro confirmado por depósito",
     `El pagador${pagador} de tu orden ${order.code} pagó ${money(
       order.amountMxn
-    )}: el comprobante pasó la validación automática (fecha, concepto, importe y beneficiario).`
+    )}: el comprobante pasó la validación automática (concepto e importe) y el depósito quedó acreditado en tu cuenta${deposito}.`
   )
   notifyPayer(
     order,
     "Pago confirmado",
-    `Recibimos tu comprobante: el pago de ${money(order.amountMxn)} con el código ${
-      order.code
-    } quedó confirmado. Gracias.`
+    `Recibimos tu comprobante y confirmamos el depósito de ${money(
+      order.amountMxn
+    )} con el código ${order.code} en la cuenta. Tu pago quedó validado. Gracias.`
   )
-  return { review: "auto_approved" }
 }

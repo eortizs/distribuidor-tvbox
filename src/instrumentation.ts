@@ -6,6 +6,9 @@
  *   automáticos agendados tras fallos transitorios del panel de licencias
  *   (el pago ya está confirmado; la renovación se auto-sanaría con backoff)
  *   y rescata órdenes `paid` varadas por un corte del proceso.
+ * - Verificador de depósitos de órdenes de pago: sondea Mercado Pago (fuente
+ *   del reporte SPEI) las órdenes con comprobante válido hasta ver el
+ *   depósito acreditado; escala a manual tras 24 h.
  * - Scheduler del módulo Alertas: revisa cada minuto las alertas de búsqueda
  *   vencidas (grounding) y dispara recordatorios.
  * - Gateway WhatsApp (Baileys): vincula el número del agente IA como
@@ -21,6 +24,10 @@ export async function register(): Promise<void> {
     "@/server/mercadopago/renewal-scheduler"
   )
   startRenewalRetryScheduler()
+  const { startPaymentOrderDepositVerifier } = await import(
+    "@/server/orden-pago/deposit-verifier"
+  )
+  startPaymentOrderDepositVerifier()
   const { startAlertasScheduler } = await import(
     "@/server/alertas/scheduler"
   )

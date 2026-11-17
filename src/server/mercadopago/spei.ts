@@ -1,6 +1,7 @@
 import { mercadoPagoGatewayRequest } from "./client"
 import { MercadoPagoError } from "./errors"
 import { resolveConceptsForDeposits } from "@/server/transferencias/concepto"
+import { findPaymentOrdersByMpPaymentIds } from "@/server/orden-pago/repository"
 
 /**
  * Reporte SPEI (`/modulos/reporte-spei`): depósitos por transferencia
@@ -38,9 +39,13 @@ const PAGE_MAX = 20
  * degradado corta por presupuesto antes de agotar el request (~100 s de
  * Cloudflare; el peor caso acotado es presupuesto + una página por riel) y
  * lo que alcanzó a leer sale marcado `truncated` en vez de colgar el módulo.
+ * La ventana del verificador de órdenes de pago usa presupuesto y tope de
+ * páginas propios (ventana corta, pocas páginas bastan).
  */
 const QUERY_BUDGET_MS = 45_000
 const PAGE_TIMEOUT_MS = 10_000
+const WINDOW_BUDGET_MS = 15_000
+const WINDOW_PAGE_MAX = 2
 
 /** Zona horaria de negocio del panel (México, sin DST desde 2022). */
 const SPEI_TZ = "America/Mexico_City"
@@ -234,34 +239,40 @@ interface SearchPage {
   results: unknown[]
 }
 
-/**
- * Depósitos acreditados del día indicado en CDMX en los dos rieles de
- * entrada: SPEI a la CLABE (`payment_method_id=clabe`,
- * `payment_type_id=bank_transfer`, `operation_type=account_fund`) y
- * transferencia desde el saldo de otra cuenta MP
- * (`operation_type=money_transfer`), ambos `status=approved`,
- * `status_detail=accredited` y acotados por `date_approved`, con paginación
- * hasta el tope defensivo, presupuesto compartido, dedupe por ID y orden
- * final por fecha desc.
- */
-export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport> {
-  if (!isValidSpeiDay(day)) {
-    throw new MercadoPagoError(
-      400,
-      "fecha_invalida",
-      "La fecha debe ser un día válido en formato YYYY-MM-DD."
-    )
-  }
+interface DepositSearch {
+  deposits: SpeiDepositRow[]
+  truncated: boolean
+  pages: number
+}
 
-  const { beginIso, endIso } = cdmxDayRange(day)
+/**
+ * Núcleo de consulta compartido: depósitos ACREDITADOS en los dos rieles de
+ * entrada (SPEI a la CLABE + transferencia desde saldo de otra cuenta MP),
+ * `status=approved`/`status_detail=accredited`, acotados por `date_approved`
+ * en ISO con offset real, con paginación hasta `maxPagesPerRail`, presupuesto
+ * compartido `budgetMs`, dedupe por ID y orden final según `criteria`. Sirve
+ * tanto al reporte del día (desc) como a la ventana del verificador de
+ * órdenes de pago (asc: el depósito buscado está cerca del INICIO de la
+ * ventana, así que la paginación ascendente lo deja en la página 1).
+ */
+async function searchAccreditedDeposits(input: {
+  beginIso: string
+  endIso: string
+  budgetMs: number
+  maxPagesPerRail: number
+  criteria?: "asc" | "desc"
+  /** Timeout por página (el chequeo inmediato usa uno corto). */
+  pageTimeoutMs?: number
+}): Promise<DepositSearch> {
+  const criteria = input.criteria ?? "desc"
   const baseQuery = {
     status: "approved",
     status_detail: "accredited",
     range: "date_approved",
-    begin_date: beginIso,
-    end_date: endIso,
+    begin_date: input.beginIso,
+    end_date: input.endIso,
     sort: "date_approved",
-    criteria: "desc",
+    criteria,
     limit: String(PAGE_LIMIT),
   }
   const rails: {
@@ -295,18 +306,20 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
   const startedAt = Date.now()
 
   for (const rail of rails) {
-    for (let page = 0; page < PAGE_MAX; page += 1) {
-      // El presupuesto (compartido entre rieles) se revisa antes de CADA
-      // página adicional: la primera de cada riel corre siempre — el peor
-      // caso queda acotado a QUERY_BUDGET_MS + un timeout por riel.
-      if (page > 0 && Date.now() - startedAt > QUERY_BUDGET_MS) {
+    for (let page = 0; page < input.maxPagesPerRail; page += 1) {
+      // El presupuesto se revisa antes de CADA página salvo la primera del
+      // primer riel (si la primera de cada riel corriera siempre, el peor
+      // caso serían dos timeouts completos — p. ej. el chequeo inmediato de
+      // 8 s del turno de WhatsApp); el acotado queda en budgetMs + un
+      // timeout de página.
+      if (pages > 0 && Date.now() - startedAt > input.budgetMs) {
         truncated = true
         break
       }
       rail.query.set("offset", String(page * PAGE_LIMIT))
       const response = await mercadoPagoGatewayRequest<SearchPage>(
         `/v1/payments/search?${rail.query.toString()}`,
-        { timeoutMs: PAGE_TIMEOUT_MS }
+        { timeoutMs: input.pageTimeoutMs ?? PAGE_TIMEOUT_MS }
       )
       const results = Array.isArray(response.data?.results)
         ? response.data.results
@@ -326,16 +339,80 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
       }
 
       if (results.length < PAGE_LIMIT) break
-      if (page === PAGE_MAX - 1) truncated = true
+      if (page === input.maxPagesPerRail - 1) truncated = true
     }
   }
 
-  // Dos rieles paginados por separado: ordena el día completo por fecha desc.
-  deposits.sort((a, b) => (b.dateApproved ?? "").localeCompare(a.dateApproved ?? ""))
+  // Orden final según el criterio de la consulta (el reporte del día es
+  // desc; la ventana del verificador es asc — el depósito buscado está
+  // cerca del inicio de la ventana).
+  const direction = criteria === "asc" ? 1 : -1
+  deposits.sort((a, b) =>
+    (a.dateApproved ?? "").localeCompare(b.dateApproved ?? "") * direction
+  )
+
+  return { deposits, truncated, pages }
+}
+
+/**
+ * Depósitos acreditados en una VENTANA arbitraria (ISO con offset real) en
+ * los dos rieles de entrada: es la fuente del verificador de órdenes de
+ * pago — la orden se confirma cuando un depósito de importe exacto aparece
+ * aquí dentro de su ventana. Ventana corta (desde la creación de la orden),
+ * paginación ASCENDENTE (el depósito pagado justo tras crearse la orden
+ * queda en la página 1 aunque la ventana crezca) y presupuesto menor que el
+ * del reporte del día.
+ */
+export async function findDepositsForPaymentOrderWindow(input: {
+  beginIso: string
+  endIso: string
+  /** Presupuesto propio (el default es el de ventana del verificador). */
+  budgetMs?: number
+  /** Timeout por página propio (el chequeo inmediato usa uno corto). */
+  pageTimeoutMs?: number
+}): Promise<SpeiDepositRow[]> {
+  const { deposits } = await searchAccreditedDeposits({
+    beginIso: input.beginIso,
+    endIso: input.endIso,
+    budgetMs: input.budgetMs ?? WINDOW_BUDGET_MS,
+    maxPagesPerRail: WINDOW_PAGE_MAX,
+    criteria: "asc",
+    pageTimeoutMs: input.pageTimeoutMs,
+  })
+  return deposits
+}
+
+/**
+ * Depósitos acreditados del día indicado en CDMX en los dos rieles de
+ * entrada: SPEI a la CLABE (`payment_method_id=clabe`,
+ * `payment_type_id=bank_transfer`, `operation_type=account_fund`) y
+ * transferencia desde el saldo de otra cuenta MP
+ * (`operation_type=money_transfer`), ambos `status=approved`,
+ * `status_detail=accredited` y acotados por `date_approved`, con paginación
+ * hasta el tope defensivo, presupuesto compartido, dedupe por ID y orden
+ * final por fecha desc.
+ */
+export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport> {
+  if (!isValidSpeiDay(day)) {
+    throw new MercadoPagoError(
+      400,
+      "fecha_invalida",
+      "La fecha debe ser un día válido en formato YYYY-MM-DD."
+    )
+  }
+
+  const { beginIso, endIso } = cdmxDayRange(day)
+  const { deposits, truncated, pages } = await searchAccreditedDeposits({
+    beginIso,
+    endIso,
+    budgetMs: QUERY_BUDGET_MS,
+    maxPagesPerRail: PAGE_MAX,
+  })
 
   // Columna «Concepto»: cruza cada depósito con los conceptos de pago
-  // emitidos (ventana de tiempo + importe). Mejor esfuerzo: un fallo de BD
-  // deja la columna vacía sin romper el reporte.
+  // emitidos (ventana de tiempo + importe) y con las órdenes de pago
+  // confirmadas por depósito (link determinista por ID de MP). Mejor
+  // esfuerzo: un fallo de BD deja la columna vacía sin romper el reporte.
   if (deposits.length > 0) {
     try {
       const matches = await resolveConceptsForDeposits({
@@ -347,7 +424,19 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
           amountMxn: deposit.amountMxn,
         })),
       })
+      // El link por ID de pago de MP es determinista y GANA sobre la
+      // inferencia por ventana de transfer_concepts.
+      const orderCodes = await findPaymentOrdersByMpPaymentIds(
+        deposits.map((deposit) => deposit.id)
+      ).catch(() => new Map<string, string>())
       for (const deposit of deposits) {
+        const orderCode = orderCodes.get(deposit.id)
+        if (orderCode) {
+          deposit.conceptCode = orderCode
+          deposit.conceptUserName = null
+          deposit.conceptAmbiguous = false
+          continue
+        }
         const match = matches.get(deposit.id)
         if (!match) continue
         deposit.conceptCode = match.code
