@@ -7,9 +7,6 @@ import { toast } from "sonner"
 import {
   BadgeCheckIcon,
   ChevronDownIcon,
-  CopyIcon,
-  ExternalLinkIcon,
-  PrinterIcon,
   XIcon,
 } from "lucide-react"
 
@@ -33,16 +30,10 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
+  paymentOrderMoney,
   paymentOrderStatusLabel,
   type PaymentOrderListItem,
 } from "@/lib/orden-pago"
@@ -52,6 +43,7 @@ import {
   resolvePaymentOrderAction,
   type CreatedPaymentOrder,
 } from "@/app/actions/orden-pago"
+import { OrdenCreadaDialog } from "@/components/herramientas/orden-de-pago/orden-creada-dialog"
 
 /*
  * Vista del módulo Orden de pago (/modulos/orden-de-pago): formulario de
@@ -64,10 +56,6 @@ const dateFormatter = new Intl.DateTimeFormat("es-MX", {
   dateStyle: "short",
   timeStyle: "short",
 })
-
-function money(amount: number): string {
-  return `$${amount.toFixed(2)} MXN`
-}
 
 const STATUS_BADGE: Record<
   PaymentOrderListItem["status"],
@@ -159,13 +147,6 @@ export function OrdenPagoView({
       setNote("")
       router.refresh()
     })
-  }
-
-  function copyText(value: string, label: string) {
-    void navigator.clipboard
-      .writeText(value)
-      .then(() => toast.success(`${label} copiado`))
-      .catch(() => toast.error("No se pudo copiar"))
   }
 
   function resolveOrder(
@@ -358,7 +339,7 @@ export function OrdenPagoView({
                           </span>
                         ) : null}
                         <span className="font-medium tabular-nums">
-                          {money(order.amountMxn)}
+                          {paymentOrderMoney(order.amountMxn)}
                         </span>
                         <Badge
                           variant={STATUS_BADGE[order.status].variant}
@@ -501,101 +482,8 @@ export function OrdenPagoView({
         </FramePanel>
       </Frame>
 
-      {/* Diálogo de orden creada: QR + liga */}
-      <Dialog
-        open={created !== null}
-        onOpenChange={(open) => {
-          if (!open) setCreated(null)
-        }}
-      >
-        <DialogContent className="sm:max-w-sm">
-          {created ? (
-            <>
-              <DialogHeader>
-                <DialogTitle>Orden de pago {created.code}</DialogTitle>
-                <DialogDescription>
-                  Muestra el QR al pagador para que abra el chat con el mensaje
-                  listo, o comparte la liga.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="flex flex-col items-center gap-3">
-                {/* eslint-disable-next-line @next/next/no-img-element -- el QR es un data URL generado en el servidor; el optimizador de next/image no aplica */}
-                <img
-                  src={created.qrDataUrl}
-                  alt={`QR de la orden de pago ${created.code}`}
-                  className="size-52 rounded-lg border bg-white p-2"
-                />
-                <p className="text-2xl font-semibold tabular-nums">
-                  {money(created.amountMxn)}
-                </p>
-                <div className="w-full rounded-lg bg-muted/50 p-3 text-sm">
-                  <p className="font-medium">Datos para la transferencia SPEI</p>
-                  <p>Banco: {created.bank.bank}</p>
-                  <p>Cuenta: {created.bank.account}</p>
-                  <p>Titular: {created.bank.holder}</p>
-                  <p>
-                    Concepto de pago:{" "}
-                    <span className="font-mono font-semibold">
-                      {created.code}
-                    </span>
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => copyText(created.waUrl, "La liga de pago")}
-                  >
-                    <CopyIcon data-icon="inline-start" />
-                    Copiar liga
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="relative after:content-[''] after:absolute after:-inset-2"
-                    render={
-                      <a
-                        href={created.waUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label="Abrir la liga de pago en WhatsApp"
-                      />
-                    }
-                  >
-                    <ExternalLinkIcon />
-                  </Button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="lg"
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => copyText(created.code, "El código de pago")}
-                  >
-                    <CopyIcon data-icon="inline-start" />
-                    Copiar código
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="relative after:content-[''] after:absolute after:-inset-2"
-                    aria-label="Imprimir el QR de la orden"
-                    onClick={() => window.print()}
-                  >
-                    <PrinterIcon />
-                  </Button>
-                </div>
-                <Button size="lg" onClick={() => setCreated(null)}>
-                  Listo
-                </Button>
-              </div>
-            </>
-          ) : null}
-        </DialogContent>
-      </Dialog>
+      {/* Diálogo de orden creada: QR + liga (componente compartido) */}
+      <OrdenCreadaDialog order={created} onClose={() => setCreated(null)} />
 
       {/* Confirmación de aprobación */}
       <AlertDialog

@@ -2,8 +2,9 @@
  * Pruebas de la lógica pura de la Calculadora (src/lib/calculadora.ts):
  * operaciones, encadenamiento en orden de pulsación, porcentaje comercial,
  * reemplazo de operador, igual repetido, decimales, signo, retroceso,
- * límites de entrada, reinicio y errores. Corre con Node directo (Node 24
- * elimina tipos al importar .ts):
+ * límites de entrada, reinicio, errores, entrada de historial (`lastCompleted`)
+ * y recordado de valores de la cinta (`recall`). Corre con Node directo
+ * (Node 24 elimina tipos al importar .ts):
  *
  *   node scripts/test-calculadora.mjs
  */
@@ -325,6 +326,75 @@ check("el formato de números es estable para valores cotidianos", () => {
   assert.equal(formatCalculatorNumber(2000), "2000")
   assert.equal(formatCalculatorNumber(NaN), "0")
   assert.equal(formatCalculatorNumber(Infinity), "0")
+})
+
+/* ------------------ cinta de historial y valores recordados --------------- */
+
+const RECALL = (value) => ({ type: "recall", value })
+
+check("= completa produce la entrada de historial con la expresión visible", () => {
+  const state = run(...typeNumber("250"), TIMES, ...typeNumber("3"), EQUALS)
+  assert.deepEqual(state.lastCompleted, { expression: "250×3", result: "750" })
+  // La expresión usa el mismo formato de pantalla (miles agrupados).
+  assert.deepEqual(
+    run(...typeNumber("25"), PLUS, ...typeNumber("2500"), EQUALS).lastCompleted,
+    { expression: "25+2,500", result: "2525" }
+  )
+})
+
+check("= repetido produce una entrada nueva en cada cierre", () => {
+  let state = run(d(2), PLUS, d(3), EQUALS)
+  assert.deepEqual(state.lastCompleted, { expression: "2+3", result: "5" })
+  state = calculatorReducer(state, EQUALS)
+  assert.deepEqual(state.lastCompleted, { expression: "5+3", result: "8" })
+  state = calculatorReducer(state, EQUALS)
+  assert.deepEqual(state.lastCompleted, { expression: "8+3", result: "11" })
+})
+
+check("la entrada de historial se consume con cualquier otra acción", () => {
+  const base = run(...typeNumber("250"), TIMES, ...typeNumber("3"), EQUALS)
+  assert.notEqual(base.lastCompleted, null)
+  // El componente la recoge una sola vez: el siguiente despacho la descarta.
+  const afterDigit = calculatorReducer(base, d(7))
+  assert.equal(afterDigit.lastCompleted, null)
+  assert.equal(afterDigit.display, "7")
+  assert.equal(calculatorReducer(base, CLEAR).lastCompleted, null)
+  assert.equal(calculatorReducer(base, PLUS).lastCompleted, null)
+  assert.equal(calculatorReducer(base, PERCENT).lastCompleted, null)
+})
+
+check("= sin operación completa no produce entrada de historial", () => {
+  // `5 + =` deja el valor sin inventar operando: sin línea de cinta.
+  assert.equal(run(d(5), PLUS, EQUALS).lastCompleted, null)
+  // La división entre cero falla y tampoco deja entrada.
+  assert.equal(run(d(5), DIVIDE, d(0), EQUALS).lastCompleted, null)
+  // `=` sobre la entrada simple no produce nada.
+  assert.equal(run(...typeNumber("42"), EQUALS).lastCompleted, null)
+})
+
+check("recall carga el valor como estado tipo-resultado", () => {
+  const state = run(...typeNumber("250"), TIMES, ...typeNumber("3"), EQUALS, RECALL(755))
+  assert.equal(state.display, "755")
+  assert.equal(state.accumulator, 755)
+  assert.equal(state.operator, null)
+  assert.equal(state.awaitingOperand, true)
+  assert.equal(state.lastCompleted, null)
+  // Un dígito inicia entrada nueva y un operador continúa desde el recordado.
+  assert.equal(calculatorReducer(state, d(7)).display, "7")
+  assert.equal(run(RECALL(755), PLUS, ...typeNumber("5"), EQUALS).display, "760")
+  // Limpia la memoria del igual repetido: no repite la operación ajena.
+  assert.equal(run(d(2), PLUS, d(3), EQUALS, RECALL(10), EQUALS).display, "10")
+  // Valores no finitos son un no-op.
+  assert.equal(calculatorReducer(createInitialCalculatorState(), RECALL(NaN)).display, "0")
+  assert.equal(calculatorReducer(createInitialCalculatorState(), RECALL(Infinity)).display, "0")
+})
+
+check("recall formatea con las mismas reglas del resultado", () => {
+  assert.equal(run(RECALL(-19)).display, "-19")
+  assert.equal(run(RECALL(1.5e18)).display, "1.5e+18")
+  // Notación científica no editable: la siguiente cifra inicia entrada nueva.
+  const sci = run(RECALL(1.5e18))
+  assert.equal(calculatorReducer(sci, d(5)).display, "5")
 })
 
 console.log(`\n${passed} pruebas OK`)

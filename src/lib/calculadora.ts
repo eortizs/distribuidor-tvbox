@@ -7,6 +7,12 @@
 
 export type CalculatorOperator = "+" | "-" | "*" | "/"
 
+/** Línea de la cinta de historial: expresión visible y su resultado. */
+export interface CalculatorHistoryEntry {
+  expression: string
+  result: string
+}
+
 export interface CalculatorState {
   /** Texto mostrado en la pantalla: entrada activa, resultado o `0`. */
   display: string
@@ -25,6 +31,8 @@ export interface CalculatorState {
   error: string | null
   /** Texto para la región viva: solo resultados y errores, nunca cada dígito. */
   announce: string | null
+  /** Última operación cerrada con `=`; el componente la recoge una sola vez. */
+  lastCompleted: CalculatorHistoryEntry | null
 }
 
 export type CalculatorAction =
@@ -34,6 +42,7 @@ export type CalculatorAction =
   | { type: "backspace" }
   | { type: "operator"; operator: CalculatorOperator }
   | { type: "percent" }
+  | { type: "recall"; value: number }
   | { type: "equals" }
   | { type: "clear" }
 
@@ -62,6 +71,7 @@ export function createInitialCalculatorState(): CalculatorState {
     lastOperand: null,
     error: null,
     announce: null,
+    lastCompleted: null,
   }
 }
 
@@ -169,21 +179,29 @@ export function calculatorReducer(
   state: CalculatorState,
   action: CalculatorAction
 ): CalculatorState {
+  // La entrada para la cinta se produce una sola vez: solo `=` la fija y el
+  // componente la recoge; cualquier otra acción la descarta.
+  const base =
+    action.type === "equals" || state.lastCompleted === null
+      ? state
+      : { ...state, lastCompleted: null }
   switch (action.type) {
     case "digit":
-      return reduceDigit(state, action.digit)
+      return reduceDigit(base, action.digit)
     case "decimal":
-      return reduceDecimal(state)
+      return reduceDecimal(base)
     case "sign":
-      return reduceSign(state)
+      return reduceSign(base)
     case "backspace":
-      return reduceBackspace(state)
+      return reduceBackspace(base)
     case "operator":
-      return reduceOperator(state, action.operator)
+      return reduceOperator(base, action.operator)
     case "percent":
-      return reducePercent(state)
+      return reducePercent(base)
+    case "recall":
+      return reduceRecall(base, action.value)
     case "equals":
-      return reduceEquals(state)
+      return reduceEquals(base)
     case "clear":
       return createInitialCalculatorState()
   }
@@ -249,6 +267,29 @@ function reduceBackspace(state: CalculatorState): CalculatorState {
   const trimmed = state.display.slice(0, -1)
   const next = trimmed === "" || trimmed === "-" ? "0" : trimmed
   return { ...state, display: next, percentApplied: false }
+}
+
+/**
+ * Carga un valor de la cinta como estado tipo-resultado: la siguiente cifra
+ * inicia una entrada nueva y un operador continúa desde él, igual que tras
+ * pulsar `=`. Limpia la última operación repetible: no hay una operación
+ * previa propia del valor recordado.
+ */
+function reduceRecall(state: CalculatorState, value: number): CalculatorState {
+  if (!Number.isFinite(value)) return state
+  return {
+    ...state,
+    display: formatCalculatorNumber(value),
+    accumulator: value,
+    operator: null,
+    awaitingOperand: true,
+    percentApplied: false,
+    lastOperator: null,
+    lastOperand: null,
+    error: null,
+    announce: null,
+    lastCompleted: null,
+  }
 }
 
 function arithmeticError(operator: CalculatorOperator): string | null {
@@ -332,6 +373,7 @@ function reduceEquals(state: CalculatorState): CalculatorState {
         operator: null,
         awaitingOperand: true,
         percentApplied: false,
+        lastCompleted: null,
       })
     }
     const operand = Number(state.display)
@@ -351,6 +393,10 @@ function reduceEquals(state: CalculatorState): CalculatorState {
       lastOperand: operand,
       error: null,
       announce: display,
+      lastCompleted: {
+        expression: `${formatGroupedNumber(state.accumulator)}${operatorSymbol(state.operator)}${formatCalculatorEntryText(state.display)}`,
+        result: display,
+      },
     }
   }
   // Tras un cálculo completo, `=` repetido repite la última operación.
@@ -369,6 +415,10 @@ function reduceEquals(state: CalculatorState): CalculatorState {
       percentApplied: false,
       error: null,
       announce: display,
+      lastCompleted: {
+        expression: `${formatGroupedNumber(operand)}${operatorSymbol(state.lastOperator)}${formatGroupedNumber(state.lastOperand)}`,
+        result: display,
+      },
     }
   }
   return clearError(state)

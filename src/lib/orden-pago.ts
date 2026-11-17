@@ -24,6 +24,15 @@ export interface PaymentOrderListItem {
   createdAt: string
 }
 
+/** Límites del monto de una orden (espejo del CHECK de la tabla). */
+export const PAYMENT_ORDER_MIN_MXN = 1
+export const PAYMENT_ORDER_MAX_MXN = 50_000
+
+/** Formato de dinero compartido por las vistas de órdenes de pago. */
+export function paymentOrderMoney(amount: number): string {
+  return `$${amount.toFixed(2)} MXN`
+}
+
 /** Serializa la fila del repo para el cliente. */
 export function toPaymentOrderListItem(order: PaymentOrder): PaymentOrderListItem {
   return {

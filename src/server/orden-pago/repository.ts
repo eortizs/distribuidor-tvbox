@@ -52,8 +52,7 @@ export interface PaymentOrder {
 }
 
 /** Límites del monto libre (CHECK de la tabla como respaldo duro). */
-export const PAYMENT_ORDER_MIN_MXN = 1
-export const PAYMENT_ORDER_MAX_MXN = 50_000
+export { PAYMENT_ORDER_MAX_MXN, PAYMENT_ORDER_MIN_MXN } from "@/lib/orden-pago"
 
 /**
  * Tope de órdenes PENDIENTES simultáneas por creador: un cobrador legítimo

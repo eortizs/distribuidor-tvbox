@@ -87,7 +87,7 @@ export const MODULOS: Modulo[] = [
   {
     title: "Calculadora",
     description:
-      "Cálculos rápidos con porcentaje comercial, desde botones o teclado.",
+      "Cálculos rápidos con porcentaje, cinta de historial y cobro con orden de pago.",
     href: "/modulos/calculadora",
     icon: CalculatorIcon,
   },
