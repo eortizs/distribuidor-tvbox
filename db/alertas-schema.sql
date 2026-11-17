@@ -114,8 +114,13 @@ CREATE INDEX IF NOT EXISTS push_subscriptions_user_idx
 -- Kinds nuevos de la campana para el módulo: hallazgo de alerta y
 -- recordatorio. Protegido con to_regclass para que el archivo sea
 -- independiente del orden (sin la tabla, las sentencias abortarían toda la
--- migración). Idempotente: se suelta el CHECK previo y se vuelve a crear con
--- el conjunto ampliado (nunca rompe filas existentes: solo amplía).
+-- migración). Idempotente: se suelta el CHECK previo y se vuelve a crear.
+-- La lista es el SUPERSET COMPLETO de kinds vigentes (los mismos 7 de
+-- client-renewal-schema.sql y payment-orders-schema.sql, que recrean el
+-- mismo CHECK más adelante en la cadena): si faltara un kind ya escrito en
+-- la tabla, el ADD CONSTRAINT de una re-ejecución fallaría con 23514 y
+-- rompería la cadena de despliegue. Al agregar un kind nuevo, actualizar
+-- la lista en los TRES archivos.
 DO $$
 BEGIN
   IF to_regclass('public.notifications') IS NOT NULL THEN
@@ -123,7 +128,7 @@ BEGIN
     ALTER TABLE notifications ADD CONSTRAINT notifications_kind_check
       CHECK (kind IN (
         'renewal_success', 'renewal_failed', 'transfer_rejected',
-        'alert_hit', 'reminder'
+        'alert_hit', 'reminder', 'client_renewal_notice', 'payment_order'
       ));
   END IF;
 END $$;

@@ -113,6 +113,7 @@ const KIND_BADGE: Record<
   alert_hit: { label: "Alerta", variant: "info-light" },
   reminder: { label: "Recordatorio", variant: "primary-light" },
   client_renewal_notice: { label: "Cliente", variant: "info-light" },
+  payment_order: { label: "Cobro", variant: "primary-light" },
 }
 
 const SKELETON_ROWS = 4

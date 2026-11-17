@@ -37,6 +37,11 @@ import {
   type ClientWhatsappReply,
 } from "@/server/asistente/renovacion-cliente"
 import { saveUserFile } from "@/server/storage/user-files"
+import {
+  maybeHandlePaymentOrderReceipt,
+  maybeHandlePaymentOrderText,
+  type PaymentOrderTurnResult,
+} from "@/server/orden-pago/whatsapp"
 
 import {
   findUserByWhatsAppPhone,
@@ -356,6 +361,104 @@ const SILENT_CLIENT_RESULT = (inboundText: string, mediaMime: string | null) => 
 })
 
 /**
+ * Turno de orden de pago manejado SIN responder (tope de ráfagas o cortesía
+ * ya gastada): la rama se apropia del mensaje para no caer a la cortesía de
+ * «no registrado», pero responde silencio.
+ */
+const SILENT_PAYMENT_ORDER_RESULT = (inboundText: string, mediaMime: string | null): PaymentOrderTurnResult => ({
+  text: "",
+  orderId: null,
+  inboundText,
+  mediaMime,
+})
+
+/**
+ * Rama de ÓRDENES DE PAGO (números que no son usuarios ni clientes): el
+ * pagador externo de /modulos/orden-de-pago paga aquí con el código de
+ * concepto de su liga wa.me y manda el comprobante por el mismo chat.
+ * Null = el turno no apunta a ninguna orden de pago → cortesía de número
+ * desconocido.
+ */
+async function handlePaymentOrderIncomingMessage(input: {
+  jid: string
+  phone: string
+  m: WAMessage
+}): Promise<PaymentOrderTurnResult | null> {
+  const text = extractText(input.m.message)
+  const caption = extractCaption(input.m.message)
+  const mediaInfo = extractMediaInfo(input.m.message)
+  const messageText = (text || caption).trim()
+
+  // Solo texto (la liga wa.me llega con el texto prellenado del código).
+  if (!mediaInfo) {
+    if (messageText.length === 0) return null
+    if (!allowInbound(input.phone)) {
+      // Apropiarse el turno en silencio (como la pata de medios y la rama de
+      // clientes): devolver null caería a la cortesía de «no registrado»,
+      // falsa para un pagador con orden pendiente.
+      return SILENT_PAYMENT_ORDER_RESULT(messageText, null)
+    }
+    return withClientComposing(input.jid, () =>
+      maybeHandlePaymentOrderText({ phone: input.phone, text: messageText })
+    )
+  }
+
+  // Tipos fuera del catálogo (video, audio, stickers…): aviso de cortesía.
+  if (!SUPPORTED_MEDIA_TYPES.includes(mediaInfo.mimeType)) {
+    if (!courtesyAllowed(input.phone)) {
+      return SILENT_PAYMENT_ORDER_RESULT(messageText, mediaInfo.mimeType)
+    }
+    return {
+      text: "Por ahora solo puedo recibir la FOTO o el PDF del comprobante de pago.",
+      orderId: null,
+      inboundText: messageText,
+      mediaMime: mediaInfo.mimeType,
+    }
+  }
+
+  if (!allowInbound(input.phone)) {
+    return SILENT_PAYMENT_ORDER_RESULT(messageText, mediaInfo.mimeType)
+  }
+
+  return withClientComposing(input.jid, async () => {
+    const socket = state().socket
+    if (!socket) return null
+    let bytes: Buffer
+    try {
+      bytes = await downloadIncomingMedia(input.m, socket)
+    } catch (error) {
+      log("media_download", error)
+      return {
+        text: "No pude leer el archivo que enviaste (pudo expirar o pesar demasiado). Inténtalo de nuevo.",
+        orderId: null,
+        inboundText: messageText,
+        mediaMime: mediaInfo.mimeType,
+      }
+    }
+    if (
+      bytes.byteLength === 0 ||
+      bytes.byteLength > MAX_ASSISTANT_ATTACHMENT_BYTES
+    ) {
+      return {
+        text: `El archivo supera el límite de ${Math.round(MAX_ASSISTANT_ATTACHMENT_BYTES / (1024 * 1024))} MB. Envía un comprobante más ligero.`,
+        orderId: null,
+        inboundText: messageText,
+        mediaMime: mediaInfo.mimeType,
+      }
+    }
+    return maybeHandlePaymentOrderReceipt({
+      phone: input.phone,
+      text: messageText,
+      media: {
+        mimeType: mediaInfo.mimeType,
+        fileName: mediaInfo.fileName,
+        bytes,
+      },
+    })
+  })
+}
+
+/**
  * Rama de CLIENTES FlujoTV (números sin cuenta de usuario): renuevan por
  * aquí con su teléfono como identidad — `/renovar` entrega concepto +
  * importe + datos bancarios del distribuidor y el comprobante entra como
@@ -588,6 +691,52 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
             jid,
             source: "client_renewal",
             cliente: clientHandled.reply.cliente,
+          },
+        })
+      }
+      return
+    }
+    // Rama de ÓRDENES DE PAGO: el pagador externo de /modulos/orden-de-pago
+    // (cualquier persona) paga aquí con el código de su liga wa.me. Null =
+    // el turno no apunta a ninguna orden → cortesía de número desconocido.
+    const paymentHandled = await handlePaymentOrderIncomingMessage({
+      jid,
+      phone,
+      m,
+    }).catch((error: unknown) => {
+      log("payment_order_branch", error)
+      return null
+    })
+    if (paymentHandled !== null) {
+      logWhatsAppMessageDetached({
+        direction: "in",
+        userId: null,
+        phone,
+        text:
+          paymentHandled.inboundText ||
+          (paymentHandled.mediaMime
+            ? `[archivo: ${paymentHandled.mediaMime}]`
+            : ""),
+        meta: {
+          jid,
+          rama: "orden_pago",
+          order: paymentHandled.orderId,
+          media: paymentHandled.mediaMime,
+        },
+      })
+      if (paymentHandled.text.length > 0) {
+        await sendTextToJid(jid, paymentHandled.text).catch(
+          (error: unknown) => log("payment_order_reply", error)
+        )
+        logWhatsAppMessageDetached({
+          direction: "out",
+          userId: null,
+          phone,
+          text: paymentHandled.text,
+          meta: {
+            jid,
+            source: "payment_order",
+            order: paymentHandled.orderId,
           },
         })
       }

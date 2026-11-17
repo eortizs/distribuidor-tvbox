@@ -9,6 +9,7 @@ import {
   PackageIcon,
   PiggyBankIcon,
   PlugZapIcon,
+  QrCodeIcon,
   ReceiptTextIcon,
   ShoppingBasketIcon,
   TimerIcon,
@@ -132,6 +133,13 @@ export const MODULOS: Modulo[] = [
       "Elige tokens (herramientas con APIs) o cupones (licencias FlujoTV), define el monto y paga con Mercado Pago, transferencia o cupón.",
     href: "/modulos/abonar-saldo",
     icon: PiggyBankIcon,
+  },
+  {
+    title: "Orden de pago",
+    description:
+      "Emite un cobro de monto libre: liga de WhatsApp con código de concepto y QR para que el pagador pague por SPEI y suba su comprobante.",
+    href: "/modulos/orden-de-pago",
+    icon: QrCodeIcon,
   },
   {
     title: "Reporte SPEI",

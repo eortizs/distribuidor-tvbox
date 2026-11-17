@@ -32,6 +32,8 @@ export type NotificationKind =
   | "reminder"
   /** Aviso al distribuidor sobre una renovación de cliente por WhatsApp. */
   | "client_renewal_notice"
+  /** Aviso del módulo Orden de pago (cobro recibido, comprobante por revisar). */
+  | "payment_order"
 
 export interface NotificationRow {
   id: string
@@ -62,6 +64,7 @@ const KINDS: readonly NotificationKind[] = [
   "alert_hit",
   "reminder",
   "client_renewal_notice",
+  "payment_order",
 ]
 
 function logError(context: string, error: unknown): void {
@@ -489,6 +492,35 @@ export function createClientRenewalNotice(input: ClientRenewalNoticeInput): void
     expiresAt: null,
     orderId: null,
   }).catch((error: unknown) => logError("create_client_renewal_notice", error))
+}
+
+export interface PaymentOrderNotificationInput {
+  userId: string
+  /** Orden de pago involucrada (dedup de campana por orden y trazabilidad). */
+  orderId: string
+  title: string
+  body: string
+}
+
+/**
+ * Aviso al CREADOR de una orden de pago (/modulos/orden-de-pago): cobro
+ * recibido (aprobación automática o manual), comprobante que no pasó la
+ * validación automática o resolución hecha por un admin. La campana espeja a
+ * WhatsApp vía `insertNotification`, igual que el resto. Mejor esfuerzo:
+ * nunca lanza ni bloquea el flujo del pago.
+ */
+export function createPaymentOrderNotification(
+  input: PaymentOrderNotificationInput
+): void {
+  void insertNotification({
+    userId: input.userId,
+    kind: "payment_order",
+    title: input.title,
+    body: input.body,
+    userName: "",
+    expiresAt: null,
+    orderId: input.orderId,
+  }).catch((error: unknown) => logError("create_payment_order", error))
 }
 
 interface NotificationInsert {

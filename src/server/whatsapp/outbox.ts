@@ -3,6 +3,7 @@ import { publicSiteUrl } from "@/server/site-url"
 
 import {
   WHATSAPP_KIND_CLIENT_RENEWAL,
+  WHATSAPP_KIND_PAYMENT_ORDER,
   logWhatsAppMessageDetached,
 } from "./service"
 import { getWhatsAppStatus, sendWhatsAppText } from "./socket"
@@ -52,13 +53,18 @@ let lastPruneAt = 0
 
 /**
  * Texto de WhatsApp para un envío de la cola. Los espejos de notificación
- * llevan el link al panel; los avisos DIRECTOS a clientes
- * (`kind='client_renewal'`, renovación por WhatsApp) no: el cliente no es
- * usuario del panel y un enlace que no puede usar solo confunde.
+ * llevan el link al panel; los avisos DIRECTOS a destinatarios sin cuenta
+ * (clientes FlujoTV `client_renewal` y pagadores de órdenes de pago
+ * `payment_order`) no: un enlace que no pueden usar solo confunde.
  */
+const NO_PANEL_LINK_KINDS = new Set([
+  WHATSAPP_KIND_CLIENT_RENEWAL,
+  WHATSAPP_KIND_PAYMENT_ORDER,
+])
+
 function mirrorMessage(row: OutboxClaimRow): string {
   const base = `${row.title}\n${row.body}`
-  return row.kind === WHATSAPP_KIND_CLIENT_RENEWAL
+  return NO_PANEL_LINK_KINDS.has(row.kind ?? "")
     ? base
     : `${base}\n\nPanel: ${publicSiteUrl()}`
 }

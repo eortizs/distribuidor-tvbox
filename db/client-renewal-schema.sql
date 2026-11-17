@@ -20,11 +20,14 @@
 
 ALTER TABLE mp_orders ADD COLUMN IF NOT EXISTS origin text;
 
--- Kinds nuevos de la campana para el flujo de clientes. Patrón idempotente de
--- db/alertas-schema.sql: se suelta el CHECK previo y se vuelve a crear con el
--- conjunto ampliado (nunca rompe filas existentes: solo amplía). Esta
--- migración corre DESPUÉS de apply-alertas.mjs en la cadena: su DO block
--- recrearía el CHECK con solo 5 kinds y pisaría este kind si llegara antes.
+-- Kinds nuevos de la campana para el flujo de clientes. Patrón idempotente
+-- de db/alertas-schema.sql: se suelta el CHECK previo y se vuelve a crear.
+-- La lista es el SUPERSET COMPLETO de kinds vigentes (los mismos 7 de
+-- alertas-schema.sql y payment-orders-schema.sql, que recrean el mismo CHECK
+-- en otros puntos de la cadena): si faltara un kind ya escrito en la tabla,
+-- el ADD CONSTRAINT de una re-ejecución fallaría con 23514 y rompería la
+-- cadena de despliegue. Al agregar un kind nuevo, actualizar la lista en los
+-- TRES archivos.
 DO $$
 BEGIN
   IF to_regclass('public.notifications') IS NOT NULL THEN
@@ -32,7 +35,7 @@ BEGIN
     ALTER TABLE notifications ADD CONSTRAINT notifications_kind_check
       CHECK (kind IN (
         'renewal_success', 'renewal_failed', 'transfer_rejected',
-        'alert_hit', 'reminder', 'client_renewal_notice'
+        'alert_hit', 'reminder', 'client_renewal_notice', 'payment_order'
       ));
   END IF;
 END $$;
