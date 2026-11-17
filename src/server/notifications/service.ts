@@ -5,6 +5,7 @@ import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { enqueueWhatsAppForUserDetached } from "@/server/whatsapp/service"
 import { AppError } from "@/server/umejson/types"
 import { formatMxn } from "@/lib/finanzas"
+import { formatFlujoDate } from "@/lib/flujotv"
 
 /**
  * Notificaciones persistentes del comprador y de los administradores:
@@ -501,6 +502,19 @@ interface NotificationInsert {
 }
 
 /**
+ * Cuerpo del espejo WhatsApp: igual al de la campana, con el vencimiento
+ * anexado cuando la fila lo trae (`renewal_success`). La campana de la PWA
+ * formatea la fecha al pintar desde la columna `expires_at`; el espejo no
+ * tiene esa capa de UI, así que la fecha viaja en el texto con el mismo
+ * formato es-MX («Vence …», el literal exacto de la campana). Los avisos sin
+ * vencimiento (fallos, rechazos, abonos, alertas) quedan intactos.
+ */
+function whatsappMirrorBody(body: string, expiresAt: string | null): string {
+  if (!expiresAt) return body
+  return `${body}\nVence ${formatFlujoDate(expiresAt)}`
+}
+
+/**
  * Inserta la fila y avisa por SSE al destinatario solo cuando realmente se
  * escribió (un fallo deduplicado no debe refrescar la campana de nuevo). El
  * índice único parcial sobre (user_id, order_id) para fallos y rechazos
@@ -558,7 +572,7 @@ function insertNotification(insert: NotificationInsert): Promise<boolean> {
           notificationId,
           kind: insert.kind,
           title: insert.title,
-          body: insert.body,
+          body: whatsappMirrorBody(insert.body, insert.expiresAt),
         })
         return true
       }
