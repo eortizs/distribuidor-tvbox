@@ -11,9 +11,11 @@ import {
 import { saveUserFile } from "@/server/storage/user-files"
 
 import {
+  findLatestResolvedPaymentOrderByPayerPhone,
   findPendingPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyCode,
   listPendingPaymentOrders,
+  listPendingPaymentOrdersByAmount,
   savePaymentOrderScan,
   touchPaymentOrderPayer,
   type PaymentOrder,
@@ -30,9 +32,12 @@ import {
  * llama a estos handlers; ambos devuelven null cuando el turno NO es de una
  * orden de pago y el flujo debe seguir (cortesía de número desconocido).
  *
- *   - Texto (la liga wa.me llega con el texto prellenado): se buscan tokens
- *     con forma de código que matcheen una orden PENDIENTE → instrucciones
- *     completas (importe, banco, cuenta, titular, código como concepto).
+ *   - Texto: la liga wa.me llega con la SOLICITUD prellenada («Solicito una
+ *     orden de pago por $X», sin código — la orden se descubre por el
+ *     importe que definió el cobrador) o con un código pegado a mano. La
+ *     respuesta va en TRES mensajes de golpe: las INSTRUCCIONES del pago
+ *     (con importe/banco/titular), el CÓDIGO de concepto SOLO y la CLABE
+ *     SOLO — código y CLABE sin nada más para copiar/pegar fácil.
  *   - Comprobante (foto/PDF solo o con caption): el CÓDIGO IMPRESO en el
  *     comprobante descubre la orden entre las pendientes (mismo criterio de
  *     match que distribuidor y clientes); sin impresión legible manda el
@@ -50,8 +55,14 @@ import {
  */
 
 export interface PaymentOrderTurnResult {
-  /** Respuesta para el pagador; vacía = turno manejado sin responder. */
+  /** Primera respuesta para el pagador; vacía = turno manejado sin responder. */
   text: string
+  /**
+   * Mensajes adicionales ENVIADOS en orden tras `text` (la respuesta de la
+   * orden de pago viaja en TRES mensajes: instrucciones, el código solo y
+   * la CLABE solo).
+   */
+  additionalTexts?: string[]
   /** Orden de pago involucrada, para la bitácora del módulo WhatsApp. */
   orderId: string | null
   /** Texto entrante del turno, para la bitácora. */
@@ -84,8 +95,9 @@ function sha256Of(bytes: Uint8Array): string {
 
 /**
  * Primeros tokens del mensaje con FORMA de código de concepto (4 caracteres
- * del alfabeto sin 0/O/1/I), sin duplicados. La liga wa.me llega con el
- * texto prellenado; el código viaja como una palabra más y aquí se aísla.
+ * del alfabeto sin 0/O/1/I), sin duplicados. El código llega pegado a mano
+ * o reenviado (la liga prellenada actual viaja SIN código: «Solicito una
+ * orden de pago por $X»); viaja como una palabra más y aquí se aísla.
  * Un token solo cuenta si además matchea una orden real (chequeo en BD),
  * así que un «chat» o «test» suelto nunca secuestra el turno.
  */
@@ -97,26 +109,71 @@ function findPaymentOrderCodeTokens(text: string): string[] {
   return [...new Set(tokens)].slice(0, MAX_CODE_TOKENS_PER_MESSAGE)
 }
 
-/** Instrucciones completas para pagar la orden (paso del texto prellenado). */
+/**
+ * Mensaje 1 de la respuesta: las INSTRUCCIONES del pago. Texto
+ * DETERMINISTA (siempre idéntico, plantilla fija): sentencia del pago con
+ * el código como concepto + los datos de la orden (importe, referencia,
+ * banco, CLABE y titular) — el CLABE se imprime aquí para que el pagador
+ * sepa a qué refiere el número que llega suelto en el tercer mensaje.
+ */
 function instruccionesDePago(order: PaymentOrder): string {
   return [
-    `*Orden de pago ${order.code}*`,
+    `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`,
+    "",
+    `Importe: ${money(order.amountMxn)}`,
     order.note ? `Referencia: ${order.note}` : "",
-    "",
-    `*Importe: ${money(order.amountMxn)}*`,
-    "",
-    "Paga por transferencia (SPEI) con estos datos:",
-    `Banco: ${order.bank.bank}`,
-    `Cuenta: ${order.bank.account}`,
-    `Titular: ${order.bank.holder}`,
-    `*CONCEPTO DE PAGO: ${order.code}*`,
-    "",
-    `Escribe SOLO el código ${order.code} como concepto en tu transferencia.`,
-    "",
-    "Cuando tengas el comprobante, envía por este chat SOLO la foto o el PDF (sin texto): lo reviso y confirmo tu pago.",
+    "Banco: " + order.bank.bank,
+    "CLABE: " + order.bank.account,
+    "Titular: " + order.bank.holder,
   ]
     .filter((line) => line.length > 0)
     .join("\n")
+}
+
+/**
+ * Respuesta en TRES mensajes enviados de golpe: 1) instrucciones, 2) el
+ * CÓDIGO de concepto SOLO y 3) la CLABE SOLO — el código y la CLABE viajan
+ * sin nada más para que el pagador los copie/pegue con un toque en su app
+ * bancaria.
+ */
+function respuestaConCodigo(order: PaymentOrder, inboundText: string): PaymentOrderTurnResult {
+  return {
+    text: instruccionesDePago(order),
+    additionalTexts: [order.code, order.bank.account],
+    orderId: order.id,
+    inboundText,
+    mediaMime: null,
+  }
+}
+
+/** Guía cuando la orden por monto ya tiene pagador de OTRO número. */
+function textoPagadorAjeno(): string {
+  return [
+    "Esa orden de pago ya tiene un pagador asignado.",
+    "",
+    "Si es tuya, solicita a quien te la emitió el CÓDIGO de pago (4 letras) y envíamelo como mensaje.",
+  ].join("\n")
+}
+
+/**
+ * Monto de una SOLICITUD de orden de pago («Solicito una orden de pago por
+ * $500» — el texto prellenado de la liga wa.me, a veces editado a mano).
+ * Acepta $500 / 500 / 1,500.50 / 500,50 y «MXN» pegado al final. Null = el
+ * texto no tiene forma de solicitud o el monto no se entiende.
+ */
+function parsePaymentOrderRequestAmount(text: string): number | null {
+  const match = text
+    .trim()
+    .match(/solicito\s+(?:una\s+)?orden\s+de\s+pago\s+por\s+\$?\s*(\d[\d.,]*)/i)
+  if (!match) return null
+  const raw = match[1]
+  // «1,500.50» (miles con coma, decimal con punto) vs «500,50» (coma decimal).
+  const normalizado = /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw)
+    ? raw.replace(/,/g, "")
+    : raw.replace(/,/g, ".")
+  const amount = Number.parseFloat(normalizado)
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  return Math.round(amount * 100) / 100
 }
 
 /** Replay honesto del estado de una orden ya resuelta o cancelada. */
@@ -139,31 +196,159 @@ function textoEstadoResuelto(order: PaymentOrder): string {
   }
 }
 
+/** Guía cuando la solicitud no resolvió una orden concreta. */
+function textoSinOrdenPorMonto(monto: number): string {
+  return [
+    `No encontré una orden de pago pendiente por ${money(monto)}.`,
+    "",
+    "Verifica el importe con quien te emitió la orden; si tienes el CÓDIGO de pago (4 letras), envíamelo como mensaje.",
+  ].join("\n")
+}
+
+/** Guía cuando hay AMBIGÜEDAD de órdenes pendientes del mismo monto. */
+function textoMontoAmbiguo(monto: number): string {
+  return [
+    `Hay varias órdenes de pago pendientes por ${money(monto)}.`,
+    "",
+    "Pide a quien te emitió la orden el CÓDIGO de pago (4 letras) y envíamelo como mensaje para identificar la tuya.",
+  ].join("\n")
+}
+
 /**
- * Turno de TEXTO del pagador (sin archivo): tokens con forma de código que
- * matcheen una orden pendiente → instrucciones. Null = no es un turno de
- * orden de pago (el socket sigue con la cortesía).
+ * Turno de TEXTO del pagador (sin archivo), de la fuente más específica a
+ * la más débil:
+ *   1. token con forma de código que matchee una orden pendiente (liga
+ *      vieja, código reenviado o pegado a mano) — aquí SÍ se binda el
+ *      teléfono: saber el código ES la identidad del pagador,
+ *   2. replay honesto del código de una orden YA resuelta,
+ *   3. SOLICITUD por monto («Solicito una orden de pago por $X», el texto
+ *      prellenado de la liga): UNA pendiente por ese importe y sin pagador
+ *      de otro número → respuesta SIN ligar teléfono (el monto no prueba
+ *      identidad); varias → se pide el código; ya ligada a otro número →
+ *      guía sin revelar código ni datos; ninguna → replay por teléfono
+ *      (orden resuelta) o guía honesta.
+ *
+ * Null = no es un turno de orden de pago (el socket sigue con la cortesía).
  */
 export async function maybeHandlePaymentOrderText(input: {
   phone: string
   text: string
 }): Promise<PaymentOrderTurnResult | null> {
-  const order = await findPendingPaymentOrderByAnyCode(
-    findPaymentOrderCodeTokens(input.text)
-  ).catch(() => null)
-  if (!order) return null
-  await touchPaymentOrderPayer(order.id, input.phone).catch(() => {})
-  logEvent("orden_pago.whatsapp_text", {
-    phone: maskPhone(input.phone),
-    order_id: order.id,
-    code: order.code,
-  })
-  return {
-    text: instruccionesDePago(order),
-    orderId: order.id,
-    inboundText: input.text,
-    mediaMime: null,
+  const tokens = findPaymentOrderCodeTokens(input.text)
+
+  const order = await findPendingPaymentOrderByAnyCode(tokens).catch(() => null)
+  if (order) {
+    await touchPaymentOrderPayer(order.id, input.phone).catch(() => {})
+    logEvent("orden_pago.whatsapp_text", {
+      phone: maskPhone(input.phone),
+      order_id: order.id,
+      code: order.code,
+    })
+    return respuestaConCodigo(order, input.text)
   }
+
+  // Replay honesto: el código corresponde a una orden YA resuelta (evita
+  // que el turno caiga a la cortesía de «no registrado»).
+  if (tokens.length > 0) {
+    const resolved = await findResolvedPaymentOrderByAnyCode(tokens).catch(() => null)
+    if (resolved) {
+      logEvent("orden_pago.whatsapp_replay", {
+        phone: maskPhone(input.phone),
+        order_id: resolved.id,
+        code: resolved.code,
+        status: resolved.status,
+      })
+      return {
+        text: textoEstadoResuelto(resolved),
+        orderId: resolved.id,
+        inboundText: input.text,
+        mediaMime: null,
+      }
+    }
+  }
+
+  const monto = parsePaymentOrderRequestAmount(input.text)
+  if (monto === null) return null
+
+  const candidatas = await listPendingPaymentOrdersByAmount(monto).catch(
+    () => null
+  )
+  if (candidatas === null) return null
+
+  if (candidatas.length === 0) {
+    // Sin pendiente por ese monto: ¿la orden del teléfono ya se resolvió?
+    const resolved = await findLatestResolvedPaymentOrderByPayerPhone(
+      input.phone
+    ).catch(() => null)
+    if (resolved) {
+      logEvent("orden_pago.whatsapp_replay", {
+        phone: maskPhone(input.phone),
+        order_id: resolved.id,
+        code: resolved.code,
+        status: resolved.status,
+      })
+      return {
+        text: textoEstadoResuelto(resolved),
+        orderId: resolved.id,
+        inboundText: input.text,
+        mediaMime: null,
+      }
+    }
+    logEvent("orden_pago.whatsapp_request_sin_orden", {
+      phone: maskPhone(input.phone),
+      monto,
+    })
+    return {
+      text: textoSinOrdenPorMonto(monto),
+      orderId: null,
+      inboundText: input.text,
+      mediaMime: null,
+    }
+  }
+
+  if (candidatas.length > 1) {
+    // Ambigüedad: el monto no basta para elegir entre varias pendientes y el
+    // binding por teléfono no es prueba de identidad (un número reciclado
+    // pagaría al beneficiario de una orden vieja) — se pide el código.
+    logEvent("orden_pago.whatsapp_request_ambigua", {
+      phone: maskPhone(input.phone),
+      monto,
+      candidatas: candidatas.length,
+    })
+    return {
+      text: textoMontoAmbiguo(monto),
+      orderId: null,
+      inboundText: input.text,
+      mediaMime: null,
+    }
+  }
+
+  const candidata = candidatas[0]
+  if (candidata.payerPhone !== null && candidata.payerPhone !== input.phone) {
+    // La orden ya tiene pagador de OTRO número: sin código ni datos
+    // bancarios (el monto no prueba identidad) y sin tocar el binding.
+    logEvent("orden_pago.whatsapp_request_bloqueada", {
+      phone: maskPhone(input.phone),
+      order_id: candidata.id,
+      motivo: "pagador_ajeno",
+    })
+    return {
+      text: textoPagadorAjeno(),
+      orderId: null,
+      inboundText: input.text,
+      mediaMime: null,
+    }
+  }
+
+  // SIN binding aquí: ligar el pagador requiere identidad fuerte (código
+  // explícito arriba o comprobante abajo); el monto solo no lo es.
+  logEvent("orden_pago.whatsapp_request", {
+    phone: maskPhone(input.phone),
+    order_id: candidata.id,
+    code: candidata.code,
+    monto,
+  })
+  return respuestaConCodigo(candidata, input.text)
 }
 
 /** Veredicto del chat para el resultado de la revisión. */

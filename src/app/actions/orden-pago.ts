@@ -87,7 +87,7 @@ export async function createPaymentOrderAction(input: {
       bank,
     })
 
-    const waUrl = buildPaymentOrderWaLink(created.code)
+    const waUrl = buildPaymentOrderWaLink(created.amountMxn)
     if (!waUrl) {
       // El canal WhatsApp es la vía de entrega y cobro del módulo: sin
       // número del agente la orden no sirve — se revierte y se explica.

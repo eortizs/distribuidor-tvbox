@@ -78,6 +78,13 @@ CREATE INDEX IF NOT EXISTS payment_orders_pending_created_idx
 CREATE INDEX IF NOT EXISTS payment_orders_resolved_code_idx
   ON payment_orders (code, resolved_at DESC) WHERE status <> 'pending';
 
+-- Replay honesto de la SOLICITUD por monto («Solicito una orden de pago por
+-- $X», el texto prellenado de la liga) cuando la orden del teléfono ya se
+-- resolvió y su código ya no está entre las pendientes.
+CREATE INDEX IF NOT EXISTS payment_orders_resolved_payer_idx
+  ON payment_orders (payer_phone, resolved_at DESC)
+  WHERE status <> 'pending' AND payer_phone IS NOT NULL;
+
 -- Listado del módulo y descubrimiento de pendientes (códigos activos).
 CREATE INDEX IF NOT EXISTS payment_orders_creator_idx
   ON payment_orders (creator_user_id, created_at DESC);

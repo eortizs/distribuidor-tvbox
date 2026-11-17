@@ -294,6 +294,46 @@ export async function findResolvedPaymentOrderByAnyCode(
 }
 
 /**
+ * TODAS las órdenes pendientes de UN monto exacto (del más viejo al más
+ * nuevo, con tope de seguridad). Es la puerta del canal WhatsApp para la
+ * SOLICITUD prellenada de la liga («Solicito una orden de pago por $X»),
+ * que viaja sin código: la orden se descubre por el importe que el
+ * cobrador definió.
+ */
+export async function listPendingPaymentOrdersByAmount(
+  amountMxn: number,
+  limit = 200
+): Promise<PaymentOrder[]> {
+  const amount = Math.round(amountMxn * 100) / 100
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 500)
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.status = 'pending' AND o.amount_mxn = $1::numeric
+      ORDER BY o.created_at ASC LIMIT $2`,
+    [amount, capped]
+  )
+  return result.rows.map(mapRow)
+}
+
+/**
+ * Última orden NO pendiente ligada al teléfono del pagador (la más
+ * recientemente resuelta). Replay honesto de una solicitud por monto cuyo
+ * código ya no está entre las pendientes: el pagador que reenvía la
+ * solicitud tras un pago resuelto recibe el estado REAL de su orden.
+ */
+export async function findLatestResolvedPaymentOrderByPayerPhone(
+  phone: string
+): Promise<PaymentOrder | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.payer_phone = $1 AND o.status <> 'pending'
+      ORDER BY o.resolved_at DESC NULLS LAST LIMIT 1`,
+    [phone]
+  )
+  return result.rows[0] ? mapRow(result.rows[0]) : null
+}
+
+/**
  * TODAS las órdenes pendientes, del más viejo al más nuevo, con tope de
  * seguridad. Es la base del descubrimiento por comprobante: el código
  * IMPRESO en el comprobante se busca entre estas órdenes para identificar

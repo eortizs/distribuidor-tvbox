@@ -389,7 +389,8 @@ async function handlePaymentOrderIncomingMessage(input: {
   const mediaInfo = extractMediaInfo(input.m.message)
   const messageText = (text || caption).trim()
 
-  // Solo texto (la liga wa.me llega con el texto prellenado del código).
+  // Solo texto (la liga wa.me llega con la SOLICITUD prellenada del monto;
+  // el código puede venir pegado o reenviado a mano).
   if (!mediaInfo) {
     if (messageText.length === 0) return null
     if (!allowInbound(input.phone)) {
@@ -697,7 +698,8 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
       return
     }
     // Rama de ÓRDENES DE PAGO: el pagador externo de /modulos/orden-de-pago
-    // (cualquier persona) paga aquí con el código de su liga wa.me. Null =
+    // (cualquier persona) solicita la orden aquí con el monto de su liga
+    // wa.me y paga con el código que el agente le entrega. Null =
     // el turno no apunta a ninguna orden → cortesía de número desconocido.
     const paymentHandled = await handlePaymentOrderIncomingMessage({
       jid,
@@ -724,15 +726,21 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
           media: paymentHandled.mediaMime,
         },
       })
-      if (paymentHandled.text.length > 0) {
-        await sendTextToJid(jid, paymentHandled.text).catch(
+      // La respuesta puede viajar en VARIOS mensajes (orden de pago: el
+      // CÓDIGO solo primero, luego la explicación) — siempre en orden.
+      const respuestas = [
+        paymentHandled.text,
+        ...(paymentHandled.additionalTexts ?? []),
+      ].filter((texto) => texto.length > 0)
+      for (const respuesta of respuestas) {
+        await sendTextToJid(jid, respuesta).catch(
           (error: unknown) => log("payment_order_reply", error)
         )
         logWhatsAppMessageDetached({
           direction: "out",
           userId: null,
           phone,
-          text: paymentHandled.text,
+          text: respuesta,
           meta: {
             jid,
             source: "payment_order",
@@ -797,6 +805,59 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
 
   const socket = current.socket
   if (!socket) return
+
+  /*
+   * La SOLICITUD de orden de pago («Solicito una orden de pago por $X», el
+   * texto prellenado de la liga wa.me) también llega de un USUARIO
+   * registrado — el cobrador probando su propia liga, o un pagador con
+   * cuenta en el panel: interceptarla AQUÍ para que el agente LLM no
+   * responda «no puedo generar órdenes de pago». Solo texto; los ADJUNTOS
+   * de un usuario siguen su curso normal del asistente (con pendientes
+   * vivas, secuestrar fotos secuestraría uploads ajenos al módulo).
+   */
+  if (!mediaInfo && text) {
+    const paymentHandled = await maybeHandlePaymentOrderText({
+      phone,
+      text: text.trim(),
+    }).catch((error: unknown) => {
+      log("payment_order_user_branch", error)
+      return null
+    })
+    if (paymentHandled !== null) {
+      logWhatsAppMessageDetached({
+        direction: "in",
+        userId: user.id,
+        phone,
+        text: paymentHandled.inboundText || text,
+        meta: {
+          jid,
+          rama: "usuario_orden_pago",
+          order: paymentHandled.orderId,
+        },
+      })
+      const respuestas = [
+        paymentHandled.text,
+        ...(paymentHandled.additionalTexts ?? []),
+      ].filter((respuesta) => respuesta.length > 0)
+      for (const respuesta of respuestas) {
+        await sendTextToJid(jid, respuesta).catch(
+          (error: unknown) => log("payment_order_reply", error)
+        )
+        logWhatsAppMessageDetached({
+          direction: "out",
+          userId: user.id,
+          phone,
+          text: respuesta,
+          meta: {
+            jid,
+            source: "payment_order",
+            order: paymentHandled.orderId,
+          },
+        })
+      }
+      return
+    }
+  }
 
   /*
    * Adjunto del turno: bajar el archivo y guardarlo en el almacenamiento del
