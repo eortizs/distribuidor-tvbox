@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import type { AuthUser } from "@/server/auth/types"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import {
-  isFlujoClientInScope,
+  flujoClientScopeVerdict,
   resolveClientScope,
 } from "@/server/flujotv/scope"
 import { getFlujoClient } from "@/server/flujotv/service"
@@ -194,10 +194,28 @@ export async function handleRenovarCommand(input: {
     }
   }
   if (scope.kind === "distributor") {
-    const allowed = await isFlujoClientInScope(client, scope).catch(() => false)
-    if (!allowed) {
+    const verdict = await flujoClientScopeVerdict(client, scope).catch(
+      () => "unknown" as const
+    )
+    if (verdict === "out") {
       return {
         text: `El cliente **${userName}** no pertenece a tu distribuidor: no puedes renovarlo desde tu cuenta.`,
+      }
+    }
+    if (verdict === "unknown") {
+      // La atribución del panel no llegó (caché de /users/validity sin la
+      // fila o su llave de distribuidor): rechazo TRANSITORIO, nunca el
+      // definitivo de «no es tuyo».
+      console.info(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          event: "asistente.renovar_scope_unknown",
+          actor: `user:${input.user.username}`,
+          user_name: userName,
+        })
+      )
+      return {
+        text: `No pude confirmar que el cliente **${userName}** pertenezca a tu distribuidor: el panel de FlujoTV no reportó su atribución en este momento. Inténtalo de nuevo en unos minutos; si el problema persiste, avisa al administrador.`,
       }
     }
   }
@@ -359,8 +377,13 @@ async function receiptGate(input: {
     const target = await getFlujoClient(input.userName, {
       timeoutMs: FLUJO_PURCHASE_TIMEOUT_MS,
     })
-    const allowed = target ? await isFlujoClientInScope(target, scope) : false
-    if (!allowed) {
+    const verdict = target
+      ? await flujoClientScopeVerdict(target, scope)
+      : "out"
+    if (verdict === "unknown") {
+      return `No pude confirmar que el cliente **${input.userName}** pertenezca a tu distribuidor: el panel de FlujoTV no reportó su atribución en este momento y NO se creó ninguna orden (el código sigue activo). Inténtalo de nuevo en unos minutos.`
+    }
+    if (verdict === "out") {
       return `El cliente **${input.userName}** ya no está en tu alcance: no se creó ninguna orden y el código sigue activo. Contacta al administrador.`
     }
   }

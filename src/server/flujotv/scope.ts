@@ -2,6 +2,7 @@ import type { FlujoClient } from "@/lib/flujotv"
 
 import { getAccountDistribuidorName } from "@/server/auth/accounts"
 import type { AuthUser } from "@/server/auth/types"
+import { AppError } from "@/server/umejson/types"
 
 import { getFlujoUserResellers } from "./service"
 
@@ -81,19 +82,89 @@ export async function scopeFlujoClients<T extends FlujoClient>(
 }
 
 /**
+ * Veredicto de la guarda de alcance para un cliente concreto, en tres
+ * estados:
+ *
+ * - `in`: en alcance (llave cruda o mapa de `/users/validity` lo atribuyen
+ *   al distribuidor del scope).
+ * - `out`: atribuido a OTRO distribuidor con certeza.
+ * - `unknown`: la atribución NO llegó — fila ausente o sin llave de
+ *   distribuidor en `/users/validity`, o lectura del mapa caída
+ *   (`getFlujoUserResellers` degrada a `{}` sin avisar). El panel sirve
+ *   `/users/validity` desde su caché y una instantánea puede venir sin la
+ *   atribución de un cliente que SÍ pertenece al distribuidor (caso real
+ *   16/nov: `/tv3fmendoza` por WhatsApp se rechazó con «no pertenece a tu
+ *   distribuidor» dentro de una ventana así y minutos después el mapa ya
+ *   traía `distributor: david`).
+ *
+ * La guarda de COMPRAS distingue `out` de `unknown` para no decir «no es
+ * tuyo» cuando la verdad es «no lo sé ahora»: el rechazo definitivo cierra
+ * la compra y el desconocido pide reintento (503 / mensaje transitorio).
+ */
+export type FlujoScopeVerdict = "in" | "out" | "unknown"
+
+export async function flujoClientScopeVerdict(
+  client: FlujoClient,
+  scope: ClientScope
+): Promise<FlujoScopeVerdict> {
+  if (scope.kind === "all") return "in"
+  if (scope.kind === "none") return "out"
+  const needle = scope.name.toLowerCase()
+  const fromRaw = rawDistributorValue(client.raw)
+  if (fromRaw) return fromRaw.toLowerCase() === needle ? "in" : "out"
+  const userResellers = await getFlujoUserResellers()
+  const attributed =
+    userResellers[client.userName.trim().toLowerCase()]?.trim().toLowerCase() ??
+    ""
+  if (!attributed) return "unknown"
+  return attributed === needle ? "in" : "out"
+}
+
+/**
+ * Guarda de compra FUENTE ÚNICA: resuelve el veredicto del cliente objetivo
+ * y lanza los AppError canónicos de la política de compras — 503
+ * `scope_unknown` TRANSITORIO cuando la atribución del panel no llegó
+ * (reintento, nunca el definitivo «no es tuyo») y 403 `forbidden` para el
+ * fuera-de-alcance certero. Las rutas HTTP convierten el AppError con su
+ * catch existente (`errorResponse` / `flujoErrorResponse`) en la misma
+ * respuesta que devolvían los bloques inline que reemplaza. Los flujos de
+ * chat NO la usan: su rechazo va redactado como mensaje, no como error.
+ */
+export async function assertFlujoPurchaseScope(input: {
+  userName: string
+  target: FlujoClient | null
+  scope: ClientScope
+}): Promise<void> {
+  const verdict = input.target
+    ? await flujoClientScopeVerdict(input.target, input.scope)
+    : "out"
+  if (verdict === "unknown") {
+    throw new AppError(
+      503,
+      "scope_unknown",
+      `No pude confirmar que el cliente '${input.userName}' pertenezca a tu distribuidor: el panel de FlujoTV no reportó su atribución. Inténtalo de nuevo en unos minutos.`
+    )
+  }
+  if (verdict === "out") {
+    throw new AppError(
+      403,
+      "forbidden",
+      `El cliente '${input.userName}' no pertenece a tu distribuidor.`
+    )
+  }
+}
+
+/**
  * Indica si un cliente concreto entra en el alcance (ruta de lectura
- * individual y guardia de renovaciones). Con llave cruda resuelve en local;
- * si falta, consulta el mapa de `/users/validity`.
+ * individual y superficies cuyo fallo seguro es OCULTAR: ver `unknown` de
+ * {@link flujoClientScopeVerdict}). Con llave cruda resuelve en local; si
+ * falta, consulta el mapa de `/users/validity`.
  */
 export async function isFlujoClientInScope(
   client: FlujoClient,
   scope: ClientScope
 ): Promise<boolean> {
-  if (scope.kind === "all") return true
-  if (scope.kind === "none") return false
-  const needsMap = rawDistributorValue(client.raw) === ""
-  const userResellers = needsMap ? await getFlujoUserResellers() : {}
-  return clientDistributor(client, userResellers) === scope.name.toLowerCase()
+  return (await flujoClientScopeVerdict(client, scope)) === "in"
 }
 
 /** Resellers visibles: solo la fila del distribuidor ligado (o todas). */

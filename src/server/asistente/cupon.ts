@@ -2,7 +2,7 @@ import type { AuthUser } from "@/server/auth/types"
 import { pool } from "@/server/db"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import {
-  isFlujoClientInScope,
+  flujoClientScopeVerdict,
   resolveClientScope,
 } from "@/server/flujotv/scope"
 import { getFlujoClient } from "@/server/flujotv/service"
@@ -168,10 +168,19 @@ export async function handleRenovarCuponCommand(input: {
     }
   }
   if (scope.kind === "distributor") {
-    const allowed = await isFlujoClientInScope(client, scope).catch(() => false)
-    if (!allowed) {
+    const verdict = await flujoClientScopeVerdict(client, scope).catch(
+      () => "unknown" as const
+    )
+    if (verdict === "out") {
       return {
         text: `El cliente **${userName}** no pertenece a tu distribuidor: no puedes renovarlo desde tu cuenta.`,
+      }
+    }
+    if (verdict === "unknown") {
+      // Atribución del panel no llegó: rechazo transitorio con reintento,
+      // nunca el definitivo de «no es tuyo» (caché de /users/validity).
+      return {
+        text: `No pude confirmar que el cliente **${userName}** pertenezca a tu distribuidor: el panel de FlujoTV no reportó su atribución en este momento. Inténtalo de nuevo en unos minutos; si el problema persiste, avisa al administrador.`,
       }
     }
   }

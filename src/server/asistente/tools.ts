@@ -22,7 +22,7 @@ import {
 } from "@/server/flujotv/service"
 import {
   clientDistributor,
-  isFlujoClientInScope,
+  assertFlujoPurchaseScope,
   resolveClientScope,
   scopeFlujoClients,
 } from "@/server/flujotv/scope"
@@ -851,14 +851,7 @@ async function assertRenewalTarget(
     const target = await getFlujoClient(userName, {
       timeoutMs: Math.min(FLUJO_PURCHASE_TIMEOUT_MS, TOOL_FLUJO_TIMEOUT_MS),
     })
-    const allowed = target ? await isFlujoClientInScope(target, scope) : false
-    if (!allowed) {
-      throw new AppError(
-        403,
-        "forbidden",
-        `El cliente '${userName}' no pertenece a tu distribuidor.`
-      )
-    }
+    await assertFlujoPurchaseScope({ userName, target, scope })
   }
 }
 

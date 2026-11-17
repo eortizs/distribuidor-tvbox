@@ -2,7 +2,7 @@ import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { getFlujoClient } from "@/server/flujotv/service"
 import { FLUJO_PURCHASE_TIMEOUT_MS } from "@/server/flujotv/client"
 import {
-  isFlujoClientInScope,
+  assertFlujoPurchaseScope,
   resolveClientScope,
 } from "@/server/flujotv/scope"
 import { flujoErrorResponse } from "@/server/flujotv/http"
@@ -180,16 +180,7 @@ export async function POST(request: Request) {
       const target = await getFlujoClient(userName, {
         timeoutMs: FLUJO_PURCHASE_TIMEOUT_MS,
       })
-      const allowed = target
-        ? await isFlujoClientInScope(target, scope)
-        : false
-      if (!allowed) {
-        throw new AppError(
-          403,
-          "forbidden",
-          `El cliente '${userName}' no pertenece a tu distribuidor.`
-        )
-      }
+      await assertFlujoPurchaseScope({ userName, target, scope })
     }
 
     const file = formData.get("file")
