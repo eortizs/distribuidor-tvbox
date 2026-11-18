@@ -12,6 +12,7 @@ import {
   QrCodeIcon,
   ReceiptTextIcon,
   ShoppingBasketIcon,
+  StickyNoteIcon,
   TimerIcon,
   UserCogIcon,
   type LucideIcon,
@@ -104,6 +105,13 @@ export const MODULOS: Modulo[] = [
       "Dicta o escribe tu lista con IA: productos por categoría, cantidades y casillas de comprado.",
     href: "/modulos/lista-de-compras",
     icon: ShoppingBasketIcon,
+  },
+  {
+    title: "Notas",
+    description:
+      "Notas rápidas con título, dictado por voz, búsqueda y notas fijadas, guardadas en tu cuenta.",
+    href: "/modulos/notas",
+    icon: StickyNoteIcon,
   },
   {
     title: "Paquetes FlujoTV",
