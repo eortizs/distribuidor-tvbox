@@ -25,7 +25,7 @@ export async function register(): Promise<void> {
   )
   startRenewalRetryScheduler()
   const { startPaymentOrderDepositVerifier } = await import(
-    "@/server/orden-pago/deposit-verifier"
+    "@/server/ligas-pago/deposit-verifier"
   )
   startPaymentOrderDepositVerifier()
   const { startAlertasScheduler } = await import(

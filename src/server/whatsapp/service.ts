@@ -85,7 +85,7 @@ export const WHATSAPP_KIND_CLIENT_RENEWAL = "client_renewal"
 
 /**
  * Kind de los avisos DIRECTOS al PAGADOR de una orden de pago
- * (/modulos/orden-de-pago): cualquier persona sin cuenta en el panel, igual
+ * (/modulos/ligas-de-pago): cualquier persona sin cuenta en el panel, igual
  * que los clientes; el dispatcher omite el link al panel para este kind.
  */
 export const WHATSAPP_KIND_PAYMENT_ORDER = "payment_order"

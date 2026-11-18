@@ -30,11 +30,12 @@ import {
  * Canal WhatsApp del PAGADOR de una orden de pago: cualquier persona sin
  * cuenta en el panel. El socket (rama de números no registrados ni clientes)
  * llama a estos handlers; ambos devuelven null cuando el turno NO es de una
- * orden de pago y el flujo debe seguir (cortesía de número desconocido).
+ *     orden de pago y el flujo debe seguir (cortesía de número desconocido).
  *
- *   - Texto: la liga wa.me llega con la SOLICITUD prellenada («Solicito una
- *     orden de pago por $X», sin código — la orden se descubre por el
- *     importe que definió el cobrador) o con un código pegado a mano. La
+ *   - Texto: la liga corta spei.link llega con la SOLICITUD prellenada
+ *     («Solicito una liga de pago por $X», sin código — la orden se descubre
+ *     por el importe que definió el cobrador; la forma antigua «orden de
+ *     pago» sigue aceptándose) o con un código pegado a mano. La
  *     respuesta va en TRES mensajes de golpe: las INSTRUCCIONES del pago
  *     (con importe/banco/titular), el CÓDIGO de concepto SOLO y la CLABE
  *     SOLO — código y CLABE sin nada más para copiar/pegar fácil.
@@ -97,7 +98,7 @@ function sha256Of(bytes: Uint8Array): string {
  * Primeros tokens del mensaje con FORMA de código de concepto (4 caracteres
  * del alfabeto sin 0/O/1/I), sin duplicados. El código llega pegado a mano
  * o reenviado (la liga prellenada actual viaja SIN código: «Solicito una
- * orden de pago por $X»); viaja como una palabra más y aquí se aísla.
+ * liga de pago por $X»); viaja como una palabra más y aquí se aísla.
  * Un token solo cuenta si además matchea una orden real (chequeo en BD),
  * así que un «chat» o «test» suelto nunca secuestra el turno.
  */
@@ -149,22 +150,26 @@ function respuestaConCodigo(order: PaymentOrder, inboundText: string): PaymentOr
 /** Guía cuando la orden por monto ya tiene pagador de OTRO número. */
 function textoPagadorAjeno(): string {
   return [
-    "Esa orden de pago ya tiene un pagador asignado.",
+    "Esa liga de pago ya tiene un pagador asignado.",
     "",
     "Si es tuya, solicita a quien te la emitió el CÓDIGO de pago (4 letras) y envíamelo como mensaje.",
   ].join("\n")
 }
 
 /**
- * Monto de una SOLICITUD de orden de pago («Solicito una orden de pago por
- * $500» — el texto prellenado de la liga wa.me, a veces editado a mano).
- * Acepta $500 / 500 / 1,500.50 / 500,50 y «MXN» pegado al final. Null = el
- * texto no tiene forma de solicitud o el monto no se entiende.
+ * Monto de una SOLICITUD de liga de pago («Solicito una liga de pago por
+ * $500» — el texto prellenado de la liga corta, a veces editado a mano).
+ * Acepta también la forma antigua «orden de pago» (ligas wa.me previas al
+ * dominio corto siguen circulando). Acepta $500 / 500 / 1,500.50 / 500,50 y
+ * «MXN» pegado al final. Null = el texto no tiene forma de solicitud o el
+ * monto no se entiende.
  */
 function parsePaymentOrderRequestAmount(text: string): number | null {
   const match = text
     .trim()
-    .match(/solicito\s+(?:una\s+)?orden\s+de\s+pago\s+por\s+\$?\s*(\d[\d.,]*)/i)
+    .match(
+      /solicito\s+(?:una\s+)?(?:orden|liga)\s+de\s+pago\s+por\s+\$?\s*(\d[\d.,]*)/i
+    )
   if (!match) return null
   const raw = match[1]
   // «1,500.50» (miles con coma, decimal con punto) vs «500,50» (coma decimal).
@@ -183,18 +188,18 @@ function textoEstadoResuelto(order: PaymentOrder): string {
       return textoVerificandoDeposito(order)
     case "paid":
       return [
-        `La orden de pago *${order.code}* ya está pagada`,
+        `La liga de pago *${order.code}* ya está pagada`,
         order.resolvedAt ? `(confirmada el ${new Date(order.resolvedAt).toLocaleString("es-MX")})` : "",
         ". No es necesario volver a enviar el comprobante.",
       ]
         .filter((line) => line.length > 0)
         .join(" ")
     case "rejected":
-      return `La orden de pago *${order.code}* fue rechazada. Si tu pago fue real, contacta a quien te emitió la orden para revisar el caso.`
+      return `La liga de pago *${order.code}* fue rechazada. Si tu pago fue real, contacta a quien te emitió la orden para revisar el caso.`
     case "cancelled":
-      return `La orden de pago *${order.code}* fue cancelada y el código ya no está activo. Pide una liga de pago nueva.`
+      return `La liga de pago *${order.code}* fue cancelada y el código ya no está activo. Pide una liga de pago nueva.`
     default:
-      return `La orden de pago *${order.code}* ya no está activa (estado: ${order.status}).`
+      return `La liga de pago *${order.code}* ya no está activa (estado: ${order.status}).`
   }
 }
 
@@ -210,7 +215,7 @@ function textoVerificandoDeposito(order: PaymentOrder): string {
 /** Guía cuando la solicitud no resolvió una orden concreta. */
 function textoSinOrdenPorMonto(monto: number): string {
   return [
-    `No encontré una orden de pago pendiente por ${money(monto)}.`,
+    `No encontré una liga de pago pendiente por ${money(monto)}.`,
     "",
     "Verifica el importe con quien te emitió la orden; si tienes el CÓDIGO de pago (4 letras), envíamelo como mensaje.",
   ].join("\n")
@@ -219,7 +224,7 @@ function textoSinOrdenPorMonto(monto: number): string {
 /** Guía cuando hay AMBIGÜEDAD de órdenes pendientes del mismo monto. */
 function textoMontoAmbiguo(monto: number): string {
   return [
-    `Hay varias órdenes de pago pendientes por ${money(monto)}.`,
+    `Hay varias ligas de pago pendientes por ${money(monto)}.`,
     "",
     "Pide a quien te emitió la orden el CÓDIGO de pago (4 letras) y envíamelo como mensaje para identificar la tuya.",
   ].join("\n")
@@ -232,14 +237,14 @@ function textoMontoAmbiguo(monto: number): string {
  *      vieja, código reenviado o pegado a mano) — aquí SÍ se binda el
  *      teléfono: saber el código ES la identidad del pagador,
  *   2. replay honesto del código de una orden YA resuelta,
- *   3. SOLICITUD por monto («Solicito una orden de pago por $X», el texto
+ *   3. SOLICITUD por monto («Solicito una liga de pago por $X», el texto
  *      prellenado de la liga): UNA pendiente por ese importe y sin pagador
  *      de otro número → respuesta SIN ligar teléfono (el monto no prueba
  *      identidad); varias → se pide el código; ya ligada a otro número →
  *      guía sin revelar código ni datos; ninguna → replay por teléfono
  *      (orden resuelta) o guía honesta.
  *
- * Null = no es un turno de orden de pago (el socket sigue con la cortesía).
+ * Null = no es un turno de liga de pago (el socket sigue con la cortesía).
  */
 export async function maybeHandlePaymentOrderText(input: {
   phone: string
@@ -466,10 +471,10 @@ function notifyCreatorManualReview(
   notifyPaymentOrderCreator(
     order,
     sha256,
-    "Comprobante de orden de pago por revisar",
+    "Comprobante de liga de pago por revisar",
     `El pagador (WhatsApp ${maskPhone(phone)}) envió un comprobante para tu orden ${order.code} (${money(
       order.amountMxn
-    )}). Revísala en Módulos → Orden de pago para aprobarla o rechazarla.`
+    )}). Revísala en Módulos → Ligas de pago para aprobarla o rechazarla.`
   )
 }
 
@@ -719,7 +724,7 @@ export async function maybeHandlePaymentOrderReceipt(input: {
       candidate = delPagador[0]
     } else if (delPagador.length > 1) {
       return {
-        text: "Tienes varias órdenes de pago activas con este número. Envía el comprobante junto con el CÓDIGO de la que pagaste como mensaje para identificarla.",
+        text: "Tienes varias ligas de pago activas con este número. Envía el comprobante junto con el CÓDIGO de la que pagaste como mensaje para identificarla.",
         orderId: null,
         inboundText: input.text,
         mediaMime: input.media.mimeType,

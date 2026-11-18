@@ -41,7 +41,7 @@ import {
   maybeHandlePaymentOrderReceipt,
   maybeHandlePaymentOrderText,
   type PaymentOrderTurnResult,
-} from "@/server/orden-pago/whatsapp"
+} from "@/server/ligas-pago/whatsapp"
 
 import {
   findUserByWhatsAppPhone,
@@ -374,8 +374,8 @@ const SILENT_PAYMENT_ORDER_RESULT = (inboundText: string, mediaMime: string | nu
 
 /**
  * Rama de ÓRDENES DE PAGO (números que no son usuarios ni clientes): el
- * pagador externo de /modulos/orden-de-pago paga aquí con el código de
- * concepto de su liga wa.me y manda el comprobante por el mismo chat.
+ * pagador externo de /modulos/ligas-de-pago paga aquí con el código de
+ * concepto de su liga corta y manda el comprobante por el mismo chat.
  * Null = el turno no apunta a ninguna orden de pago → cortesía de número
  * desconocido.
  */
@@ -697,9 +697,9 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
       }
       return
     }
-    // Rama de ÓRDENES DE PAGO: el pagador externo de /modulos/orden-de-pago
+    // Rama de ÓRDENES DE PAGO: el pagador externo de /modulos/ligas-de-pago
     // (cualquier persona) solicita la orden aquí con el monto de su liga
-    // wa.me y paga con el código que el agente le entrega. Null =
+    // corta y paga con el código que el agente le entrega. Null =
     // el turno no apunta a ninguna orden → cortesía de número desconocido.
     const paymentHandled = await handlePaymentOrderIncomingMessage({
       jid,

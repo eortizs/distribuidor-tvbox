@@ -32,7 +32,7 @@ export type NotificationKind =
   | "reminder"
   /** Aviso al distribuidor sobre una renovación de cliente por WhatsApp. */
   | "client_renewal_notice"
-  /** Aviso del módulo Orden de pago (cobro recibido, comprobante por revisar). */
+  /** Aviso del módulo Ligas de pago (cobro recibido, comprobante por revisar). */
   | "payment_order"
 
 export interface NotificationRow {
@@ -503,7 +503,7 @@ export interface PaymentOrderNotificationInput {
 }
 
 /**
- * Aviso al CREADOR de una orden de pago (/modulos/orden-de-pago): cobro
+ * Aviso al CREADOR de una orden de pago (/modulos/ligas-de-pago): cobro
  * recibido (aprobación automática o manual), comprobante que no pasó la
  * validación automática o resolución hecha por un admin. La campana espeja a
  * WhatsApp vía `insertNotification`, igual que el resto. Mejor esfuerzo:

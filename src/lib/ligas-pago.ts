@@ -1,8 +1,8 @@
-import type { PaymentOrder } from "@/server/orden-pago/repository"
+import type { PaymentOrder } from "@/server/ligas-pago/repository"
 
 /*
  * Tipo compartido del listado de órdenes de pago para la UI
- * (/modulos/orden-de-pago) y su serializador: fechas ISO y solo campos que
+ * (/modulos/ligas-de-pago) y su serializador: fechas ISO y solo campos que
  * viajan al cliente. Puro (sin server-only): lo importan la vista cliente,
  * la página RSC y las server actions.
  */

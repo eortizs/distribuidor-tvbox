@@ -1,7 +1,7 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { speiReportConfigured } from "@/server/mercadopago/spei"
-import { paymentOrderMoney } from "@/lib/orden-pago"
+import { paymentOrderMoney } from "@/lib/ligas-pago"
 
 import { tryConfirmOrderDeposit } from "./deposit-check"
 import { notifyDepositConfirmed } from "./review"
@@ -62,10 +62,10 @@ function notifyEscalated(order: PaymentOrder): void {
   createPaymentOrderNotification({
     userId: order.creatorUserId,
     orderId: order.id,
-    title: "Orden de pago sin depósito",
+    title: "Liga de pago sin depósito",
     body: `Tu orden ${order.code} (${paymentOrderMoney(
       order.amountMxn
-    )}) tiene comprobante válido pero el depósito no aparece acreditado en tu cuenta tras 24 h de verificación. Resuélvela manualmente en Módulos → Orden de pago (Marcar pagada o Rechazar).`,
+    )}) tiene comprobante válido pero el depósito no aparece acreditado en tu cuenta tras 24 h de verificación. Resuélvela manualmente en Módulos → Ligas de pago (Marcar pagada o Rechazar).`,
   })
   if (order.payerPhone) {
     void enqueueWhatsAppForPhone({

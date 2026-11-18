@@ -6,7 +6,7 @@ import QRCode from "qrcode"
 import { requireUser } from "@/server/auth/guards"
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
-import { resolveCreatorBankData } from "@/server/orden-pago/bank"
+import { resolveCreatorBankData } from "@/server/ligas-pago/bank"
 import {
   cancelPaymentOrder,
   checkRateLimitPaymentOrderCreation,
@@ -15,13 +15,13 @@ import {
   PAYMENT_ORDER_MAX_MXN,
   PAYMENT_ORDER_MIN_MXN,
   resolvePaymentOrder,
-} from "@/server/orden-pago/repository"
-import { buildPaymentOrderWaLink } from "@/server/orden-pago/wa-link"
+} from "@/server/ligas-pago/repository"
+import { buildPaymentOrderShortLink, buildPaymentOrderWaLink } from "@/server/ligas-pago/wa-link"
 
-import type { PaymentOrder } from "@/server/orden-pago/repository"
+import type { PaymentOrder } from "@/server/ligas-pago/repository"
 
 /*
- * Acciones del módulo Orden de pago (/modulos/orden-de-pago). Contrato de
+ * Acciones del módulo Ligas de pago (/modulos/ligas-de-pago). Contrato de
  * estado del repo (patrón profile.ts): NUNCA lanzan hacia el cliente —
  * devuelven `{ error }` con el mensaje listo para pintar junto al campo.
  */
@@ -32,6 +32,9 @@ export interface CreatedPaymentOrder {
   amountMxn: number
   note: string | null
   bank: { bank: string; account: string; holder: string }
+  /** Liga corta spei.link/<código>: lo que se comparte y codifica el QR. */
+  shortUrl: string
+  /** Liga wa.me con la solicitud prellenada: destino del shortener. */
   waUrl: string
   qrDataUrl: string
 }
@@ -42,8 +45,9 @@ export interface CreatePaymentOrderResult {
 }
 
 /**
- * Crea la orden 'pending' y devuelve la liga wa.me + el QR para pintar en el
- * diálogo: el cobrador escanea desde su celular o comparte la liga.
+ * Crea la orden 'pending' y devuelve la liga corta (QR incluido) para
+ * pintar en el diálogo: el cobrador escanea desde su celular o comparte la
+ * liga.
  */
 export async function createPaymentOrderAction(input: {
   amountMxn: number
@@ -93,14 +97,17 @@ export async function createPaymentOrderAction(input: {
       // número del agente la orden no sirve — se revierte y se explica.
       await cancelPaymentOrder({ orderId: created.id, reviewedBy: user.id })
       return {
-        error: "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar la orden de pago.",
+        error: "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar la liga de pago.",
         order: null,
       }
     }
 
-    const qrDataUrl = await QRCode.toDataURL(waUrl, { margin: 1, width: 320 })
+    // El QR codifica la liga CORTA (se identifica con el código de
+    // concepto); el botón de apertura usa wa.me directo (un salto menos).
+    const shortUrl = buildPaymentOrderShortLink(created.code)
+    const qrDataUrl = await QRCode.toDataURL(shortUrl, { margin: 1, width: 320 })
 
-    revalidatePath("/modulos/orden-de-pago")
+    revalidatePath("/modulos/ligas-de-pago")
     return {
       error: null,
       order: {
@@ -109,6 +116,7 @@ export async function createPaymentOrderAction(input: {
         amountMxn: created.amountMxn,
         note: created.note,
         bank: created.bank,
+        shortUrl,
         waUrl,
         qrDataUrl,
       },
@@ -117,7 +125,7 @@ export async function createPaymentOrderAction(input: {
     const message =
       error instanceof Error
         ? error.message
-        : "No se pudo crear la orden de pago."
+        : "No se pudo crear la liga de pago."
     return { error: message, order: null }
   }
 }
@@ -161,12 +169,12 @@ export async function resolvePaymentOrderAction(input: {
   const user = await requireUser()
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
-  if (!order) return { error: "La orden de pago no existe." }
+  if (!order) return { error: "La liga de pago no existe." }
   if (user.role !== "admin" && order.creatorUserId !== user.id) {
-    return { error: "Solo el creador de la orden o un administrador puede resolverla." }
+    return { error: "Solo el creador de la liga o un administrador puede resolverla." }
   }
   if (order.status !== "pending" && order.status !== "verifying") {
-    return { error: "La orden ya está resuelta." }
+    return { error: "La liga ya está resuelta." }
   }
 
   const reason = (input.reason ?? "").trim().slice(0, 300) || null
@@ -185,7 +193,7 @@ export async function resolvePaymentOrderAction(input: {
           rejectionReason: reason,
         }).catch(() => null)
   if (!resolved) {
-    return { error: "Otro usuario acaba de resolver esta orden." }
+    return { error: "Otro usuario acaba de resolver esta liga." }
   }
 
   if (input.decision === "approve") {
@@ -199,7 +207,7 @@ export async function resolvePaymentOrderAction(input: {
         userId: resolved.creatorUserId,
         orderId: resolved.id,
         title: "Cobro recibido",
-        body: `Tu orden de pago ${resolved.code} (${money(resolved.amountMxn)}) fue marcada como pagada por el administrador.`,
+        body: `Tu liga de pago ${resolved.code} (${money(resolved.amountMxn)}) fue marcada como pagada por el administrador.`,
       })
     }
   } else {
@@ -208,21 +216,21 @@ export async function resolvePaymentOrderAction(input: {
       "Pago no confirmado",
       `El comprobante del código ${resolved.code} no fue aceptado${
         reason ? `: ${reason}` : ""
-      }. Contacta a quien te emitió la orden.`
+      }. Contacta a quien te emitió la liga.`
     )
     if (user.id !== resolved.creatorUserId) {
       createPaymentOrderNotification({
         userId: resolved.creatorUserId,
         orderId: resolved.id,
-        title: "Orden de pago rechazada",
-        body: `El administrador rechazó tu orden de pago ${resolved.code} (${money(resolved.amountMxn)})${
+        title: "Liga de pago rechazada",
+        body: `El administrador rechazó tu liga de pago ${resolved.code} (${money(resolved.amountMxn)})${
           reason ? `: ${reason}` : "."
         }`,
       })
     }
   }
 
-  revalidatePath("/modulos/orden-de-pago")
+  revalidatePath("/modulos/ligas-de-pago")
   return { error: null }
 }
 
@@ -237,12 +245,12 @@ export async function cancelPaymentOrderAction(input: {
   const user = await requireUser()
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
-  if (!order) return { error: "La orden de pago no existe." }
+  if (!order) return { error: "La liga de pago no existe." }
   if (user.role !== "admin" && order.creatorUserId !== user.id) {
-    return { error: "Solo el creador de la orden o un administrador puede cancelarla." }
+    return { error: "Solo el creador de la liga o un administrador puede cancelarla." }
   }
   if (order.status !== "pending" && order.status !== "verifying") {
-    return { error: "La orden ya está resuelta." }
+    return { error: "La liga ya está resuelta." }
   }
 
   const cancelled = await cancelPaymentOrder({
@@ -250,9 +258,9 @@ export async function cancelPaymentOrderAction(input: {
     reviewedBy: user.id,
   }).catch(() => null)
   if (!cancelled) {
-    return { error: "Otro usuario acaba de resolver esta orden." }
+    return { error: "Otro usuario acaba de resolver esta liga." }
   }
 
-  revalidatePath("/modulos/orden-de-pago")
+  revalidatePath("/modulos/ligas-de-pago")
   return { error: null }
 }

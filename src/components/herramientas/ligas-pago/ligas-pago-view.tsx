@@ -36,20 +36,21 @@ import {
   paymentOrderMoney,
   paymentOrderStatusLabel,
   type PaymentOrderListItem,
-} from "@/lib/orden-pago"
+} from "@/lib/ligas-pago"
 import {
   cancelPaymentOrderAction,
   createPaymentOrderAction,
   resolvePaymentOrderAction,
   type CreatedPaymentOrder,
-} from "@/app/actions/orden-pago"
-import { OrdenCreadaDialog } from "@/components/herramientas/orden-de-pago/orden-creada-dialog"
+} from "@/app/actions/ligas-pago"
+import { LigaCreadaDialog } from "@/components/herramientas/ligas-pago/liga-creada-dialog"
 
 /*
- * Vista del módulo Orden de pago (/modulos/orden-de-pago): formulario de
- * alta (monto libre + nota opcional) que devuelve liga wa.me + QR para que
- * el pagador pague por SPEI con el código como concepto; listado de órdenes
- * con el resultado del escaneo y las acciones de revisión del creador.
+ * Vista del módulo Ligas de pago (/modulos/ligas-de-pago): formulario de
+ * alta (monto libre + nota opcional) que devuelve la liga corta
+ * spei.link/<código> + QR para que el pagador pague por SPEI con el código
+ * como concepto; listado de órdenes con el resultado del escaneo y las
+ * acciones de revisión del creador.
  */
 
 const dateFormatter = new Intl.DateTimeFormat("es-MX", {
@@ -94,19 +95,19 @@ function scanReasonsOf(order: PaymentOrderListItem): string[] {
   return raw.filter((item): item is string => typeof item === "string")
 }
 
-interface OrdenPagoViewProps {
+interface LigasPagoViewProps {
   initialOrders: PaymentOrderListItem[]
   isAdmin: boolean
   whatsappConfigured: boolean
   scanConfigured: boolean
 }
 
-export function OrdenPagoView({
+export function LigasPagoView({
   initialOrders,
   isAdmin,
   whatsappConfigured,
   scanConfigured,
-}: OrdenPagoViewProps) {
+}: LigasPagoViewProps) {
   const router = useRouter()
   const [orders, setOrders] = useState(initialOrders)
   const [amount, setAmount] = useState("")
@@ -143,7 +144,7 @@ export function OrdenPagoView({
         note,
       })
       if (result.error || !result.order) {
-        setFormError(result.error ?? "No se pudo crear la orden de pago.")
+        setFormError(result.error ?? "No se pudo crear la liga de pago.")
         return
       }
       setCreated(result.order)
@@ -167,8 +168,8 @@ export function OrdenPagoView({
         }
         toast.success(
           decision === "approve"
-            ? `Orden ${order.code} marcada como pagada`
-            : `Orden ${order.code} rechazada`
+            ? `Liga ${order.code} marcada como pagada`
+            : `Liga ${order.code} rechazada`
         )
         setOrders((current) =>
           current.map((item) =>
@@ -195,7 +196,7 @@ export function OrdenPagoView({
           toast.error(result.error)
           return
         }
-        toast.success(`Orden ${order.code} cancelada`)
+        toast.success(`Liga ${order.code} cancelada`)
         setOrders((current) =>
           current.map((item) =>
             item.id === order.id
@@ -215,12 +216,12 @@ export function OrdenPagoView({
         <FramePanel>
           <FrameHeader>
             <FrameTitle className="text-lg font-semibold">
-              Nueva orden de pago
+              Nueva liga de pago
             </FrameTitle>
             <FrameDescription>
-              Define el importe y genera el código de concepto con la liga de
-              WhatsApp y el QR: el pagador paga por SPEI con el código y sube
-              su comprobante en el chat del agente.
+              Define el importe y genera el código de concepto con la liga
+              corta y el QR: el pagador abre la liga, paga por SPEI con el
+              código y sube su comprobante en el chat del agente.
             </FrameDescription>
           </FrameHeader>
           <div className="flex flex-col gap-3">
@@ -286,7 +287,7 @@ export function OrdenPagoView({
         <FramePanel>
           <FrameHeader>
             <FrameTitle className="text-lg font-semibold">
-              {isAdmin ? "Órdenes" : "Mis órdenes"}
+              {isAdmin ? "Ligas" : "Mis ligas"}
               {orders.length > 0 ? (
                 <span className="ml-2 font-normal text-muted-foreground text-sm">
                   {orders.length} · {activeCount} activa
@@ -296,14 +297,14 @@ export function OrdenPagoView({
             </FrameTitle>
             <FrameDescription>
               {isAdmin
-                ? "Todas las órdenes del panel; puedes intervenir en cualquiera."
-                : "Tus órdenes de pago y el resultado de cada comprobante."}
+                ? "Todas las ligas del panel; puedes intervenir en cualquiera."
+                : "Tus ligas de pago y el resultado de cada comprobante."}
             </FrameDescription>
           </FrameHeader>
           {orders.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <p className="text-muted-foreground text-sm">
-                Sin órdenes todavía. Crea la primera con el importe a cobrar.
+                Sin ligas todavía. Crea la primera con el importe a cobrar.
               </p>
             </div>
           ) : (
@@ -499,7 +500,7 @@ export function OrdenPagoView({
                               disabled={busy}
                               onClick={() => setCancelTarget(order)}
                             >
-                              Cancelar orden
+                              Cancelar liga
                             </Button>
                           </div>
                         ) : order.rejectionReason ? (
@@ -517,8 +518,8 @@ export function OrdenPagoView({
         </FramePanel>
       </Frame>
 
-      {/* Diálogo de orden creada: QR + liga (componente compartido) */}
-      <OrdenCreadaDialog order={created} onClose={() => setCreated(null)} />
+      {/* Diálogo de liga creada: QR + liga (componente compartido) */}
+      <LigaCreadaDialog order={created} onClose={() => setCreated(null)} />
 
       {/* Confirmación de aprobación */}
       <AlertDialog
@@ -530,7 +531,7 @@ export function OrdenPagoView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              ¿Marcar la orden {approveTarget?.code} como pagada?
+              ¿Marcar la liga {approveTarget?.code} como pagada?
             </AlertDialogTitle>
             <AlertDialogDescription>
               El pagador recibirá la confirmación por WhatsApp
@@ -565,10 +566,10 @@ export function OrdenPagoView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              ¿Rechazar la orden {rejectTarget?.code}?
+              ¿Rechazar la liga {rejectTarget?.code}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              El pagador recibirá el aviso por WhatsApp con el motivo. La orden
+              El pagador recibirá el aviso por WhatsApp con el motivo. La liga
               queda en el historial y el código se libera.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -609,11 +610,11 @@ export function OrdenPagoView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              ¿Cancelar la orden {cancelTarget?.code}?
+              ¿Cancelar la liga {cancelTarget?.code}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               El código deja de ser válido: si el pagador intenta pagar, el
-              agente le responderá que la orden fue cancelada.
+              agente le responderá que la liga fue cancelada.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -625,7 +626,7 @@ export function OrdenPagoView({
                 setCancelTarget(null)
               }}
             >
-              Cancelar orden
+              Cancelar liga
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

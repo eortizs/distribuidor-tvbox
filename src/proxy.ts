@@ -2,6 +2,8 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { findSessionUser } from "@/server/auth/session-lookup"
 import { pool } from "@/server/db"
+import { isPaymentLinkCode } from "@/server/ligas-pago/wa-link"
+import { shortLinkHost } from "@/server/site-url"
 
 const SESSION_COOKIE = "reseller_session"
 const PUBLIC_PATHS = new Set(["/login", "/register"])
@@ -47,7 +49,43 @@ async function getSession(token: string) {
   }
 }
 
+function requestHost(request: NextRequest): string {
+  const raw =
+    request.headers.get("x-forwarded-host")?.split(",")[0] ??
+    request.headers.get("host") ??
+    ""
+  return raw.split(":")[0]?.trim().toLowerCase() ?? ""
+}
+
 export async function proxy(request: NextRequest) {
+  // Dominio corto de ligas de pago (spei.link): reescritura interna al
+  // handler /short ANTES del gate de sesión — el pagador externo no tiene
+  // cuenta y jamás debe ver /login. La forma del código se valida AQUÍ con
+  // el mismo validador del módulo (fuente única): basura o segmentos
+  // malformados (% truncado, %2F, multi-segmento) responden 404 en el proxy
+  // porque el decodificado de params de Next lanzaría URIError → 500 antes
+  // de llegar al handler.
+  if (requestHost(request) === shortLinkHost()) {
+    const url = request.nextUrl.clone()
+    const trimmed =
+      url.pathname.length > 1 && url.pathname.endsWith("/")
+        ? url.pathname.slice(0, -1)
+        : url.pathname
+    const segment = trimmed.slice(1)
+    if (segment.length > 0 && !isPaymentLinkCode(segment.toUpperCase())) {
+      return new NextResponse("Liga no encontrada", {
+        status: 404,
+        headers: {
+          "content-type": "text/plain; charset=utf-8",
+          "cache-control": "no-store",
+          "x-robots-tag": "noindex",
+        },
+      })
+    }
+    url.pathname = `/short${trimmed === "/" ? "" : trimmed}`
+    return NextResponse.rewrite(url)
+  }
+
   const token = request.cookies.get(SESSION_COOKIE)?.value
   const session = token ? await getSession(token) : null
   const { pathname } = request.nextUrl

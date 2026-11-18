@@ -41,6 +41,13 @@ const nextConfig: NextConfig = {
         destination: "/soporte/lab/:path*",
         permanent: false,
       },
+      {
+        // El módulo pasó de «Orden de pago» a «Ligas de pago»; los enlaces
+        // guardados y los revalidatePath viejos siguen.
+        source: "/modulos/orden-de-pago",
+        destination: "/modulos/ligas-de-pago",
+        permanent: false,
+      },
     ];
   },
   experimental: {

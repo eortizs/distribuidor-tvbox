@@ -46,7 +46,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
-import { OrdenCreadaDialog } from "@/components/herramientas/orden-de-pago/orden-creada-dialog"
+import { LigaCreadaDialog } from "@/components/herramientas/ligas-pago/liga-creada-dialog"
 import {
   calculatorExpression,
   calculatorPreview,
@@ -60,8 +60,8 @@ import {
 import {
   PAYMENT_ORDER_MAX_MXN,
   PAYMENT_ORDER_MIN_MXN,
-} from "@/lib/orden-pago"
-import { createPaymentOrderAction, type CreatedPaymentOrder } from "@/app/actions/orden-pago"
+} from "@/lib/ligas-pago"
+import { createPaymentOrderAction, type CreatedPaymentOrder } from "@/app/actions/ligas-pago"
 
 interface CalculatorKey {
   id: string
@@ -229,7 +229,7 @@ function esCintaEntrada(value: unknown): value is CintaEntrada {
 }
 
 interface CalculadoraProps {
-  /** El módulo Orden de pago está visible para esta cuenta. */
+  /** El módulo Ligas de pago está visible para esta cuenta. */
   puedeCobrar: boolean
   /** Hay número de agente de WhatsApp en el servidor. */
   whatsappConfigured: boolean
@@ -242,7 +242,7 @@ interface CalculadoraProps {
  * cuatro columnas circular, adaptable al espacio disponible entre la
  * cabecera y la barra inferior. Todo el cálculo ocurre en el navegador; el
  * manejo por teclado queda limitado al área de la calculadora. Bajo el
- * teclado, la cinta de historial y el cobro por orden de pago.
+ * teclado, la cinta de historial y el cobro por liga de pago.
  */
 export function Calculadora({
   puedeCobrar,
@@ -333,7 +333,7 @@ export function Calculadora({
     }
   }, [cinta, cintaLista])
 
-  // Cobro: el valor en pantalla se convierte en una orden de pago con
+  // Cobro: el valor en pantalla se convierte en una liga de pago con
   // confirmación previa (monto editable + referencia opcional).
   const [cobroAbierto, setCobroAbierto] = useState(false)
   const [montoTexto, setMontoTexto] = useState("")
@@ -355,7 +355,7 @@ export function Calculadora({
       ? moneyLabel(montoEditado)
       : moneyLabel(valorPantalla)
   const cobrarBloqueo = !whatsappConfigured
-    ? "El canal de WhatsApp no está configurado en el servidor: no se pueden crear órdenes de pago."
+    ? "El canal de WhatsApp no está configurado en el servidor: no se pueden crear ligas de pago."
     : !bankConfigured
       ? "Completa tus datos bancarios en Perfil → Datos bancarios para recibir tus cobros."
       : null
@@ -387,7 +387,7 @@ export function Calculadora({
         note: referencia,
       })
       if (result.error || !result.order) {
-        setCobroError(result.error ?? "No se pudo crear la orden de pago.")
+        setCobroError(result.error ?? "No se pudo crear la liga de pago.")
         return
       }
       setCobroAbierto(false)
@@ -593,7 +593,7 @@ export function Calculadora({
         <DialogHeader>
           <DialogTitle>Cobrar {cobroTitulo}</DialogTitle>
           <DialogDescription>
-            Se genera una orden de pago con código de concepto: tu cliente
+            Se genera una liga de pago con código de concepto: tu cliente
             paga por SPEI y te llega la confirmación del cobro.
           </DialogDescription>
         </DialogHeader>
@@ -637,15 +637,15 @@ export function Calculadora({
               Volver
             </Button>
             <Button type="submit" size="lg" disabled={creando}>
-              {creando ? "Creando…" : "Crear cobro"}
+              {creando ? "Creando…" : "Crear liga de pago"}
             </Button>
           </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
 
-    {/* QR y liga de la orden creada (componente compartido con Orden de pago) */}
-    <OrdenCreadaDialog order={creada} onClose={() => setCreada(null)} />
+    {/* QR y liga de la liga de pago creada (componente compartido con Ligas de pago) */}
+    <LigaCreadaDialog order={creada} onClose={() => setCreada(null)} />
 
     {/* Confirmación de limpiar la cinta */}
     <AlertDialog

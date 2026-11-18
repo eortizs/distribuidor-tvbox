@@ -4,7 +4,7 @@ import { pool } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 
 /*
- * Órdenes de pago por WhatsApp (/modulos/orden-de-pago): cobros de MONTO
+ * Órdenes de pago por WhatsApp (/modulos/ligas-de-pago): cobros de MONTO
  * LIBRE hacia un pagador EXTERNO (cualquier persona, sin cuenta en el
  * panel). El creador (admin o distribuidor) emite la orden; el pagador
  * recibe una liga wa.me al agente con el código de concepto prellenado,
@@ -79,7 +79,7 @@ export interface PaymentOrder {
 }
 
 /** Límites del monto libre (CHECK de la tabla como respaldo duro). */
-export { PAYMENT_ORDER_MAX_MXN, PAYMENT_ORDER_MIN_MXN } from "@/lib/orden-pago"
+export { PAYMENT_ORDER_MAX_MXN, PAYMENT_ORDER_MIN_MXN } from "@/lib/ligas-pago"
 
 /**
  * Tope de órdenes ACTIVAS simultáneas por creador (pending + verifying): un
@@ -234,7 +234,7 @@ export async function createPaymentOrder(input: {
     throw new AppError(
       422,
       "payment_order_limit",
-      `Tienes ${MAX_PENDING_PAYMENT_ORDERS} órdenes de pago pendientes. Resuelve o cancela alguna antes de crear otra.`
+      `Tienes ${MAX_PENDING_PAYMENT_ORDERS} ligas de pago pendientes. Resuelve o cancela alguna antes de crear otra.`
     )
   }
 
@@ -260,7 +260,7 @@ export async function createPaymentOrder(input: {
       )
       const created = await getPaymentOrder(String(result.rows[0].id))
       if (!created) {
-        throw new Error("La orden de pago no se pudo leer tras crearse.")
+        throw new Error("La liga de pago no se pudo leer tras crearse.")
       }
       return created
     } catch (error) {
