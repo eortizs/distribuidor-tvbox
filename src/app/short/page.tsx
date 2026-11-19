@@ -110,6 +110,27 @@ const TRUST_POINTS = [
   },
 ]
 
+const CAROUSEL_SLIDES = [
+  {
+    src: "/carrusel/abarrotes.webp",
+    alt: "Cajera cobrando en una tienda de abarrotes con un cartel que dice «Se aceptan transferencias con WhatsApp, usamos SPEI Link»",
+    title: "Abarrotes y tienditas",
+    benefit: "Cobra directo en tu mostrador",
+  },
+  {
+    src: "/carrusel/taller.webp",
+    alt: "Mecánico sonriente mostrando en su celular una liga de pago SPEI Link con código QR por $2,300.00 MXN dentro de su taller",
+    title: "Talleres y servicios",
+    benefit: "Liga con QR lista para compartir",
+  },
+  {
+    src: "/carrusel/artesanias.webp",
+    alt: "Artesana sonriente en su tienda de artesanías mexicanas con un cartel que dice «Se aceptan transferencias con WhatsApp»",
+    title: "Artesanías y más",
+    benefit: "Acepta transferencias sin comisión",
+  },
+]
+
 const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
   {
     id: "que-necesito",
@@ -383,6 +404,41 @@ export default function ShortLandingPage() {
                     </p>
                   </div>
                 </div>
+              ))}
+            </div>
+          </section>
+
+          {/* Carrusel: descanso visual con casos de uso reales (WebP 600px,
+              lazy y snap horizontal — 1 tarjeta visible + borde de la siguiente). */}
+          <section className="flex flex-col gap-4">
+            <SectionTitle>Pensado para negocios como el tuyo</SectionTitle>
+            <div
+              tabIndex={0}
+              aria-label="Fotos de negocios que cobran con SPEI Link"
+              className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 focus-visible:outline-2 focus-visible:outline-[#1872cc] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {CAROUSEL_SLIDES.map((slide) => (
+                <figure
+                  key={slide.src}
+                  className="w-[82%] shrink-0 snap-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={slide.src}
+                    alt={slide.alt}
+                    width={600}
+                    height={600}
+                    loading="lazy"
+                    decoding="async"
+                    className="aspect-square w-full object-cover"
+                  />
+                  <figcaption className="border-t border-slate-100 px-3 py-2.5">
+                    <p className="text-sm font-semibold text-[#0f172a]">
+                      {slide.title}
+                    </p>
+                    <p className="text-sm text-slate-600">{slide.benefit}</p>
+                  </figcaption>
+                </figure>
               ))}
             </div>
           </section>
