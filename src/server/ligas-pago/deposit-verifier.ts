@@ -1,9 +1,13 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
-import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
+import {
+  resolvePaymentOrderDepositToken,
+  resolveSellerMpAccessToken,
+} from "@/server/mercadopago/tokens"
+import { findDepositsForPaymentOrderWindow } from "@/server/mercadopago/spei"
 import { paymentOrderMoney } from "@/lib/ligas-pago"
 
-import { tryConfirmOrderDeposit } from "./deposit-check"
+import { tryConfirmOrderDeposit, tryConfirmDepositPayment } from "./deposit-check"
 import {
   notifyDepositConfirmed,
   notifyDepositAutoConfirmed,
@@ -11,49 +15,57 @@ import {
 import {
   listDueVerifyingOrders,
   listDuePendingOrders,
+  listDepositSweeperAccounts,
   markDepositEscalated,
   savePaymentOrderDepositCheck,
+  type DepositSweeperAccount,
   type PaymentOrder,
 } from "./repository"
 
 /*
  * Verificador en background de depósitos de órdenes de pago, en DOS
- * carriles:
+ * mecanismos por tick (el BARRIDO primero, siempre):
  *
- *  - 'verifying' (comprobante válido de un creador CON credencial
- *    consultable): se confirma cuando su depósito aparece acreditado en la
- *    cuenta de Mercado Pago del creador (misma fuente que el reporte SPEI).
- *    Sondea la cola `deposit_next_check_at <= now()` con backoff (45 s ×6
- *    → 2 min ×6 → 5 min ×6 → 15 min, también para fallos de infraestructura)
- *    y, tras 24 h sin hallazgo, escala UNA sola vez a resolución manual
- *    avisando a creador (campana) y pagador (WhatsApp) — la orden queda
- *    'verifying' para que el creador resuelva (Marcar pagada / Rechazar /
- *    Cancelar). Sin credencial para la cuenta del creador no hay consulta
- *    (las órdenes reprograman a 15 min y escalan por edad): jamás se
- *    auto-aprueba a ciegas.
+ *  - BARRIDO POR DEPÓSITO (reacción rápida): UNA búsqueda de MP por cuenta
+ *    receptora con órdenes activas trae los depósitos recién acreditados
+ *    (ventana de 2 min) y casa CADA uno contra las órdenes de ESA cuenta
+ *    (importe exacto + ventana + coincidencia única). La latencia entre la
+ *    acreditación (visible en MP al instante — el reporte SPEI la enseña en
+ *    segundos) y el reclamo queda acotada a la FASE DEL TICK (≤10 s), y el
+ *    presupuesto de MP es CONSTANTE: 1 búsqueda por cuenta por tick, no una
+ *    por orden (caso BPKE: 43 s de desfase con el esquema por orden).
  *
- *  - 'pending' (SIN comprobante, creador con credencial): el pagador NO
- *    necesita enviar comprobante — si el depósito de la orden se acredita
- *    por importe exacto + ventana con COINCIDENCIA ÚNICA (ninguna otra
- *    orden activa del mismo importe cubre el depósito; guarda re-verificada
- *    dentro del candado del claim), la orden se confirma sola a 'paid' y
- *    salen los avisos automáticos a cobrador y pagador. Mismo backoff, sin
- *    escalamiento (no hay comprobante prometido: pagar tarde es normal) y
- *    tope de edad de 72 h (la cola deja de sondear; el comprobante y el
- *    creador siguen siendo caminos válidos). El comprobante sigue
- *    funcionando igual: desambigua por código impreso y respalda casos
- *    donde la unicidad no se cumple.
+ *  - CARRILES POR ORDEN (fallback): sondean `deposit_next_check_at` con
+ *    backoff (45 s ×6 → 2 min ×6 → 5 min ×6 → 15 min) y cubren lo que el
+ *    barrido no ve (reinicios, ventanas largas, órdenes que ya pasaron la
+ *    ventana de 2 min del barrido):
+ *    - 'verifying' (comprobante válido): escalamiento a manual tras 24 h.
+ *    - 'pending' (sin comprobante): sin escalamiento, tope de edad 72 h;
+ *      el claim exige coincidencia única (misma guarda que el barrido).
  *
  * Arranque: `src/instrumentation.ts` (hook `register`, runtime Node), mismo
- * patrón del scheduler de alertas: intervalo de 15 s, guard `ticking` contra
- * solapamiento (cada orden puede tardar hasta el presupuesto de MP). El
- * tick corto acota la FASE de sondeo (el desfase entre la acreditación del
- * depósito y el reclamo observado en producción, caso BPKE: 43 s = primer
- * sondeo a +2 min + fase de tick de 60 s); el ritmo POR ORDEN lo manda el
- * backoff, así que el tick corto no multiplica las llamadas a MP.
+ * patrón del scheduler de alertas: intervalo de 10 s, guard `ticking`
+ * contra solapamiento (cada orden puede tardar hasta el presupuesto de MP).
  */
 
-const TICK_MS = 15_000
+const TICK_MS = 10_000
+
+/** Ventana del barrido: depósitos acreditados recientemente. */
+const SWEEP_WINDOW_MS = 2 * 60_000
+
+/** Presupuesto de la búsqueda del barrido (ventana corta: 1 página/riel). */
+const SWEEP_BUDGET_MS = 6_000
+
+/** Timeout por página del barrido (acota el tick). */
+const SWEEP_PAGE_TIMEOUT_MS = 4_000
+
+/** Memoria de depósitos ya procesados por el barrido (evita recasar por tick). */
+const SWEEP_SEEN_TTL_MS = 5 * 60_000
+const sweepSeen = new Map<string, number>()
+
+/** Throttle del log de fallos del barrido por cuenta (MP caído no inundue el log). */
+const SWEEP_FAIL_LOG_THROTTLE_MS = 60_000
+const sweepFailLoggedAt = new Map<string, number>()
 
 /** Órdenes 'verifying' verificadas por pasada. */
 const MAX_PER_TICK = 4
@@ -248,10 +260,90 @@ async function verifyTick(): Promise<void> {
 let timer: ReturnType<typeof setInterval> | null = null
 let ticking = false
 
+/**
+ * Barrido de UNA cuenta: busca los depósitos acreditados en la ventana
+ * corta y casa cada uno (no visto antes) contra las órdenes de ESA cuenta.
+ * Nunca lanza.
+ */
+async function sweepAccount(account: DepositSweeperAccount): Promise<void> {
+  const accessToken = await resolveSellerMpAccessToken(
+    account.sellerUserId
+  ).catch(() => null)
+  if (!accessToken) return
+
+  const deposits = await findDepositsForPaymentOrderWindow({
+    beginIso: new Date(Date.now() - SWEEP_WINDOW_MS).toISOString(),
+    endIso: new Date().toISOString(),
+    budgetMs: SWEEP_BUDGET_MS,
+    pageTimeoutMs: SWEEP_PAGE_TIMEOUT_MS,
+    accessToken,
+  })
+
+  for (const deposit of deposits) {
+    if (deposit.id.length === 0) continue
+    const key = `${account.sellerUserId ?? "platform"}:${deposit.id}`
+    if (sweepSeen.has(key)) continue
+    sweepSeen.set(key, Date.now())
+
+    const match = await tryConfirmDepositPayment({
+      mpPaymentId: deposit.id,
+      amountMxn: deposit.amountMxn,
+      dateApproved: deposit.dateApproved,
+      sellerUserId: account.sellerUserId,
+    }).catch(() => null)
+    if (match === null) continue
+
+    logEvent("orden_pago.deposit_confirmed", {
+      order_id: match.order.id,
+      code: match.order.code,
+      amount: match.order.amountMxn,
+      mp_payment_id: match.order.mpPaymentId,
+      source: "sweeper",
+      seller: account.sellerUserId ?? "platform",
+      checks: match.order.depositChecks,
+      receipt_free: !match.hadReceipt,
+    })
+    if (match.hadReceipt) {
+      notifyDepositConfirmed(match.order)
+    } else {
+      notifyDepositAutoConfirmed(match.order)
+    }
+  }
+}
+
+/** Barrido por depósito de todas las cuentas con órdenes activas. Nunca lanza. */
+async function sweepTick(): Promise<void> {
+  const accounts = await listDepositSweeperAccounts().catch(() => [])
+  if (accounts.length === 0) return
+
+  const now = Date.now()
+  if (sweepSeen.size > 1000) {
+    for (const [key, at] of sweepSeen) {
+      if (now - at > SWEEP_SEEN_TTL_MS) sweepSeen.delete(key)
+    }
+  }
+
+  for (const account of accounts) {
+    await sweepAccount(account).catch((error: unknown) => {
+      const seller = account.sellerUserId ?? "platform"
+      const last = sweepFailLoggedAt.get(seller) ?? 0
+      if (Date.now() - last < SWEEP_FAIL_LOG_THROTTLE_MS) return
+      sweepFailLoggedAt.set(seller, Date.now())
+      logEvent("orden_pago.sweep_failed", {
+        seller,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
+}
+
 async function tick(): Promise<void> {
   if (ticking) return
   ticking = true
   try {
+    // Barrido primero: reacción en la fase del tick; los carriles por orden
+    // son el fallback (backoff) para lo que la ventana corta no cubre.
+    await sweepTick()
     await verifyTick()
   } catch (error) {
     console.error(

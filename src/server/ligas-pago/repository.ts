@@ -689,26 +689,70 @@ export async function listDuePendingOrders(limit = 2): Promise<PaymentOrder[]> {
   return result.rows.map(mapRow)
 }
 
+export interface DepositSweeperAccount {
+  /** null = cuenta de plataforma (admins sin token propio). */
+  sellerUserId: string | null
+  /** Órdenes activas que esperan depósito en esta cuenta. */
+  orders: number
+}
+
 /**
- * Candidatas del match DEPOSIT-SIDE (rama webhook): el pago llega leído con
- * el token de PLATAFORMA (`mercadoPagoRequest`), así que el depósito
- * notificado solo puede pertenecer a la cuenta plataforma — los únicos
- * reclamantes válidos son órdenes ACTIVAS cuyo dinero apunta a ESA cuenta:
- * admins SIN token propio (los admins con token propio cobran a SU cuenta,
- * invisible para el token de plataforma). La ventana y la unicidad se
+ * Cuentas receptoras con órdenes activas (≤72 h) esperando depósito: es la
+ * puerta del BARRIDO POR DEPÓSITO del verificador — UNA búsqueda de MP por
+ * cuenta y tick cubre TODAS sus órdenes a la vez (latencia de reacción =
+ * fase del tick, presupuesto constante independiente del número de
+ * órdenes). Admins con token propio agrupan bajo SU usuario; admins sin
+ * token bajo la plataforma (`null`); distribuidores sin token quedan
+ * agrupados bajo su usuario pero sin token consultable (el barrido los
+ * salta: su verificación es manual por diseño).
+ */
+export async function listDepositSweeperAccounts(): Promise<
+  DepositSweeperAccount[]
+> {
+  const result = await pool.query<{
+    seller_user_id: string | null
+    n: number
+  }>(
+    `SELECT
+       CASE WHEN u.role = 'admin' AND NOT EXISTS (
+              SELECT 1 FROM user_mp_tokens t
+               WHERE t.user_id = o.creator_user_id AND t.status = 'active'
+            ) THEN NULL ELSE o.creator_user_id::text END AS seller_user_id,
+       count(*)::int AS n
+       FROM payment_orders o
+       JOIN users u ON u.id = o.creator_user_id
+      WHERE o.status IN ('pending','verifying')
+        AND o.created_at >= now() - interval '72 hours'
+      GROUP BY 1`
+  )
+  return result.rows.map((row) => ({
+    sellerUserId:
+      row.seller_user_id === null ? null : String(row.seller_user_id),
+    orders: Number(row.n ?? 0),
+  }))
+}
+
+/**
+ * Candidatas del match DEPOSIT-SIDE (barrido del verificador y rama
+ * webhook): órdenes ACTIVAS de un importe exacto cuyo dinero apunta a la
+ * cuenta receptora del depósito — `sellerUserId = null` son los admins SIN
+ * token propio (su cuenta es la plataforma, la que lee el token del
+ * `.env`); un usuario concreto es el dueño de la credencial con que se leyó
+ * el depósito (distribuidor o admin con token propio). Un depósito de una
+ * cuenta jamás confirma la liga de otra. La ventana y la unicidad se
  * deciden después (predicado puro `depositWithinOrderWindow` + guarda
  * autoritativa dentro del candado del claim), no en esta consulta.
  */
-export async function listPlatformDepositClaimantPaymentOrders(
+export async function listDepositClaimantPaymentOrders(
   amountMxn: number,
+  sellerUserId: string | null,
   limit = 50
 ): Promise<PaymentOrder[]> {
   const amount = Math.round(amountMxn * 100) / 100
   const capped = Math.min(Math.max(Math.trunc(limit), 1), 200)
-  const result = await pool.query<Record<string, unknown>>(
-    `${SELECT_COLUMNS}
-      WHERE o.status IN ('pending','verifying') AND o.amount_mxn = $1::numeric
-        AND EXISTS (
+  const sellerFilter =
+    sellerUserId === null
+      ? `EXISTS (
           SELECT 1 FROM users u2
            WHERE u2.id = o.creator_user_id
              AND u2.role = 'admin'
@@ -716,9 +760,14 @@ export async function listPlatformDepositClaimantPaymentOrders(
                SELECT 1 FROM user_mp_tokens t
                 WHERE t.user_id = u2.id AND t.status = 'active'
              )
-        )
+        )`
+      : `o.creator_user_id = $3::uuid`
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.status IN ('pending','verifying') AND o.amount_mxn = $1::numeric
+        AND ${sellerFilter}
       ORDER BY o.created_at ASC LIMIT $2`,
-    [amount, capped]
+    sellerUserId === null ? [amount, capped] : [amount, capped, sellerUserId]
   )
   return result.rows.map(mapRow)
 }
