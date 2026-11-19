@@ -1,4 +1,8 @@
 import { findReservedMpPaymentIds } from "@/server/ligas-pago/repository"
+import {
+  amountsEqualCents,
+  PAYMENT_ORDER_DEPOSIT_SLACK_MS,
+} from "@/lib/ligas-pago"
 import { MercadoPagoError } from "./errors"
 import {
   approveTransferOrder,
@@ -26,13 +30,6 @@ import { markUserMpTokenInvalid, resolveSellerMpAccessToken } from "./tokens"
  * el comportamiento sin verificación (auto-aprobación al validar el
  * comprobante), jamás bloquea la renovación.
  */
-
-/** Slack de la ventana por si el depósito se acredita antes del movedor. */
-const WINDOW_SLACK_MS = 2 * 60_000
-
-function amountsEqualCents(a: number, b: number): boolean {
-  return Math.round(a * 100) === Math.round(b * 100)
-}
 
 /** Vendedor que RECIBE el dinero de la orden (para elegir el token). */
 function renewalSellerUserId(order: MpOrderRow): string | null {
@@ -85,7 +82,8 @@ export async function tryConfirmRenewalDeposit(input: {
 }): Promise<MpOrderRow | null> {
   const createdMs = Date.parse(input.order.created_at)
   const beginIso = new Date(
-    (Number.isNaN(createdMs) ? Date.now() : createdMs) - WINDOW_SLACK_MS
+    (Number.isNaN(createdMs) ? Date.now() : createdMs) -
+      PAYMENT_ORDER_DEPOSIT_SLACK_MS
   ).toISOString()
   const endIso = new Date().toISOString()
 

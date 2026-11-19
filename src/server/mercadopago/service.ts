@@ -7,6 +7,9 @@ import {
   createRenewalNotification,
 } from "@/server/notifications/service"
 import { isMpDepositClaimed } from "@/server/ligas-pago/repository"
+import { tryConfirmDepositPayment } from "@/server/ligas-pago/deposit-check"
+import { notifyDepositAutoConfirmed } from "@/server/ligas-pago/notify"
+import { isDepositLikePayment } from "@/lib/ligas-pago"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
@@ -187,6 +190,8 @@ interface MpPaymentPayload {
   external_reference?: unknown
   transaction_amount?: unknown
   currency_id?: unknown
+  operation_type?: unknown
+  date_approved?: unknown
 }
 
 const UUID_RE =
@@ -1412,7 +1417,50 @@ export async function processPaymentNotification(params: {
     typeof payment.external_reference === "string"
       ? payment.external_reference
       : ""
+
+  const paymentStatus =
+    typeof payment.status === "string" ? payment.status : ""
+  const paymentStatusDetail =
+    typeof payment.status_detail === "string" ? payment.status_detail : ""
+
   if (!UUID_RE.test(externalReference)) {
+    // Rama de DEPÓSITOS (blindaje): MP no emite notificaciones por los
+    // depósitos a la cuenta (account_fund / money_transfer — verificado en
+    // producción: 26 días de logs con depósitos confirmados y cero eventos,
+    // y la doc oficial no documenta tal tópico), pero si algún día empieza
+    // a emitirlas el pago ya clasificado busca su ÚNICA orden de pago
+    // reclamante (importe exacto + ventana + coincidencia única, ver
+    // deposit-check.ts). Un pago de checkout sin external_reference legible
+    // jamás entra aquí.
+    if (
+      isDepositLikePayment({
+        operationType: payment.operation_type,
+        status: payment.status,
+        statusDetail: payment.status_detail,
+      })
+    ) {
+      const confirmed = await tryConfirmDepositPayment({
+        mpPaymentId: params.paymentId,
+        amountMxn: Number(payment.transaction_amount),
+        dateApproved:
+          typeof payment.date_approved === "string"
+            ? payment.date_approved
+            : null,
+      }).catch(() => null)
+      // El ganador del claim avisa: campana al creador (espejo WhatsApp) y
+      // WhatsApp directo al pagador si su teléfono está ligado — una
+      // confirmación jamás sale en silencio.
+      if (confirmed !== null) notifyDepositAutoConfirmed(confirmed)
+      log("mercadopago.payment", {
+        payment_id: params.paymentId,
+        operation_type: payment.operation_type ?? null,
+        outcome: "ignored",
+        reason: confirmed === null ? "deposit_no_unique_order" : "deposit_order_confirmed",
+        deposit_order_id: confirmed?.id ?? null,
+        deposit_order_code: confirmed?.code ?? null,
+      })
+      return "ignored"
+    }
     log("mercadopago.payment", {
       payment_id: params.paymentId,
       outcome: "ignored",
@@ -1431,11 +1479,6 @@ export async function processPaymentNotification(params: {
     })
     return "ignored"
   }
-
-  const paymentStatus =
-    typeof payment.status === "string" ? payment.status : ""
-  const paymentStatusDetail =
-    typeof payment.status_detail === "string" ? payment.status_detail : ""
 
   if (paymentStatus !== "approved") {
     // Pago no aprobado (rechazado, cancelado o aún en proceso). Solo sella

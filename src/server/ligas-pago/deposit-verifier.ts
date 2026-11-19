@@ -4,38 +4,62 @@ import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
 import { paymentOrderMoney } from "@/lib/ligas-pago"
 
 import { tryConfirmOrderDeposit } from "./deposit-check"
-import { notifyDepositConfirmed } from "./review"
+import {
+  notifyDepositConfirmed,
+  notifyDepositAutoConfirmed,
+} from "./notify"
 import {
   listDueVerifyingOrders,
+  listDuePendingOrders,
   markDepositEscalated,
   savePaymentOrderDepositCheck,
   type PaymentOrder,
 } from "./repository"
 
 /*
- * Verificador en background de depósitos de órdenes de pago: una orden en
- * 'verifying' (comprobante válido de un creador CON credencial consultable
- * — la cola excluye al resto, cuyo cobro apunta a una cuenta sin credencial)
- * se confirma cuando su depósito aparece acreditado en la cuenta de Mercado
- * Pago del creador (misma fuente que el reporte SPEI). Sondea la cola
- * `deposit_next_check_at <= now()` con backoff (2 → 5 → 15 min, también
- * para fallos de infraestructura) y, tras 24 h sin hallazgo, escala UNA
- * sola vez a resolución manual avisando a creador (campana) y pagador
- * (WhatsApp) — la orden queda 'verifying' para que el creador resuelva
- * (Marcar pagada / Rechazar / Cancelar).
+ * Verificador en background de depósitos de órdenes de pago, en DOS
+ * carriles:
  *
- * Sin credencial para la cuenta del creador no hay consulta (las órdenes
- * reprograman a 15 min y escalan por edad): jamás se auto-aprueba a ciegas.
+ *  - 'verifying' (comprobante válido de un creador CON credencial
+ *    consultable): se confirma cuando su depósito aparece acreditado en la
+ *    cuenta de Mercado Pago del creador (misma fuente que el reporte SPEI).
+ *    Sondea la cola `deposit_next_check_at <= now()` con backoff (45 s ×6
+ *    → 2 min ×6 → 5 min ×6 → 15 min, también para fallos de infraestructura)
+ *    y, tras 24 h sin hallazgo, escala UNA sola vez a resolución manual
+ *    avisando a creador (campana) y pagador (WhatsApp) — la orden queda
+ *    'verifying' para que el creador resuelva (Marcar pagada / Rechazar /
+ *    Cancelar). Sin credencial para la cuenta del creador no hay consulta
+ *    (las órdenes reprograman a 15 min y escalan por edad): jamás se
+ *    auto-aprueba a ciegas.
+ *
+ *  - 'pending' (SIN comprobante, creador con credencial): el pagador NO
+ *    necesita enviar comprobante — si el depósito de la orden se acredita
+ *    por importe exacto + ventana con COINCIDENCIA ÚNICA (ninguna otra
+ *    orden activa del mismo importe cubre el depósito; guarda re-verificada
+ *    dentro del candado del claim), la orden se confirma sola a 'paid' y
+ *    salen los avisos automáticos a cobrador y pagador. Mismo backoff, sin
+ *    escalamiento (no hay comprobante prometido: pagar tarde es normal) y
+ *    tope de edad de 72 h (la cola deja de sondear; el comprobante y el
+ *    creador siguen siendo caminos válidos). El comprobante sigue
+ *    funcionando igual: desambigua por código impreso y respalda casos
+ *    donde la unicidad no se cumple.
  *
  * Arranque: `src/instrumentation.ts` (hook `register`, runtime Node), mismo
- * patrón del scheduler de alertas: intervalo de 60 s, guard `ticking` contra
- * solapamiento (cada orden puede tardar hasta el presupuesto de MP).
+ * patrón del scheduler de alertas: intervalo de 15 s, guard `ticking` contra
+ * solapamiento (cada orden puede tardar hasta el presupuesto de MP). El
+ * tick corto acota la FASE de sondeo (el desfase entre la acreditación del
+ * depósito y el reclamo observado en producción, caso BPKE: 43 s = primer
+ * sondeo a +2 min + fase de tick de 60 s); el ritmo POR ORDEN lo manda el
+ * backoff, así que el tick corto no multiplica las llamadas a MP.
  */
 
-const TICK_MS = 60_000
+const TICK_MS = 15_000
 
-/** Órdenes verificadas por pasada. */
+/** Órdenes 'verifying' verificadas por pasada. */
 const MAX_PER_TICK = 4
+
+/** Órdenes 'pending' (carril sin comprobante) por pasada. */
+const MAX_PENDING_PER_TICK = 2
 
 /** Sondeos en paralelo por pasada. */
 const CONCURRENCY = 2
@@ -46,10 +70,20 @@ const ESCALATE_AFTER_MS = 24 * 60 * 60_000
 /** Sin credencial de MP (o fallo de consulta): reprogra y reintenta luego. */
 const NO_CREDENTIAL_DELAY_MS = 15 * 60_000
 
-/** Backoff por intentos acumulados sin hallazgo: 2 min ×3, 5 min ×6, 15 min+. */
+/**
+ * Backoff por intentos acumulados sin hallazgo. Denso en la VENTANA
+ * CRÍTICA (el pagador pide la liga y paga en los minutos siguientes —
+ * caso BPKE: acreditó 94 s después de la solicitud): 45 s ×6 cubre los
+ * primeros ~4.5 min con desfase ≤45 s; después se relaja 2 min ×6 (~18
+ * min), 5 min ×6 (~48 min) y 15 min en adelante (72 h de ventana del
+ * carril pending; el comprobante y el creador siguen siendo caminos
+ * válidos). El presupuesto total de llamadas a MP por orden queda igual
+ * al esquema anterior: se redistribuye hacia el inicio.
+ */
 function nextDelayMs(checks: number): number {
-  if (checks < 3) return 2 * 60_000
-  if (checks < 9) return 5 * 60_000
+  if (checks < 6) return 45_000
+  if (checks < 12) return 2 * 60_000
+  if (checks < 18) return 5 * 60_000
   return 15 * 60_000
 }
 
@@ -81,14 +115,22 @@ function notifyEscalated(order: PaymentOrder): void {
 }
 
 /**
- * Verifica UNA orden: escalamiento por edad primero (siempre disponible,
- * aun sin credencial de MP), después la consulta de depósito. Nunca lanza.
+ * Verifica UNA orden: en 'verifying' el escalamiento por edad primero
+ * (siempre disponible, aun sin credencial de MP), después la consulta de
+ * depósito; en el carril 'pending' no hay escalamiento y el claim exige
+ * coincidencia única. Nunca lanza.
  */
-async function verifyOrder(order: PaymentOrder): Promise<void> {
-  const sinceMs = order.verifyingSince ? Date.parse(order.verifyingSince) : Date.now()
+async function verifyOrder(
+  order: PaymentOrder,
+  options: { uniqueOnly: boolean }
+): Promise<void> {
+  const source = options.uniqueOnly ? "pending_poll" : "verificador"
+  const sinceMs = order.verifyingSince
+    ? Date.parse(order.verifyingSince)
+    : Date.now()
   const waitingMs = Date.now() - (Number.isNaN(sinceMs) ? Date.now() : sinceMs)
 
-  if (waitingMs >= ESCALATE_AFTER_MS) {
+  if (!options.uniqueOnly && waitingMs >= ESCALATE_AFTER_MS) {
     const escalated = await markDepositEscalated(order.id).catch(() => false)
     if (escalated) {
       logEvent("orden_pago.deposit_escalated", {
@@ -120,7 +162,11 @@ async function verifyOrder(order: PaymentOrder): Promise<void> {
 
   let confirmed: PaymentOrder | null = null
   try {
-    confirmed = await tryConfirmOrderDeposit({ order, accessToken })
+    confirmed = await tryConfirmOrderDeposit({
+      order,
+      accessToken,
+      uniqueOnly: options.uniqueOnly,
+    })
   } catch (error) {
     // Fallo de MP/BD: cuenta como intento fallido para el backoff (la edad
     // sigue mandando el escalamiento a 24 h) — una credencial roja o MP
@@ -145,11 +191,16 @@ async function verifyOrder(order: PaymentOrder): Promise<void> {
       code: order.code,
       amount: order.amountMxn,
       mp_payment_id: confirmed.mpPaymentId,
-      source: "verificador",
+      source,
       checks: order.depositChecks,
-      waiting_ms: waitingMs,
+      receipt_free: options.uniqueOnly,
+      waiting_ms: Math.max(waitingMs, 0),
     })
-    notifyDepositConfirmed(confirmed)
+    if (options.uniqueOnly) {
+      notifyDepositAutoConfirmed(confirmed)
+    } else {
+      notifyDepositConfirmed(confirmed)
+    }
     return
   }
 
@@ -163,22 +214,31 @@ async function verifyOrder(order: PaymentOrder): Promise<void> {
     order_id: order.id,
     code: order.code,
     checks,
-    waiting_ms: waitingMs,
+    lane: source,
   })
 }
 
 /** Pasada del verificador con concurrencia acotada. Nunca lanza. */
 async function verifyTick(): Promise<void> {
-  const due = await listDueVerifyingOrders(MAX_PER_TICK).catch(() => [])
-  if (due.length === 0) return
+  const [due, duePending] = await Promise.all([
+    listDueVerifyingOrders(MAX_PER_TICK).catch(() => []),
+    listDuePendingOrders(MAX_PENDING_PER_TICK).catch(() => []),
+  ])
+  if (due.length === 0 && duePending.length === 0) return
+  const jobs = [
+    ...due.map((order) => ({ order, uniqueOnly: false })),
+    ...duePending.map((order) => ({ order, uniqueOnly: true })),
+  ]
   let index = 0
   const workers = Array.from(
-    { length: Math.min(CONCURRENCY, due.length) },
+    { length: Math.min(CONCURRENCY, jobs.length) },
     async () => {
-      while (index < due.length) {
-        const current = due[index]
+      while (index < jobs.length) {
+        const current = jobs[index]
         index += 1
-        await verifyOrder(current).catch(() => {})
+        await verifyOrder(current.order, {
+          uniqueOnly: current.uniqueOnly,
+        }).catch(() => {})
       }
     }
   )

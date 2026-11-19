@@ -1,7 +1,9 @@
 import { randomInt } from "node:crypto"
 
 import { pool, type PoolClientLike } from "@/server/db"
+import { licensePriceMxnOrNull } from "@/server/mercadopago/config"
 import { AppError } from "@/server/umejson/types"
+import { PAYMENT_ORDER_DEPOSIT_SLACK_MS } from "@/lib/ligas-pago"
 
 /*
  * Órdenes de pago por WhatsApp (/modulos/ligas-de-pago): cobros de MONTO
@@ -17,7 +19,12 @@ import { AppError } from "@/server/umejson/types"
  *     ambigüedad que transfer_concepts) es ÚNICO GLOBAL solo entre las
  *     ACTIVAS (pending + verifying, índice único parcial): es el namespace
  *     que el pagador escribe como concepto y por el que el comprobante
- *     descubre la orden.
+ *     descubre la orden. Además, desde que nace lleva programado su primer
+ *     sondeo del CARRIL PENDING: si su depósito se acredita sin comprobante
+ *     de por medio (importe exacto + ventana + coincidencia ÚNICA — ver
+ *     `confirmPaymentOrderDeposit`), la orden se confirma sola a 'paid' y
+ *     el pagador ya no necesita enviar comprobante (el envío queda como
+ *     respaldo y desambiguador). Sondea hasta 72 h de edad.
  *   - 'verifying': comprobante válido (escaneo aprobado), esperando la
  *     confirmación del DEPÓSITO en la cuenta de Mercado Pago del creador
  *     (credencial propia o la de plataforma para el admin; misma fuente que
@@ -246,8 +253,9 @@ export async function createPaymentOrder(input: {
     try {
       const result = await pool.query(
         `INSERT INTO payment_orders
-           (code, creator_user_id, amount_mxn, note, bank_name, bank_account, bank_holder)
-         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7)
+           (code, creator_user_id, amount_mxn, note, bank_name, bank_account,
+            bank_holder, deposit_next_check_at)
+         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, now() + interval '45 seconds')
          RETURNING id`,
         [
           code,
@@ -548,6 +556,12 @@ export async function findReservedMpPaymentIds(
  * TOCTOU entre los dos verificadores (comparten la misma cuenta MP y el
  * mismo pool de depósitos). Bajo el candado, esta consulta es la última
  * palabra: `true` = otro flujo ya reclamó el pago.
+ *
+ * TIPOS: `payment_orders.mp_payment_id` es TEXT y `mp_orders.mp_payment_id`
+ * es BIGINT — el cast se hace POR TABLA ($1::text / $2::bigint sobre el
+ * mismo ID). Un cast único ::bigint contra la columna text fallaba con
+ * «operator does not exist: text = bigint» y rompía TODO claim de liga (y
+ * de renovación con verificación de depósito).
  */
 export async function isMpDepositClaimed(
   client: PoolClientLike,
@@ -558,12 +572,12 @@ export async function isMpDepositClaimed(
     `SELECT (
        EXISTS (
          SELECT 1 FROM payment_orders
-          WHERE mp_payment_id = $1::bigint
+          WHERE mp_payment_id = $1::text
             AND ($3::uuid IS NULL OR id <> $3::uuid)
        )
        OR EXISTS (
          SELECT 1 FROM mp_orders
-          WHERE mp_payment_id = $1::bigint
+          WHERE mp_payment_id = $2::bigint
             AND ($4::uuid IS NULL OR id <> $4::uuid)
        )
      ) AS taken`,
@@ -585,17 +599,18 @@ export async function isMpDepositClaimed(
 /**
  * Claim atómico `pending → verifying` tras un comprobante válido: fija el
  * inicio de la verificación (base del tope de 24 h) y programa el primer
- * sondeo del verificador con el primer tramo de backoff — el chequeo
- * inmediato ya corre dentro del turno que aprueba el comprobante; sondear
- * de nuevo al instante duplicaría esa consulta y podría ganar la carrera
- * contra él (avisos contradictorios).
+ * sondeo del verificador a +45 s — el chequeo inmediato ya corrió DENTRO
+ * del turno (presupuesto ≤8 s), así que +45 s no compite con él: es la
+ * segunda oportunidad para depósitos que acreditan segundos después del
+ * comprobante (caso común en SPEI). Antes era +2 min y el confirmar
+ * tardaba hasta 2 min + fase de tick tras la acreditación.
  * Null = otro actor ya resolvió la orden.
  */
 export async function markPaymentOrderVerifying(orderId: string): Promise<PaymentOrder | null> {
   const result = await pool.query(
     `UPDATE payment_orders
         SET status = 'verifying', verifying_since = now(),
-            deposit_next_check_at = now() + interval '2 minutes', deposit_checks = 0,
+            deposit_next_check_at = now() + interval '45 seconds', deposit_checks = 0,
             deposit_escalated_at = NULL, updated_at = now()
       WHERE id = $1::uuid AND status = 'pending'
       RETURNING id`,
@@ -603,6 +618,26 @@ export async function markPaymentOrderVerifying(orderId: string): Promise<Paymen
   )
   if ((result.rowCount ?? 0) === 0) return null
   return getPaymentOrder(orderId)
+}
+
+/**
+ * Filtro compartido de las colas de verificación: SOLO creadores con
+ * credencial consultable para la cuenta receptora (propia del distribuidor
+ * o la de plataforma para el admin). Los demás cobros apuntan a una cuenta
+ * sin credencial y su verificación es manual por diseño. El alias de la
+ * orden (`o`, `po`, `pr`) viaja como parámetro para que TODAS las
+ * consultas — colas y guarda de unicidad — compartan la MISMA definición de
+ * «reclamante con credencial» sin copias que puedan divergir.
+ */
+function depositCredentialExistsSql(orderAlias: string): string {
+  return `
+          SELECT 1 FROM users u2
+           WHERE u2.id = ${orderAlias}.creator_user_id
+             AND (u2.role = 'admin'
+                  OR EXISTS (
+                    SELECT 1 FROM user_mp_tokens t
+                     WHERE t.user_id = u2.id AND t.status = 'active'
+                  ))`
 }
 
 /**
@@ -618,25 +653,80 @@ export async function listDueVerifyingOrders(limit = 4): Promise<PaymentOrder[]>
     `${SELECT_COLUMNS}
       WHERE o.status = 'verifying' AND deposit_escalated_at IS NULL
         AND deposit_next_check_at IS NOT NULL AND deposit_next_check_at <= now()
-        AND EXISTS (
-          SELECT 1 FROM users u2
-           WHERE u2.id = o.creator_user_id
-             AND (u2.role = 'admin'
-                  OR EXISTS (
-                    SELECT 1 FROM user_mp_tokens t
-                     WHERE t.user_id = u2.id AND t.status = 'active'
-                  ))
-        )
+        AND EXISTS (${depositCredentialExistsSql("o")})
       ORDER BY o.deposit_next_check_at ASC LIMIT $1`,
     [capped]
   )
   return result.rows.map(mapRow)
 }
 
+/** Edad máxima de sondeo del carril `pending` (después: comprobante/manual). */
+export const PENDING_DEPOSIT_POLL_MAX_AGE_MS = 72 * 60 * 60_000
+
+/**
+ * Cola del CARRIL PENDING: órdenes activas SIN comprobante cuyo sondeo
+ * venció (de nacimiento llevan `deposit_next_check_at`; las previas al
+ * carril caen back a `created_at + 45 s` vía COALESCE) y con edad dentro
+ * del tope de 72 h — un SPEI real acredita en minutos-horas; sondear para
+ * siempre una orden nunca pagada desperdiciaría el presupuesto de MP. La
+ * orden se confirma sola (`paid`, sin comprobante) solo con coincidencia
+ * ÚNICA (ver `confirmPaymentOrderDeposit`); el sondeo aquí solo DETECTA el
+ * depósito. Mismo filtro de credencial que `listDueVerifyingOrders`.
+ */
+export async function listDuePendingOrders(limit = 2): Promise<PaymentOrder[]> {
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 20)
+  const ageHours = PENDING_DEPOSIT_POLL_MAX_AGE_MS / 3_600_000
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.status = 'pending'
+        AND COALESCE(o.deposit_next_check_at,
+                     o.created_at + interval '45 seconds') <= now()
+        AND o.created_at >= now() - ($2::int * interval '1 hour')
+        AND EXISTS (${depositCredentialExistsSql("o")})
+      ORDER BY o.deposit_next_check_at ASC NULLS LAST LIMIT $1`,
+    [capped, ageHours]
+  )
+  return result.rows.map(mapRow)
+}
+
+/**
+ * Candidatas del match DEPOSIT-SIDE (rama webhook): el pago llega leído con
+ * el token de PLATAFORMA (`mercadoPagoRequest`), así que el depósito
+ * notificado solo puede pertenecer a la cuenta plataforma — los únicos
+ * reclamantes válidos son órdenes ACTIVAS cuyo dinero apunta a ESA cuenta:
+ * admins SIN token propio (los admins con token propio cobran a SU cuenta,
+ * invisible para el token de plataforma). La ventana y la unicidad se
+ * deciden después (predicado puro `depositWithinOrderWindow` + guarda
+ * autoritativa dentro del candado del claim), no en esta consulta.
+ */
+export async function listPlatformDepositClaimantPaymentOrders(
+  amountMxn: number,
+  limit = 50
+): Promise<PaymentOrder[]> {
+  const amount = Math.round(amountMxn * 100) / 100
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 200)
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.status IN ('pending','verifying') AND o.amount_mxn = $1::numeric
+        AND EXISTS (
+          SELECT 1 FROM users u2
+           WHERE u2.id = o.creator_user_id
+             AND u2.role = 'admin'
+             AND NOT EXISTS (
+               SELECT 1 FROM user_mp_tokens t
+                WHERE t.user_id = u2.id AND t.status = 'active'
+             )
+        )
+      ORDER BY o.created_at ASC LIMIT $2`,
+    [amount, capped]
+  )
+  return result.rows.map(mapRow)
+}
+
 /**
  * Registra el resultado de un sondeo sin hallazgo: incrementa el contador
- * (elige el tramo de backoff) y programa el siguiente intento. Solo toca
- * órdenes aún en 'verifying'.
+ * (elige el tramo de backoff) y programa el siguiente intento. Toca órdenes
+ * en 'verifying' Y del carril 'pending' (mismos columnas de programación).
  */
 export async function savePaymentOrderDepositCheck(input: {
   orderId: string
@@ -646,7 +736,7 @@ export async function savePaymentOrderDepositCheck(input: {
   await pool.query(
     `UPDATE payment_orders
         SET deposit_checks = $2, deposit_next_check_at = $3, updated_at = now()
-      WHERE id = $1::uuid AND status = 'verifying'`,
+      WHERE id = $1::uuid AND status IN ('pending','verifying')`,
     [input.orderId, input.checks, input.nextCheckAt]
   )
 }
@@ -668,20 +758,132 @@ export async function markDepositEscalated(orderId: string): Promise<boolean> {
 }
 
 /**
- * Confirmación atómica del depósito: reclama la orden en 'verifying' y la
- * resuelve `paid` reservando el ID del pago de MP. La exclusividad es
- * CRUZADA con las renovaciones (`mp_orders` — ambos flujos leen la misma
- * cuenta): el advisory lock por ID de pago serializa a los dos reclamantes
- * y `isMpDepositClaimed` re-verifica DENTRO del candado (los índices únicos
- * de cada tabla no se ven entre sí). `reviewedBy` es el propio creador
- * (aprobación automática con quién). Null = otro actor ganó el depósito o
- * la orden.
+ * Re-verificación AUTORITATIVA de la COINCIDENCIA ÚNICA, a correr DENTRO de
+ * la transacción del claim (bajo el advisory lock del ID de pago): un
+ * depósito solo confirma una orden SIN comprobante si NO existe OTRA orden
+ * reclamante del mismo importe que cubra la fecha del depósito. Los
+ * reclamantes son cinco clases:
+ *
+ *  a) Ligas de pago ACTIVAS (pending + verifying) de creadores con
+ *     credencial consultable.
+ *  b) Ligas RESUELTAS a mano SIN reserva de depósito (el admin vio el
+ *     dinero en su app y marcó pagada sin ID de MP): su depósito quedó sin
+ *     reservar y no debe poder reclamarlo otra orden — mirada de 72 h.
+ *  c) Renovaciones por transferencia ACTIVAS (`mp_orders` pending +
+ *     verifying, `method='transferencia'`): la fila nace al revisar el
+ *     comprobante, DESPUÉS de que el dinero acreditó, así que la ventana
+ *     ancla en el CONCEPTO de pago (`transfer_concepts.created_at` vía
+ *     `concept_id`, creado ANTES de pagar; sin concepto, la fecha de la
+ *     fila). Pending cuenta: con el dinero ya en la cuenta el admin puede
+ *     aprobarlas a mano.
+ *  d) Renovaciones por transferencia resueltas a mano SIN reserva
+ *     (`paid`/`renewed`, `mp_payment_id` NULL): mirada de 72 h sobre la
+ *     última actualización.
+ *  e) Conceptos de renovación ACTIVOS AÚN SIN ORDEN (`transfer_concepts`
+ *     `status='active'`): el comprador recibió su código pero aún no envía
+ *     el comprobante, así que la fila `mp_orders` NO existe y las clases
+ *     c/d no la ven — sin esta clase, una liga del mismo importe (el
+ *     precio de licencia es el monto más común) auto-confirmaría el
+ *     depósito de esa renovación en la ventana entre acreditación y
+ *     comprobante. El importe esperado del concepto es el precio de
+ *     licencia de ESE cliente (`client_metadata.price_mxn` ?? general);
+ *     sin precio general configurado el concepto reclama CUALQUIER liga
+ *     del período (falla cerrada: el auto-confirm se degrada a revisión).
+ *     El concepto consumido ya tiene orden y lo cubre la clase c; el
+ *     vencido no paga nada y no reclama.
+ *
+ * Dos reclamantes del mismo importe = ambigüedad: el código impreso del
+ * comprobante es el único desambiguador confiable, así que el auto-confirm
+ * se niega y la decisión queda en los flujos con evidencia (comprobante) o
+ * en el creador. El slack de ventana viaja parametrizado (`make_interval`)
+ * desde `PAYMENT_ORDER_DEPOSIT_SLACK_MS`: una sola fuente de verdad con el
+ * matcher en JS.
+ */
+async function isDepositMatchAmbiguous(
+  client: PoolClientLike,
+  input: { orderId: string; amountMxn: number; mpDepositAt: string | null }
+): Promise<boolean> {
+  if (input.mpDepositAt === null) return true
+  const slackSecs = Math.round(PAYMENT_ORDER_DEPOSIT_SLACK_MS / 1000)
+  const licensePrice = licensePriceMxnOrNull()
+  const result = await client.query(
+    `SELECT (
+       EXISTS (
+         SELECT 1 FROM payment_orders po
+          WHERE po.status IN ('pending','verifying')
+            AND po.id <> $1::uuid
+            AND po.amount_mxn = $2::numeric
+            AND po.created_at - make_interval(secs => $4::int) <= $3::timestamptz
+            AND EXISTS (${depositCredentialExistsSql("po")})
+       )
+       OR EXISTS (
+         SELECT 1 FROM payment_orders pr
+          WHERE pr.status = 'paid' AND pr.mp_payment_id IS NULL
+            AND pr.id <> $1::uuid
+            AND pr.amount_mxn = $2::numeric
+            AND pr.resolved_at >= now() - interval '72 hours'
+            AND pr.created_at - make_interval(secs => $4::int) <= $3::timestamptz
+            AND EXISTS (${depositCredentialExistsSql("pr")})
+       )
+       OR EXISTS (
+         SELECT 1 FROM mp_orders mo
+           LEFT JOIN transfer_concepts tc ON tc.id = mo.concept_id
+          WHERE mo.status IN ('pending','verifying')
+            AND mo.method = 'transferencia'
+            AND mo.amount = $2::numeric AND mo.currency = 'MXN'
+            AND COALESCE(tc.created_at, mo.created_at)
+                  - make_interval(secs => $4::int) <= $3::timestamptz
+       )
+       OR EXISTS (
+         SELECT 1 FROM mp_orders mr
+           LEFT JOIN transfer_concepts tc2 ON tc2.id = mr.concept_id
+          WHERE mr.status IN ('paid','renewed')
+            AND mr.method = 'transferencia' AND mr.mp_payment_id IS NULL
+            AND mr.amount = $2::numeric AND mr.currency = 'MXN'
+            AND mr.updated_at >= now() - interval '72 hours'
+            AND COALESCE(tc2.created_at, mr.created_at)
+                  - make_interval(secs => $4::int) <= $3::timestamptz
+       )
+       OR EXISTS (
+         SELECT 1
+           FROM transfer_concepts tc3
+           LEFT JOIN client_metadata cmd ON cmd.user_name = lower(tc3.user_name)
+          WHERE tc3.status = 'active'
+            AND tc3.created_at - make_interval(secs => $4::int) <= $3::timestamptz
+            AND (
+              COALESCE(cmd.price_mxn, $5::numeric) = $2::numeric
+              OR $5::numeric IS NULL
+            )
+       )
+     ) AS ambiguous`,
+    [input.orderId, input.amountMxn, input.mpDepositAt, slackSecs, licensePrice]
+  )
+  const ambiguous = (result.rows[0] as { ambiguous?: boolean } | undefined)
+    ?.ambiguous
+  return ambiguous === true
+}
+
+/**
+ * Confirmación atómica del depósito: reclama la orden ACTIVA (pending o
+ * verifying) y la resuelve `paid` reservando el ID del pago de MP. La
+ * exclusividad es CRUZADA con las renovaciones (`mp_orders` — ambos flujos
+ * leen la misma cuenta): el advisory lock por ID de pago serializa a los
+ * dos reclamantes y `isMpDepositClaimed` re-verifica DENTRO del candado
+ * (los índices únicos de cada tabla no se ven entre sí). `reviewedBy` es el
+ * propio creador (aprobación automática con quién). Null = otro actor ganó
+ * el depósito o la orden.
+ *
+ * `uniqueOnly` (carril pending sin comprobante y match deposit-side del
+ * webhook): además exige COINCIDENCIA ÚNICA dentro del candado — ver
+ * `isDepositMatchAmbiguous`. El claim del comprobante (verifying, código
+ * impreso ya desambiguado) NO la usa.
  */
 export async function confirmPaymentOrderDeposit(input: {
   orderId: string
   mpPaymentId: string
   mpDepositAt: string | null
   reviewedBy: string
+  uniqueOnly?: boolean
 }): Promise<PaymentOrder | null> {
   const tx = await pool.connect()
   try {
@@ -699,12 +901,31 @@ export async function confirmPaymentOrderDeposit(input: {
       await tx.query("ROLLBACK").catch(() => {})
       return null
     }
+    if (input.uniqueOnly === true) {
+      const amountRow = await tx.query<{ amount_mxn: number }>(
+        `SELECT amount_mxn FROM payment_orders WHERE id = $1::uuid`,
+        [input.orderId]
+      )
+      const amount = Number(amountRow.rows[0]?.amount_mxn)
+      if (
+        !Number.isFinite(amount) ||
+        (await isDepositMatchAmbiguous(tx, {
+          orderId: input.orderId,
+          amountMxn: amount,
+          mpDepositAt: input.mpDepositAt,
+        }))
+      ) {
+        await tx.query("ROLLBACK").catch(() => {})
+        return null
+      }
+    }
     const result = await tx.query(
       `UPDATE payment_orders
           SET status = 'paid', reviewed_by = $4::uuid, resolved_at = now(),
               mp_payment_id = $2, mp_deposit_at = $3::timestamptz,
               deposit_next_check_at = NULL, updated_at = now()
-        WHERE id = $1::uuid AND status = 'verifying' AND mp_payment_id IS NULL
+        WHERE id = $1::uuid AND status IN ('pending','verifying')
+              AND mp_payment_id IS NULL
         RETURNING id`,
       [input.orderId, input.mpPaymentId, input.mpDepositAt, input.reviewedBy]
     )

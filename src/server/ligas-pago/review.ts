@@ -9,8 +9,7 @@ import {
   type ScanResult,
 } from "@/server/transferencias/scan"
 import { evaluarCondiciones } from "@/server/transferencias/verificar"
-import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
-import { createPaymentOrderNotification } from "@/server/notifications/service"
+import { notifyCreator, notifyDepositConfirmed } from "./notify"
 
 import {
   getPaymentOrder,
@@ -86,16 +85,6 @@ function logEvent(event: string, fields: Record<string, unknown>): void {
   console.info(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }))
 }
 
-/** Aviso al creador por campana (con espejo WhatsApp); nunca lanza. */
-function notifyCreator(order: PaymentOrder, title: string, body: string): void {
-  createPaymentOrderNotification({
-    userId: order.creatorUserId,
-    orderId: order.id,
-    title,
-    body,
-  })
-}
-
 /**
  * Throttle de avisos al creador por (orden, sha del comprobante): mientras
  * una orden siga pendiente, reenvíos del MISMO archivo (re-encodes con sha
@@ -128,22 +117,6 @@ export function notifyPaymentOrderCreator(
   }
   notifyThrottle.set(order.id, { sha: ticketSha256, at: now })
   notifyCreator(order, title, body)
-}
-
-/** Confirmación DIRECTA al pagador por WhatsApp; nunca lanza. */
-function notifyPayer(
-  order: PaymentOrder,
-  title: string,
-  body: string
-): void {
-  if (!order.payerPhone) return
-  void enqueueWhatsAppForPhone({
-    userId: order.creatorUserId,
-    phone: order.payerPhone,
-    kind: WHATSAPP_KIND_PAYMENT_ORDER,
-    title,
-    body,
-  })
 }
 
 export type PaymentReviewOutcome =
@@ -415,30 +388,4 @@ export async function reviewPaymentReceipt(input: {
     )}). Falta ver la acreditación del depósito en tu cuenta; te avisamos al confirmarse (si en 24 h no aparece, la orden pasa a revisión manual).`
   )
   return { review: "verifying_deposit" }
-}
-
-/**
- * Aviso de DEPÓSITO CONFIRMADO: campana al creador («Cobro confirmado») y
- * WhatsApp directo al pagador. Lo comparten el chequeo inmediato y el
- * verificador en background.
- */
-export function notifyDepositConfirmed(order: PaymentOrder): void {
-  const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
-  const deposito = order.mpDepositAt
-    ? ` acreditado el ${new Date(order.mpDepositAt).toLocaleString("es-MX")}`
-    : ""
-  notifyCreator(
-    order,
-    "Cobro confirmado por depósito",
-    `El pagador${pagador} de tu orden ${order.code} pagó ${money(
-      order.amountMxn
-    )}: el comprobante pasó la validación automática (concepto e importe) y el depósito quedó acreditado en tu cuenta${deposito}.`
-  )
-  notifyPayer(
-    order,
-    "Pago confirmado",
-    `Recibimos tu comprobante y confirmamos el depósito de ${money(
-      order.amountMxn
-    )} con el código ${order.code} en la cuenta. Tu pago quedó validado. Gracias.`
-  )
 }

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 
 import { isTransferConceptCodeShape } from "@/server/transferencias/concepto"
 import { conceptoImpresoCoincide } from "@/server/asistente/renovacion"
+import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
 import {
   extraerComprobanteDeArchivo,
   receiptScanConfigured,
@@ -111,15 +112,59 @@ function findPaymentOrderCodeTokens(text: string): string[] {
 }
 
 /**
+ * ¿El creador de la orden tiene credencial consultable para la cuenta
+ * receptora (propia del distribuidor o la de plataforma para el admin)? Con
+ * ella el depósito se confirma solo (carril `pending` del verificador) y las
+ * instrucciones al pagador dejan de pedir comprobante. Caché en memoria con
+ * TTL: el turno de texto corre por cada mensaje y la resolución consulta
+ * BD — 5 min de gracia para altas/bajas de token es más que suficiente.
+ */
+const CREDENTIAL_CACHE_TTL_MS = 5 * 60_000
+const credentialCache = new Map<string, { auto: boolean; at: number }>()
+
+async function creadorAutoconfirma(userId: string): Promise<boolean> {
+  const now = Date.now()
+  if (credentialCache.size > 500) {
+    for (const [key, entry] of credentialCache) {
+      if (now - entry.at > CREDENTIAL_CACHE_TTL_MS) credentialCache.delete(key)
+    }
+  }
+  const cached = credentialCache.get(userId)
+  if (cached && now - cached.at < CREDENTIAL_CACHE_TTL_MS) return cached.auto
+  const auto =
+    (await resolvePaymentOrderDepositToken(userId).catch(() => null)) !== null
+  credentialCache.set(userId, { auto, at: now })
+  return auto
+}
+
+/**
  * Mensaje 1 de la respuesta: las INSTRUCCIONES del pago. Texto
  * DETERMINISTA (siempre idéntico, plantilla fija): sentencia del pago con
  * el código como concepto + los datos de la orden (importe, referencia,
  * banco, CLABE y titular) — el CLABE se imprime aquí para que el pagador
  * sepa a qué refiere el número que llega suelto en el tercer mensaje.
+ *
+ * Con credencial consultable del creador el comprobante deja de pedirse:
+ * el depósito se confirma solo (importe exacto + ventana con coincidencia
+ * única) y el aviso llega por este chat; enviarlo queda como opción que
+ * agiliza los casos con montos repetidos (el código impreso desambigua).
+ * La promesa de aviso PERSONAL exige el teléfono ligado (`payerPhone`): el
+ * flujo por monto de spei.link viaja sin código y NO liga el teléfono, así
+ * que ahí se promete la confirmación automática de la orden pero se pide
+ * el código como mensaje para poder avisar — prometer el aviso sin
+ * teléfono sería una promesa que el sistema no puede cumplir.
  */
-function instruccionesDePago(order: PaymentOrder): string {
+function instruccionesDePago(order: PaymentOrder, autoConfirma: boolean): string {
+  let sentencia: string
+  if (!autoConfirma) {
+    sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
+  } else if (order.payerPhone !== null) {
+    sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago*. Cuando el depósito se acredite en la cuenta te avisaremos automáticamente por este chat: no necesitas enviar comprobante (si lo envías, se valida igual y agiliza los casos con montos repetidos).`
+  } else {
+    sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago*. La orden se confirma sola cuando el depósito se acredite en la cuenta: no necesitas enviar comprobante. Para recibir la confirmación aquí mismo, envía el CÓDIGO de pago como mensaje (antes o después de pagar).`
+  }
   return [
-    `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`,
+    sentencia,
     "",
     `Importe: ${money(order.amountMxn)}`,
     order.note ? `Referencia: ${order.note}` : "",
@@ -137,9 +182,13 @@ function instruccionesDePago(order: PaymentOrder): string {
  * sin nada más para que el pagador los copie/pegue con un toque en su app
  * bancaria.
  */
-function respuestaConCodigo(order: PaymentOrder, inboundText: string): PaymentOrderTurnResult {
+function respuestaConCodigo(
+  order: PaymentOrder,
+  inboundText: string,
+  autoConfirma: boolean
+): PaymentOrderTurnResult {
   return {
-    text: instruccionesDePago(order),
+    text: instruccionesDePago(order, autoConfirma),
     additionalTexts: [order.code, order.bank.account],
     orderId: order.id,
     inboundText,
@@ -271,7 +320,11 @@ export async function maybeHandlePaymentOrderText(input: {
         mediaMime: null,
       }
     }
-    return respuestaConCodigo(order, input.text)
+    return respuestaConCodigo(
+      order,
+      input.text,
+      await creadorAutoconfirma(order.creatorUserId)
+    )
   }
 
   // Replay honesto: el código corresponde a una orden YA resuelta (evita
@@ -391,7 +444,11 @@ export async function maybeHandlePaymentOrderText(input: {
     code: candidata.code,
     monto,
   })
-  return respuestaConCodigo(candidata, input.text)
+  return respuestaConCodigo(
+    candidata,
+    input.text,
+    await creadorAutoconfirma(candidata.creatorUserId)
+  )
 }
 
 /** Veredicto del chat para el resultado de la revisión. */
