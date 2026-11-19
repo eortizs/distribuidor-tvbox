@@ -1,7 +1,6 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { usePathname } from "next/navigation"
 
 import { cn } from "cn"
 import { Spinner } from "@/components/ui/spinner"
@@ -16,19 +15,8 @@ const MAX_VISIBLE_MS = 5000
 
 export function AppSplash() {
   const [phase, setPhase] = useState<"visible" | "leaving" | "hidden">("visible")
-  const pathname = usePathname()
-
-  // Landing pública del dominio corto (/short): el render NO depende de la
-  // ruta (el prerender estático no conoce el pathname — branchear aquí
-  // rompería la hidratación); la página la oculta por CSS y el EFECTO es el
-  // que ignora la landing. Con deps [isLanding], una navegación client-side
-  // desde la landing re-corre el ciclo de vida y retira el overlay: jamás
-  // queda atascado sobre el panel.
-  const isLanding = pathname === "/short"
 
   useEffect(() => {
-    if (isLanding) return
-
     const startedAt = performance.now()
     let timer: ReturnType<typeof setTimeout> | undefined
     let leaving = false
@@ -65,7 +53,7 @@ export function AppSplash() {
       clearTimeout(failsafe)
       if (timer) clearTimeout(timer)
     }
-  }, [isLanding])
+  }, [])
 
   if (phase === "hidden") return null
 

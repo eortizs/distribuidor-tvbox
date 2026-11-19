@@ -224,11 +224,6 @@ function ChatBubble({
 export default function ShortLandingPage() {
   return (
     <div className="min-h-svh bg-[#f8fafc] font-sans text-[#0f172a]">
-      {/* Defensa anti-flash: AppSplash ni siquiera se renderiza en /short
-          (usePathname), pero el CSS cubre el caso de un pathname mal
-          reportado durante la reescritura del proxy antes de hidratar. */}
-      <style>{"[data-app-splash]{display:none!important}"}</style>
-
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
         <div className="mx-auto flex h-16 w-full max-w-[480px] items-center justify-between px-4">
           <Link
