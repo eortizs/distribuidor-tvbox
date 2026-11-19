@@ -19,6 +19,7 @@ import {
 import { requireUser } from "@/server/auth/guards"
 import { getProfile } from "@/server/auth/profile"
 import { findUserById } from "@/server/auth/users"
+import { getUserMpTokenStatus } from "@/server/mercadopago/tokens"
 
 export const instant = false
 
@@ -54,9 +55,11 @@ function Fact({
 
 export default async function ProfilePage() {
   const sessionUser = await requireUser()
-  const [profile, userRow] = await Promise.all([
+  const [profile, userRow, mpToken] = await Promise.all([
     getProfile(sessionUser.id),
     findUserById(sessionUser.id),
+    // Metadatos del token propio (jamás el token: es write-only).
+    getUserMpTokenStatus(sessionUser.id).catch(() => null),
   ])
   if (!profile) {
     redirect("/login")
@@ -116,6 +119,7 @@ export default async function ProfilePage() {
               bankName={account?.bankName ?? ""}
               bankHolder={account?.bankHolder ?? ""}
               bankClabe={account?.bankClabe ?? ""}
+              mpToken={mpToken}
             />
           </div>
         </TabsContent>

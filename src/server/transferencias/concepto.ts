@@ -583,6 +583,13 @@ export async function resolveConceptsForDeposits(input: {
   windowStartIso: string
   windowEndIso: string
   deposits: { id: string; atIso: string | null; amountMxn: number }[]
+  /**
+   * Acota los conceptos a los emitidos por ESTE comprador: el reporte de una
+   * credencial propia (distribuidor) solo casa depósitos de SU cuenta con
+   * SUS conceptos. Ausente = conceptos de todos los compradores (reporte de
+   * plataforma, cuenta única del admin).
+   */
+  buyerUserId?: string
 }): Promise<Map<string, DepositConceptMatch>> {
   const matches = new Map<string, DepositConceptMatch>()
   if (input.deposits.length === 0) return matches
@@ -614,8 +621,9 @@ export async function resolveConceptsForDeposits(input: {
        ) bound ON true
       WHERE c.status = 'consumed' AND c.consumed_at IS NOT NULL
         AND c.created_at <= $1::timestamptz
-        AND c.consumed_at >= $2::timestamptz`,
-    [createdBefore, consumedAfter]
+        AND c.consumed_at >= $2::timestamptz
+        AND ($3::uuid IS NULL OR c.buyer_user_id = $3::uuid)`,
+    [createdBefore, consumedAfter, input.buyerUserId ?? null]
   )
 
   const candidates: ConceptCandidate[] = result.rows.map((row) => {

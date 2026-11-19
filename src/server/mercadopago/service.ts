@@ -6,6 +6,7 @@ import {
   createClientRenewalNotice,
   createRenewalNotification,
 } from "@/server/notifications/service"
+import { isMpDepositClaimed } from "@/server/ligas-pago/repository"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
@@ -39,6 +40,14 @@ import { MercadoPagoError } from "./errors"
 
 export type MpOrderStatus =
   | "pending"
+  /**
+   * Comprobante validado por el escaneo, esperando la ACREDITACIÓN real del
+   * depósito en la cuenta del vendedor (misma fuente que el reporte SPEI).
+   * Solo transferencias: el verificador en background la confirma hacia
+   * `paid` cuando el depósito aparece, o la devuelve a `pending` (revisión
+   * manual) tras 24 h sin hallazgo.
+   */
+  | "verifying"
   | "paid"
   | "renewed"
   /** Abono de saldo aplicado a la cuenta (módulo «Abonar saldo»). */
@@ -124,6 +133,18 @@ export interface MpOrderRow {
    error: string | null
    renewed_at: string | null
    refunded_at: string | null
+   /** ID del pago de MP que confirmó el depósito (reserva exclusiva). */
+   mp_payment_id: number | null
+   /** Fecha de acreditación del depósito según MP. */
+   mp_deposit_at: string | null
+   /** Cuándo entró en verificación de depósito (base del tope de 24 h). */
+   verifying_since: string | null
+   /** Próximo sondeo programado del verificador (backoff). */
+   deposit_next_check_at: string | null
+   /** Sondeos sin hallazgo (elige el tramo de backoff). */
+   deposit_checks: number
+   /** true = ya se avisó el escalamiento a revisión manual (una sola vez). */
+   deposit_escalated_at: string | null
    /**
     * Tipo de saldo que acredita un abono (`months = 0`): tokens o cupones.
     * NULL en renovaciones y abonos legados (→ cupones).
@@ -470,6 +491,12 @@ function notifyClientRenewalDetached(
 /*                              Lectura de órdenes                             */
 /* -------------------------------------------------------------------------- */
 
+function isoOrNull(value: unknown): string | null {
+  return value === null || value === undefined
+    ? null
+    : new Date(value as string).toISOString()
+}
+
 function parseRow(row: Record<string, unknown>): MpOrderRow {
   return {
     id: String(row.id),
@@ -543,6 +570,15 @@ function parseRow(row: Record<string, unknown>): MpOrderRow {
       row.refunded_at === null || row.refunded_at === undefined
         ? null
         : new Date(row.refunded_at as string).toISOString(),
+    mp_payment_id:
+      row.mp_payment_id === null || row.mp_payment_id === undefined
+        ? null
+        : Number(row.mp_payment_id),
+    mp_deposit_at: isoOrNull(row.mp_deposit_at),
+    verifying_since: isoOrNull(row.verifying_since),
+    deposit_next_check_at: isoOrNull(row.deposit_next_check_at),
+    deposit_checks: Number(row.deposit_checks ?? 0),
+    deposit_escalated_at: isoOrNull(row.deposit_escalated_at),
     saldo_tipo:
       row.saldo_tipo === "tokens" || row.saldo_tipo === "cupones"
         ? row.saldo_tipo
@@ -2100,6 +2136,16 @@ async function debitDistributorForClientOrder(
 }
 
 /**
+ * Depósito de MP que confirmó la verificación (el verificador en background
+ * o el chequeo inmediato): se registra junto al claim hacia `paid` para la
+ * reserva exclusiva del ID (índice único parcial).
+ */
+interface TransferDepositEvidence {
+  mpPaymentId: number | null
+  mpDepositAt: string | null
+}
+
+/**
  * Aprobación de una transferencia de CLIENTE (`origin='wa_cliente'`): claim
  * hacia `paid` + débito del saldo del distribuidor en UNA transacción. Sin
  * saldo suficiente el claim se revierte (la orden sigue `pending` con el
@@ -2107,7 +2153,10 @@ async function debitDistributorForClientOrder(
  * y el cliente se entera de que su renovación llegará en breve; el admin
  * puede aprobarla a mano después con el mismo débito.
  */
-async function approveClientTransferOrder(order: MpOrderRow): Promise<MpOrderRow> {
+async function approveClientTransferOrder(
+  order: MpOrderRow,
+  deposit?: TransferDepositEvidence
+): Promise<MpOrderRow> {
   const buyerUserId = order.buyer_user_id as string
   // Costo interno al distribuidor: SIEMPRE el precio general del servidor —
   // el importe cobrado al cliente puede ser un precio especial de Detalles,
@@ -2117,10 +2166,33 @@ async function approveClientTransferOrder(order: MpOrderRow): Promise<MpOrderRow
   const tx = await pool.connect()
   try {
     await tx.query("BEGIN")
+    // Claim de depósito atómico y CRUZADO (ver comentario en
+    // `confirmPaymentOrderDeposit` de ligas-pago): advisory lock por ID de
+    // pago + re-verificación de reservas dentro del candado.
+    if (deposit && deposit.mpPaymentId !== null) {
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        String(deposit.mpPaymentId),
+      ])
+      if (
+        await isMpDepositClaimed(tx, String(deposit.mpPaymentId), {
+          mpOrderId: order.id,
+        })
+      ) {
+        throw new MercadoPagoError(
+          409,
+          "deposit_claim_lost",
+          "El depósito ya validó otra orden."
+        )
+      }
+    }
     const claim = await tx.query(
-      `UPDATE mp_orders SET status = 'paid', updated_at = now()
-        WHERE id = $1 AND status = 'pending'`,
-      [order.id]
+      `UPDATE mp_orders
+          SET status = 'paid', updated_at = now()
+              ${deposit ? ", mp_payment_id = $2, mp_deposit_at = $3::timestamptz" : ""}
+        WHERE id = $1 AND status IN ('pending','verifying')`,
+      deposit
+        ? [order.id, deposit.mpPaymentId, deposit.mpDepositAt]
+        : [order.id]
     )
     if ((claim.rowCount ?? 0) === 0) {
       throw new MercadoPagoError(
@@ -2140,13 +2212,35 @@ async function approveClientTransferOrder(order: MpOrderRow): Promise<MpOrderRow
   } catch (error) {
     await tx.query("ROLLBACK").catch(() => {})
     if (error instanceof MercadoPagoError && error.code === "saldo_insuficiente_distribuidor") {
-      // El ROLLBACK ya revirtió el claim: dejar el motivo visible en la fila
-      // `pending` para la revisión del admin.
+      // El ROLLBACK ya revirtió el claim: la orden vuelve a 'pending' con el
+      // motivo visible para la revisión del admin (desde 'verifying' también:
+      // sin saldo no hay nada que esperar al depósito — el dinero del cliente
+      // llegó, lo que falta es el crédito interno del distribuidor). La
+      // evidencia del depósito YA PRESENCIADO se RE-PERSISTE fuera de la
+      // transacción fallida (el ROLLBACK la borró): sin esto el depósito
+      // vuelve al pool libre y otra orden del mismo importe podría
+      // confirmarse con él — un solo dinero validando dos órdenes.
+      const degradeQuery = deposit
+        ? `UPDATE mp_orders
+              SET status = 'pending', error = $2, deposit_next_check_at = NULL,
+                  verifying_since = NULL, mp_payment_id = $3,
+                  mp_deposit_at = $4::timestamptz, updated_at = now()
+            WHERE id = $1 AND status IN ('pending','verifying')`
+        : `UPDATE mp_orders
+              SET status = 'pending', error = $2, deposit_next_check_at = NULL,
+                  verifying_since = NULL, updated_at = now()
+            WHERE id = $1 AND status IN ('pending','verifying')`
       await pool
         .query(
-          `UPDATE mp_orders SET error = $2, updated_at = now()
-            WHERE id = $1 AND status = 'pending'`,
-          [order.id, error.message.slice(0, 500)]
+          degradeQuery,
+          deposit
+            ? [
+                order.id,
+                error.message.slice(0, 500),
+                deposit.mpPaymentId,
+                deposit.mpDepositAt,
+              ]
+            : [order.id, error.message.slice(0, 500)]
         )
         .catch((updateError: unknown) =>
           logError("client_transfer_saldo_error", updateError)
@@ -2191,12 +2285,18 @@ async function approveClientTransferOrder(order: MpOrderRow): Promise<MpOrderRow
 }
 
 /**
- * Aprueba una transferencia pendiente: reclama la orden hacia `paid`
- * atómicamente y ejecuta la renovación con la clave determinista
- * `mp-<orderId>`. Con renovación fallida la orden queda `renewal_failed` y
- * el reintento admin existente la recupera sin volver a cobrar.
+ * Aprueba una transferencia pendiente o en verificación de depósito: reclama
+ * la orden hacia `paid` atómicamente y ejecuta la renovación con la clave
+ * determinista `mp-<orderId>`. Con renovación fallida la orden queda
+ * `renewal_failed` y el reintento admin existente la recupera sin volver a
+ * cobrar. `deposit` presente = la aprobación la dispara la CONFIRMACIÓN del
+ * depósito (verificador/chequeo inmediato): los IDs del pago de MP viajan en
+ * el claim (reserva exclusiva del depósito).
  */
-export async function approveTransferOrder(orderId: string): Promise<MpOrderRow> {
+export async function approveTransferOrder(
+  orderId: string,
+  deposit?: TransferDepositEvidence
+): Promise<MpOrderRow> {
   const order = await getMpOrder(orderId)
   if (!order) {
     throw new MercadoPagoError(404, "not_found", "La orden no existe.")
@@ -2208,24 +2308,64 @@ export async function approveTransferOrder(orderId: string): Promise<MpOrderRow>
       "La orden no es una transferencia bancaria."
     )
   }
-  if (order.status !== "pending") {
+  if (order.status !== "pending" && order.status !== "verifying") {
     throw new MercadoPagoError(
       409,
       "invalid_order_status",
-      `Solo se pueden aprobar transferencias pendientes (estado actual: ${order.status}).`
+      `Solo se pueden aprobar transferencias pendientes o en verificación de depósito (estado actual: ${order.status}).`
     )
   }
 
   // Orden de CLIENTE por WhatsApp: claim + débito interno en una transacción.
   if (order.origin === ORDER_ORIGIN_WA_CLIENTE && order.buyer_user_id) {
-    return approveClientTransferOrder(order)
+    return approveClientTransferOrder(order, deposit)
   }
 
-  const claim = await pool.query(
-    `UPDATE mp_orders SET status = 'paid', updated_at = now()
-      WHERE id = $1 AND status = 'pending'`,
-    [order.id]
-  )
+  // Claim de depósito atómico y CRUZADO: advisory lock por ID de pago +
+  // re-verificación de reservas dentro del candado (ver
+  // `confirmPaymentOrderDeposit` de ligas-pago — los índices únicos de cada
+  // tabla no se ven entre sí y los dos verificadores comparten la cuenta).
+  let claim: { rowCount: number | null }
+  if (deposit && deposit.mpPaymentId !== null) {
+    const tx = await pool.connect()
+    try {
+      await tx.query("BEGIN")
+      await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+        String(deposit.mpPaymentId),
+      ])
+      if (
+        await isMpDepositClaimed(tx, String(deposit.mpPaymentId), {
+          mpOrderId: order.id,
+        })
+      ) {
+        throw new MercadoPagoError(
+          409,
+          "deposit_claim_lost",
+          "El depósito ya validó otra orden."
+        )
+      }
+      claim = await tx.query(
+        `UPDATE mp_orders
+            SET status = 'paid', updated_at = now(),
+                mp_payment_id = $2, mp_deposit_at = $3::timestamptz
+          WHERE id = $1 AND status IN ('pending','verifying')`,
+        [order.id, deposit.mpPaymentId, deposit.mpDepositAt]
+      )
+      await tx.query("COMMIT")
+    } catch (error) {
+      await tx.query("ROLLBACK").catch(() => {})
+      throw error
+    } finally {
+      tx.release()
+    }
+  } else {
+    claim = await pool.query(
+      `UPDATE mp_orders
+          SET status = 'paid', updated_at = now()
+        WHERE id = $1 AND status IN ('pending','verifying')`,
+      [order.id]
+    )
+  }
   if (claim.rowCount === 0) {
     throw new MercadoPagoError(
       409,
@@ -2256,7 +2396,7 @@ export async function approveTransferOrder(orderId: string): Promise<MpOrderRow>
   return fresh ?? claimed
 }
 
-/** Rechaza una transferencia pendiente (comprobante inválido, sin pago, etc.). */
+/** Rechaza una transferencia pendiente o en verificación (sin pago, etc.). */
 export async function rejectTransferOrder(
   orderId: string,
   reason: string | null
@@ -2272,18 +2412,18 @@ export async function rejectTransferOrder(
       "La orden no es una transferencia bancaria."
     )
   }
-  if (order.status !== "pending") {
+  if (order.status !== "pending" && order.status !== "verifying") {
     throw new MercadoPagoError(
       409,
       "invalid_order_status",
-      `Solo se pueden rechazar transferencias pendientes (estado actual: ${order.status}).`
+      `Solo se pueden rechazar transferencias pendientes o en verificación de depósito (estado actual: ${order.status}).`
     )
   }
 
   const claim = await pool.query(
     `UPDATE mp_orders
-        SET status = 'rejected', error = $2, updated_at = now()
-      WHERE id = $1 AND status = 'pending'`,
+        SET status = 'rejected', error = $2, deposit_next_check_at = NULL, updated_at = now()
+      WHERE id = $1 AND status IN ('pending','verifying')`,
     [order.id, reason ? reason.slice(0, 500) : null]
   )
   if (claim.rowCount === 0) {
@@ -2320,6 +2460,128 @@ export async function rejectTransferOrder(
 
   const fresh = await getMpOrder(order.id)
   return fresh ?? order
+}
+
+/* -------------------------------------------------------------------------- */
+/*              Verificación de depósito de renovaciones por transferencia     */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * Espejo de la verificación de depósito de las ligas de pago
+ * (`src/server/ligas-pago/deposit-*`): tras un comprobante VÁLIDO, la orden
+ * pasa a 'verifying' y solo se aprueba cuando el DEPÓSITO aparece acreditado
+ * en la cuenta de Mercado Pago del vendedor — el token que consulta la
+ * cuenta lo resuelve `transfer-deposit.ts` (credencial propia del
+ * distribuidor que recibe el pago, o la de plataforma para los flujos que
+ * apuntan a la cuenta del `.env`). Sin credencial consultable la revisión
+ * auto-aprueba como siempre (nunca se bloquea una renovación por falta de
+ * credencial). El chequeo INMEDIATO corre dentro del turno que aprueba el
+ * comprobante; el VERIFICADOR en background (`renewal-deposit-verifier.ts`)
+ * sondea la cola con backoff y tras 24 h sin hallazgo devuelve la orden a
+ * 'pending' (revisión manual del admin, el flujo de siempre) avisando una
+ * sola vez.
+ */
+
+/** Escala a revisión manual tras esperar esto sin ver el depósito. */
+export const TRANSFER_DEPOSIT_ESCALATE_AFTER_MS = 24 * 60 * 60_000
+
+/** Sondeos en falta (infraestructura o credencial ausente): reprogra a esto. */
+export const TRANSFER_DEPOSIT_NO_CREDENTIAL_DELAY_MS = 15 * 60_000
+
+/** Backoff por intentos acumulados sin hallazgo: 2 min ×3, 5 min ×6, 15 min+. */
+export function transferDepositNextDelayMs(checks: number): number {
+  if (checks < 3) return 2 * 60_000
+  if (checks < 9) return 5 * 60_000
+  return 15 * 60_000
+}
+
+/**
+ * Claim atómico `pending → verifying` tras un comprobante válido: fija el
+ * inicio de la verificación (base del tope de 24 h) y programa el primer
+ * sondeo del verificador con el primer tramo de backoff — el chequeo
+ * inmediato ya corre dentro del turno que aprueba el comprobante; sondear
+ * de nuevo al instante duplicaría esa consulta y podría ganar la carrera
+ * contra él (avisos contradictorios).
+ * Null = otro actor ya resolvió la orden.
+ */
+export async function markTransferOrderVerifying(
+  orderId: string
+): Promise<MpOrderRow | null> {
+  const result = await pool.query(
+    `UPDATE mp_orders
+        SET status = 'verifying', verifying_since = now(),
+            deposit_next_check_at = now() + interval '2 minutes',
+            deposit_checks = 0, deposit_escalated_at = NULL, updated_at = now()
+      WHERE id = $1 AND method = 'transferencia' AND status = 'pending'
+      RETURNING id`,
+    [orderId]
+  )
+  if ((result.rowCount ?? 0) === 0) return null
+  return getMpOrder(orderId)
+}
+
+/**
+ * Registra el resultado de un sondeo sin hallazgo: incrementa el contador
+ * (elige el tramo de backoff) y programa el siguiente intento. Solo toca
+ * órdenes aún en 'verifying'.
+ */
+export async function saveTransferOrderDepositCheck(input: {
+  orderId: string
+  checks: number
+  nextCheckAt: Date
+}): Promise<void> {
+  await pool.query(
+    `UPDATE mp_orders
+        SET deposit_checks = $2, deposit_next_check_at = $3, updated_at = now()
+      WHERE id = $1 AND status = 'verifying'`,
+    [input.orderId, input.checks, input.nextCheckAt]
+  )
+}
+
+/**
+ * Escalamiento una sola vez tras el tope de espera: la orden VUELVE a
+ * 'pending' (revisión manual del admin, el flujo de siempre: aparece en
+ * «Transferencias por revisar» con su comprobante validado) y queda fuera de
+ * la cola de sondeo. Devuelve true solo para el primer llamador (los avisos
+ * salen una vez).
+ */
+export async function markTransferDepositEscalated(orderId: string): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE mp_orders
+        SET status = 'pending',
+            deposit_escalated_at = now(),
+            deposit_next_check_at = NULL,
+            verifying_since = NULL,
+            error = 'Comprobante válido sin depósito acreditado tras 24 h de verificación: revisión manual.',
+            updated_at = now()
+      WHERE id = $1 AND method = 'transferencia'
+        AND status = 'verifying' AND deposit_escalated_at IS NULL
+      RETURNING id`,
+    [orderId]
+  )
+  return (result.rowCount ?? 0) > 0
+}
+
+/**
+ * Órdenes de transferencia en 'verifying' con sondeo vencido y sin escalar
+ * (la cola del verificador), la más atrasada primero, con tope por tick.
+ * Sin filtro de credencial en SQL: la resolución por orden (credencial
+ * propia del vendedor o plataforma) vive en el verificador — un token
+ * revocado entre colas no debe sacar la orden del ciclo.
+ */
+export async function listDueVerifyingTransferOrders(
+  limit = 4
+): Promise<MpOrderRow[]> {
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 20)
+  const result = await pool.query(
+    `SELECT * FROM mp_orders
+      WHERE method = 'transferencia' AND status = 'verifying'
+        AND deposit_escalated_at IS NULL
+        AND deposit_next_check_at IS NOT NULL AND deposit_next_check_at <= now()
+      ORDER BY deposit_next_check_at ASC LIMIT $1`,
+    [capped]
+  )
+  return result.rows.map((row) => parseRow(row as Record<string, unknown>))
 }
 
 /* -------------------------------------------------------------------------- */

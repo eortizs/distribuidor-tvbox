@@ -47,7 +47,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS saldo_movimientos_order_uidx
 ALTER TABLE mp_orders DROP CONSTRAINT IF EXISTS mp_orders_status_check;
 
 ALTER TABLE mp_orders ADD CONSTRAINT mp_orders_status_check CHECK (status IN (
-  'pending', 'paid', 'renewed', 'applied',
+  'pending', 'verifying', 'paid', 'renewed', 'applied',
   'renewal_failed', 'rejected', 'cancelled',
   'refunding', 'refunded'
 ));

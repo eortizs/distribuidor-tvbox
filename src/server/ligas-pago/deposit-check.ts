@@ -1,8 +1,10 @@
 import { findDepositsForPaymentOrderWindow } from "@/server/mercadopago/spei"
+import { markUserMpTokenInvalid } from "@/server/mercadopago/tokens"
+import { MercadoPagoError } from "@/server/mercadopago/errors"
 
 import {
+  findReservedMpPaymentIds,
   confirmPaymentOrderDeposit,
-  findPaymentOrdersByMpPaymentIds,
   type PaymentOrder,
 } from "./repository"
 
@@ -18,12 +20,15 @@ import {
  * prueba que el dinero llegó. El ID del pago de MP queda RESERVADO en
  * exclusiva por orden (índice único parcial sobre mp_payment_id): un
  * depósito solo valida una orden y dos verificaciones concurrentes no pueden
- * aprobarse con el mismo pago.
+ * aprobarse con el mismo pago. La reserva es CRUZADA entre flujos
+ * (`findReservedMpPaymentIds`): ligas de pago y renovaciones comparten la
+ * misma cuenta MP y el mismo feed de depósitos.
  *
- * ALCANCE: solo órdenes de creadores ADMIN (gate en review.ts +
- * listDueVerifyingOrders) — el pagador de una orden de distribuidor paga a
- * la CLABE del snapshot del creador, una cuenta que el token de la
- * plataforma no ve; su verificación es manual por diseño.
+ * El TOKEN de consulta lo resuelve el llamador
+ * (`resolvePaymentOrderDepositToken`): credencial propia del creador o la de
+ * plataforma para el admin. Con 401 el token propio se marca inválido (el
+ * perfil pide re-registrarlo) y el verificador degrada al escalamiento por
+ * edad; jamás se auto-aprueba sin depósito visible.
  *
  * Es la pieza compartida del chequeo INMEDIATO (al aprobarse el comprobante,
  * dentro del turno de WhatsApp) y del VERIFICADOR en background
@@ -40,11 +45,11 @@ function amountsEqualCents(a: number, b: number): boolean {
 /**
  * Busca el depósito de la orden y lo reclama: consulta MP en la ventana de
  * la orden, filtra importe exacto (a centavos), descarta IDs ya reservados
- * por OTRAS órdenes (el índice único es la última guarda; este filtro evita
- * intentos inútiles) y reclama el más antiguo (`FIFO`: si el pagador pagó
- * dos veces, cualquiera de los dos depósitos valida). Devuelve la orden ya
- * `paid`, o null si aún no hay depósito, el claim se perfeccionó para otro
- * actor o la orden dejó de estar en verificación.
+ * por OTRAS órdenes de CUALQUIER flujo (el índice único es la última guarda;
+ * este filtro evita intentos inútiles) y reclama el más antiguo (`FIFO`: si
+ * el pagador pagó dos veces, cualquiera de los dos depósitos valida).
+ * Devuelve la orden ya `paid`, o null si aún no hay depósito, el claim se
+ * perfeccionó para otro actor o la orden dejó de estar en verificación.
  */
 export async function tryConfirmOrderDeposit(input: {
   order: PaymentOrder
@@ -52,6 +57,8 @@ export async function tryConfirmOrderDeposit(input: {
   budgetMs?: number
   /** Timeout por página propio (el chequeo inmediato usa uno corto). */
   pageTimeoutMs?: number
+  /** Token de la cuenta receptora (credencial propia o plataforma). */
+  accessToken: string
 }): Promise<PaymentOrder | null> {
   const createdMs = Date.parse(input.order.createdAt)
   const beginIso = new Date(
@@ -59,12 +66,24 @@ export async function tryConfirmOrderDeposit(input: {
   ).toISOString()
   const endIso = new Date().toISOString()
 
-  const deposits = await findDepositsForPaymentOrderWindow({
-    beginIso,
-    endIso,
-    budgetMs: input.budgetMs,
-    pageTimeoutMs: input.pageTimeoutMs,
-  })
+  let deposits: Awaited<ReturnType<typeof findDepositsForPaymentOrderWindow>>
+  try {
+    deposits = await findDepositsForPaymentOrderWindow({
+      beginIso,
+      endIso,
+      budgetMs: input.budgetMs,
+      pageTimeoutMs: input.pageTimeoutMs,
+      accessToken: input.accessToken,
+    })
+  } catch (error) {
+    if (
+      error instanceof MercadoPagoError &&
+      (error.status === 401 || error.status === 403)
+    ) {
+      await markUserMpTokenInvalid(input.order.creatorUserId)
+    }
+    throw error
+  }
 
   const candidates = deposits
     .filter((deposit) => deposit.id.length > 0)
@@ -76,9 +95,9 @@ export async function tryConfirmOrderDeposit(input: {
     })
   if (candidates.length === 0) return null
 
-  const reserved = await findPaymentOrdersByMpPaymentIds(
+  const reserved = await findReservedMpPaymentIds(
     candidates.map((deposit) => deposit.id)
-  ).catch(() => new Map<string, string>())
+  ).catch(() => new Set<string>(candidates.map((deposit) => deposit.id)))
   const free = candidates.filter((deposit) => !reserved.has(deposit.id))
   if (free.length === 0) return null
 

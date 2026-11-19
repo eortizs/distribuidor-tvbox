@@ -444,6 +444,49 @@ export function createAdminTransferRejectedNotification(
     .catch((error: unknown) => logError("create_admin_transfer", error))
 }
 
+export interface AdminTransferEscalatedNotificationInput {
+  /** Orden de transferencia que volvió a `pending` tras 24 h sin depósito. */
+  orderId: string
+  /** Cliente FlujoTV que se quería renovar. */
+  userName: string
+}
+
+/**
+ * Aviso a cada administrador de una orden que ESCALÓ de la verificación de
+ * depósito: el comprobante SÍ pasó la validación automática, pero el
+ * depósito no apareció acreditado en la cuenta receptora tras 24 h — la
+ * orden volvió a 'pending' en «Transferencias por revisar» con su
+ * comprobante validado, lista para la decisión manual (aplicar sabiendo que
+ * el dinero no se vio acreditado, o rechazar). Mismo kind de cola
+ * (`transfer_rejected`, sin kind nuevo) y mismo dedup por (user, order).
+ * Nunca lanza.
+ */
+export function createAdminTransferEscalatedNotification(
+  input: AdminTransferEscalatedNotificationInput
+): void {
+  const userName = input.userName.trim()
+  if (!userName || !input.orderId) return
+
+  void pool
+    .query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin'`)
+    .then((result) =>
+      Promise.all(
+        result.rows.map((row) =>
+          insertNotification({
+            userId: String(row.id),
+            kind: "transfer_rejected",
+            title: "Transferencia por revisar",
+            body: `El comprobante para renovar a ${userName} pasó la validación automática, pero el depósito no apareció acreditado en la cuenta receptora tras 24 h de verificación. Quedó en revisión manual. Revísala en Transferencias por revisar.`,
+            userName,
+            expiresAt: null,
+            orderId: input.orderId,
+          })
+        )
+      )
+    )
+    .catch((error: unknown) => logError("create_admin_transfer_escalated", error))
+}
+
 export interface AlertNotificationInput {
   userId: string
   kind: Extract<NotificationKind, "alert_hit" | "reminder">

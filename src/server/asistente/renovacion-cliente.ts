@@ -539,6 +539,13 @@ function clientTextForReviewOutcome(
       "El pago pasó la verificación (fecha, concepto, importe y beneficiario). Tu renovación se está aplicando: te aviso por este chat cuando quede lista (suele tardar unos minutos).",
     ].join("\n")
   }
+  if (review.review === "verifying_deposit") {
+    return [
+      `Recibí tu comprobante para *${userName}* (${money(amount)}).`,
+      "",
+      "El pago pasó la verificación. Falta confirmar la acreditación del depósito en la cuenta de tu distribuidor (suele llegar en minutos); en cuanto acredite, tu renovación se aplica sola y te aviso por este chat.",
+    ].join("\n")
+  }
   if (review.review === "auto_rejected") {
     const reasons = review.scan?.reasons ?? []
     return [
@@ -829,6 +836,12 @@ export async function maybeHandleClientRenewalReceipt(input: {
       ...(context.holderName !== null
         ? { holderName: context.holderName }
         : {}),
+      // Verificación de depósito: cliente de distribuidor → el dinero va a
+      // SU cuenta (credencial propia); cliente del admin → la del env
+      // (plataforma).
+      deposit: {
+        sellerUserId: context.isDistributorClient ? context.buyerUserId : null,
+      },
     })
 
     logEvent("cliente.renovar_receipt_review", {

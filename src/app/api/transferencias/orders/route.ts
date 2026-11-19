@@ -249,6 +249,9 @@ export async function POST(request: Request) {
         userName,
         amountMxn: result.amount,
         conceptCode: concept.code,
+        // Verificación de depósito: el dinero de este flujo va a la cuenta
+        // del env (plataforma) — el token de plataforma la consulta.
+        deposit: {},
       })
     } else {
       review = { review: "manual" as const, status: "pending" as const, scan: null }

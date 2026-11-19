@@ -8,6 +8,7 @@
 
 export type PaymentOrderStatus =
   | "pending"
+  | "verifying"
   | "paid"
   | "renewed"
   /** Abono de saldo aplicado a la cuenta (módulo «Abonar saldo»). */
@@ -206,7 +207,11 @@ export async function createTransferConcept(params: {
 }
 
 /** Resultado de la revisión automática del comprobante al crear la orden. */
-export type TransferReview = "auto_approved" | "auto_rejected" | "manual"
+export type TransferReview =
+  | "auto_approved"
+  | "verifying_deposit"
+  | "auto_rejected"
+  | "manual"
 
 /**
  * Paso 2 de la transferencia: crea la orden con el ticket adjunto y el
@@ -214,8 +219,11 @@ export type TransferReview = "auto_approved" | "auto_rejected" | "manual"
  * en el mes). El servidor escanea el comprobante con el LLM configurado
  * (RECEIPT_SCAN_MODEL) y verifica fecha del mes, concepto con el código de
  * pago y el usuario, importe y beneficiario. `auto_approved` lanza la
- * renovación sola; `auto_rejected` deja la orden `pending` para revisión
- * manual del admin y devuelve los motivos; `manual` es el flujo de siempre.
+ * renovación sola; `verifying_deposit` dejó la orden esperando la
+ * ACREDITACIÓN del depósito en la cuenta del vendedor (el sondeo/aviso
+ * continúa; se aprueba sola al acreditar); `auto_rejected` deja la orden
+ * `pending` para revisión manual del admin y devuelve los motivos; `manual`
+ * es el flujo de siempre.
  */
 export async function createTransferOrder(params: {
   userName: string

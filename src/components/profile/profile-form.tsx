@@ -1,10 +1,11 @@
 "use client"
 
-import { useActionState, useEffect } from "react"
+import { useActionState, useEffect, useRef, useTransition } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
 import {
+  clearMpToken,
   updateBankingAction,
   updateProfileAction,
   type UpdateProfileState,
@@ -18,10 +19,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
+import { Badge } from "@/components/reui/badge"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 
 const initialState: UpdateProfileState = { error: null, success: null }
+
+export interface MpTokenStatus {
+  nickname: string | null
+  last4: string
+  status: "active" | "invalid"
+  validatedAt: string | null
+}
 
 function formatClabe(value: string): string {
   return value
@@ -31,18 +40,27 @@ function formatClabe(value: string): string {
     .trim()
 }
 
+/** Fecha CDMX determinista (misma técnica de notas): sin hydration drift. */
+const tokenDateFormat = new Intl.DateTimeFormat("es-MX", {
+  timeZone: "America/Mexico_City",
+  dateStyle: "medium",
+  timeStyle: "short",
+})
+
 export function ProfileForm({
   fullName,
   whatsappPhone,
   bankName,
   bankHolder,
   bankClabe,
+  mpToken,
 }: {
   fullName: string
   whatsappPhone: string
   bankName: string
   bankHolder: string
   bankClabe: string
+  mpToken: MpTokenStatus | null
 }) {
   const router = useRouter()
   const [state, formAction, isPending] = useActionState(
@@ -53,6 +71,25 @@ export function ProfileForm({
     updateBankingAction,
     initialState
   )
+  // WRITE-ONLY: el token nunca se pre-llena; tras guardar se limpia el campo
+  // para que no quede la credencial escrita en el formulario.
+  const mpTokenRef = useRef<HTMLInputElement>(null)
+  // «Quitar token»: acción de servidor llamada en transacción (el botón vive
+  // dentro del formulario de datos bancarios y un <form> anidado es HTML
+  // inválido).
+  const [isClearPending, startClearTransition] = useTransition()
+
+  function handleQuitarToken(): void {
+    startClearTransition(async () => {
+      const result = await clearMpToken()
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+      toast.success(result.success)
+      router.refresh()
+    })
+  }
 
   useEffect(() => {
     if (state.success) {
@@ -64,6 +101,7 @@ export function ProfileForm({
   useEffect(() => {
     if (bankingState.success) {
       toast.success(bankingState.success)
+      if (mpTokenRef.current) mpTokenRef.current.value = ""
       router.refresh()
     }
   }, [bankingState.success, router])
@@ -127,7 +165,8 @@ export function ProfileForm({
         <CardHeader className="pb-3">
           <CardTitle className="text-base">Datos bancarios</CardTitle>
           <CardDescription className="text-sm">
-            Cuenta donde recibes tus pagos por transferencia.
+            Cuenta donde recibes tus pagos por transferencia, y tu token de
+            Mercado Pago para verificar depósitos automáticamente.
           </CardDescription>
         </CardHeader>
         <form action={bankingFormAction} className="flex flex-col">
@@ -173,7 +212,57 @@ export function ProfileForm({
                 id="profile-bank-clabe-hint"
                 className="text-muted-foreground text-xs"
               >
-                18 dígitos; se agrupan automáticamente.
+                18 dígitos; se agrupan automáticamente. Si es la CLABE de tu
+                cuenta de Mercado Pago, tus clientes pueden depositarte
+                directamente en ella.
+              </p>
+            </div>
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label htmlFor="profile-mp-token">Token de Mercado Pago</Label>
+                {mpToken ? (
+                  <span className="flex items-center gap-2">
+                    <Badge
+                      variant={mpToken.status === "active" ? "default" : "destructive"}
+                      className="text-xs"
+                    >
+                      {mpToken.status === "active" ? "Vinculado" : "Inválido"}
+                    </Badge>
+                    <span className="text-muted-foreground text-xs">
+                      {mpToken.nickname ? `${mpToken.nickname} · ` : ""}
+                      ••••{mpToken.last4}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
+              <Input
+                id="profile-mp-token"
+                ref={mpTokenRef}
+                name="mpToken"
+                type="password"
+                defaultValue=""
+                maxLength={512}
+                autoComplete="off"
+                placeholder={mpToken ? "Reemplazar token…" : "APP_USR-…"}
+                aria-describedby="profile-mp-token-hint"
+              />
+              <p
+                id="profile-mp-token-hint"
+                className="text-muted-foreground text-xs"
+              >
+                Opcional. Access token de <strong>producción</strong> de TU
+                cuenta de Mercado Pago (Mercado Pago → Tus integraciones →
+                Credenciales de producción). Queda cifrado en el servidor y no
+                se vuelve a mostrar. Con tu token, tus clientes pueden
+                depositarte directamente a tu cuenta y el sistema verifica sus
+                pagos automáticamente (ligas de pago, renovaciones y Reporte
+                SPEI de tu cuenta).
+                {mpToken?.status === "invalid"
+                  ? " El token registrado fue rechazado por Mercado Pago: regístralo nuevamente."
+                  : ""}
+                {mpToken?.validatedAt
+                  ? ` Validado el ${tokenDateFormat.format(new Date(mpToken.validatedAt))}.`
+                  : ""}
               </p>
             </div>
             {bankingState.error ? (
@@ -182,7 +271,21 @@ export function ProfileForm({
               </p>
             ) : null}
           </CardContent>
-          <CardFooter className="pt-3">
+          <CardFooter className="flex flex-wrap items-center justify-between gap-2 pt-3">
+            {mpToken ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground"
+                onClick={handleQuitarToken}
+                disabled={isClearPending}
+              >
+                {isClearPending ? "Quitando…" : "Quitar token"}
+              </Button>
+            ) : (
+              <span />
+            )}
             <Button type="submit" size="sm" disabled={isBankingPending}>
               {isBankingPending ? "Guardando…" : "Guardar datos bancarios"}
             </Button>

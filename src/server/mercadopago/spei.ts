@@ -1,4 +1,4 @@
-import { mercadoPagoGatewayRequest } from "./client"
+import { mercadoPagoGatewayRequest, mercadoPagoRequestAs } from "./client"
 import { MercadoPagoError } from "./errors"
 import { resolveConceptsForDeposits } from "@/server/transferencias/concepto"
 import { findPaymentOrdersByMpPaymentIds } from "@/server/ligas-pago/repository"
@@ -263,6 +263,12 @@ async function searchAccreditedDeposits(input: {
   criteria?: "asc" | "desc"
   /** Timeout por página (el chequeo inmediato usa uno corto). */
   pageTimeoutMs?: number
+  /**
+   * Token EXPLÍCITO de la cuenta a consultar: la credencial propia de un
+   * distribuidor (tabla `user_mp_tokens`). Ausente → cuenta de plataforma
+   * (`MERCADOPAGO_ACCESS_TOKEN`), el comportamiento histórico.
+   */
+  accessToken?: string
 }): Promise<DepositSearch> {
   const criteria = input.criteria ?? "desc"
   const baseQuery = {
@@ -317,10 +323,20 @@ async function searchAccreditedDeposits(input: {
         break
       }
       rail.query.set("offset", String(page * PAGE_LIMIT))
-      const response = await mercadoPagoGatewayRequest<SearchPage>(
-        `/v1/payments/search?${rail.query.toString()}`,
-        { timeoutMs: input.pageTimeoutMs ?? PAGE_TIMEOUT_MS }
-      )
+      const requestInit = {
+        timeoutMs: input.pageTimeoutMs ?? PAGE_TIMEOUT_MS,
+      }
+      const response =
+        input.accessToken !== undefined
+          ? await mercadoPagoRequestAs<SearchPage>(
+              input.accessToken,
+              `/v1/payments/search?${rail.query.toString()}`,
+              requestInit
+            )
+          : await mercadoPagoGatewayRequest<SearchPage>(
+              `/v1/payments/search?${rail.query.toString()}`,
+              requestInit
+            )
       const results = Array.isArray(response.data?.results)
         ? response.data.results
         : []
@@ -370,6 +386,8 @@ export async function findDepositsForPaymentOrderWindow(input: {
   budgetMs?: number
   /** Timeout por página propio (el chequeo inmediato usa uno corto). */
   pageTimeoutMs?: number
+  /** Token explícito de la cuenta receptora (credencial propia del dueño). */
+  accessToken?: string
 }): Promise<SpeiDepositRow[]> {
   const { deposits } = await searchAccreditedDeposits({
     beginIso: input.beginIso,
@@ -378,6 +396,7 @@ export async function findDepositsForPaymentOrderWindow(input: {
     maxPagesPerRail: WINDOW_PAGE_MAX,
     criteria: "asc",
     pageTimeoutMs: input.pageTimeoutMs,
+    accessToken: input.accessToken,
   })
   return deposits
 }
@@ -392,7 +411,19 @@ export async function findDepositsForPaymentOrderWindow(input: {
  * hasta el tope defensivo, presupuesto compartido, dedupe por ID y orden
  * final por fecha desc.
  */
-export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport> {
+export async function listSpeiDepositsForDay(
+  day: string,
+  accessToken?: string,
+  options?: {
+    /**
+     * Acota la columna «Concepto» a los conceptos emitidos por ESTE
+     * comprador: en el reporte de una credencial propia (distribuidor) los
+     * depósitos de su cuenta solo casan con SUS conceptos de pago, nunca con
+     * los de otra cuenta (p. ej. los del admin).
+     */
+    conceptBuyerUserId?: string
+  }
+): Promise<SpeiDayReport> {
   if (!isValidSpeiDay(day)) {
     throw new MercadoPagoError(
       400,
@@ -407,6 +438,7 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
     endIso,
     budgetMs: QUERY_BUDGET_MS,
     maxPagesPerRail: PAGE_MAX,
+    accessToken,
   })
 
   // Columna «Concepto»: cruza cada depósito con los conceptos de pago
@@ -423,6 +455,7 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
           atIso: deposit.dateApproved,
           amountMxn: deposit.amountMxn,
         })),
+        buyerUserId: options?.conceptBuyerUserId,
       })
       // El link por ID de pago de MP es determinista y GANA sobre la
       // inferencia por ventana de transfer_concepts.
@@ -458,6 +491,7 @@ export async function listSpeiDepositsForDay(day: string): Promise<SpeiDayReport
 
   log("spei.report", {
     day,
+    own_token: accessToken !== undefined,
     count: deposits.length,
     total_mxn: totalMxn,
     spei: deposits.filter((deposit) => deposit.rail === "spei").length,

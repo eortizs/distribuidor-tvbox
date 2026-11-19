@@ -15,7 +15,13 @@ import {
   approveTransferOrder,
   findRecentRenewedOrder,
   getMpOrder,
+  markTransferOrderVerifying,
+  ORDER_ORIGIN_WA_CLIENTE,
 } from "@/server/mercadopago/service"
+import {
+  resolveRenewalDepositTokenForSeller,
+  tryConfirmRenewalDeposit,
+} from "@/server/mercadopago/transfer-deposit"
 import {
   evaluarCondiciones,
   type CondicionEvaluada,
@@ -259,8 +265,19 @@ export interface ScanResult {
 
 export type ReviewOutcome =
   | { review: "auto_approved"; status: "processing"; scan: ScanResult }
+  | {
+      review: "verifying_deposit"
+      status: "verifying"
+      scan: ScanResult
+    }
   | { review: "auto_rejected"; status: "pending"; scan: ScanResult }
   | { review: "manual"; status: "pending"; scan: ScanResult | null }
+
+/** Presupuesto del chequeo inmediato de depósito dentro del turno/ruta. */
+const IMMEDIATE_DEPOSIT_BUDGET_MS = 8_000
+
+/** Timeout por página del chequeo inmediato (acota el peor caso del turno). */
+const IMMEDIATE_PAGE_TIMEOUT_MS = 5_000
 
 function logScan(
   orderId: string,
@@ -355,6 +372,19 @@ export async function reviewTransferReceipt(input: {
    * Ausente → `TRANSFER_HOLDER` del env, el comportamiento de siempre.
    */
   holderName?: string
+  /**
+   * VERIFICACIÓN DE DEPÓSITO (opt-in por flujo): presente → tras un
+   * comprobante válido la orden pasa a 'verifying' y solo se aprueba cuando
+   * el depósito acredita en la cuenta receptora (misma fuente que el
+   * reporte SPEI; el chequeo inmediato corre aquí y el verificador en
+   * background sondea con backoff, con escalamiento a revisión manual tras
+   * 24 h). `sellerUserId` = usuario que RECIBE el dinero (el distribuidor de
+   * un cliente por WhatsApp; su credencial propia consulta su cuenta);
+   * ausente/null = cuenta del `.env` → token de plataforma. Sin credencial
+   * consultable el flujo auto-aprueba como siempre. Los flujos que NO lo
+   * pasan (p. ej. el abono de saldo) conservan la aprobación inmediata.
+   */
+  deposit?: { sellerUserId?: string | null }
 }): Promise<ReviewOutcome> {
   const holderName = input.holderName ?? transferBankDataOrNull()?.holder ?? ""
   if (!receiptScanConfigured() || holderName.length === 0) {
@@ -546,6 +576,91 @@ export async function reviewTransferReceipt(input: {
   }
   logScan(input.orderId, { outcome: "approved" })
 
+  // VERIFICACIÓN DE DEPÓSITO (opt-in): con credencial consultable para la
+  // cuenta receptora, el comprobante válido NO aprueba por sí solo — la
+  // orden pasa a 'verifying' y se confirma cuando el depósito acredita en la
+  // cuenta del vendedor (chequeo inmediato aquí; verificador en background
+  // con backoff y escalamiento a manual tras 24 h). Sin credencial se
+  // auto-aprueba como siempre.
+  if (input.deposit) {
+    const accessToken = await resolveRenewalDepositTokenForSeller(
+      input.deposit.sellerUserId ?? null
+    )
+    if (accessToken) {
+      let verifying = await markTransferOrderVerifying(input.orderId).catch(
+        () => null
+      )
+      if (verifying === null) {
+        // El claim no se perfeccionó: pérdida de carrera (la orden ya está en
+        // otro estado) o fallo transitorio de BD. Re-leer y decidir con el
+        // estado REAL — JAMÁS aprobar sin evidencia de depósito por este
+        // camino (el fallthrough al aprobado inmediato de abajo solo es
+        // legítimo sin credencial).
+        const current = await getMpOrder(input.orderId).catch(() => null)
+        if (current?.status === "verifying") {
+          // Ya en verificación (re-revisión de una orden verifying o revisor
+          // concurrente): continuar el chequeo con esa fila.
+          verifying = current
+        } else if (current?.status === "pending") {
+          // Claim fallido transitorio: UN reintento; si vuelve a fallar, la
+          // orden queda `pending` para revisión manual.
+          verifying = await markTransferOrderVerifying(input.orderId).catch(
+            () => null
+          )
+        } else if (current?.status === "paid") {
+          // Otro actor la llevó a `paid` durante el escaneo: la renovación ya
+          // corre — responder éxito real.
+          return { review: "auto_approved", status: "processing", scan }
+        } else {
+          // Rechazada/resuelta por el admin durante el escaneo (o sin fila):
+          // responder el veredicto manual, nunca un éxito falso.
+          logScan(input.orderId, {
+            outcome: "verifying_claim_resolved_elsewhere",
+            status: current?.status ?? null,
+          })
+          return { review: "manual", status: "pending", scan }
+        }
+        if (verifying === null) {
+          // BD caída dos veces seguidas: revisión manual de siempre.
+          logScan(input.orderId, { outcome: "verifying_claim_unavailable" })
+          return { review: "manual", status: "pending", scan }
+        }
+      }
+      const approved = await tryConfirmRenewalDeposit({
+        order: verifying,
+        accessToken,
+        budgetMs: IMMEDIATE_DEPOSIT_BUDGET_MS,
+        pageTimeoutMs: IMMEDIATE_PAGE_TIMEOUT_MS,
+      }).catch((error: unknown) => {
+        logScan(input.orderId, {
+          outcome: "deposit_check_error",
+          error: error instanceof Error ? error.message : String(error),
+        })
+        return null
+      })
+      if (approved) {
+        logScan(input.orderId, {
+          outcome: "deposit_confirmed_inmediato",
+          mp_payment_id: approved.mp_payment_id,
+        })
+        return { review: "auto_approved", status: "processing", scan }
+      }
+      // Carrera con otro actor (verificador/admin/replay): responder el
+      // estado REAL en lugar de anunciar una espera que ya terminó.
+      const current = await getMpOrder(input.orderId).catch(() => null)
+      if (current && current.status !== "verifying") {
+        if (current.status === "paid") {
+          return { review: "auto_approved", status: "processing", scan }
+        }
+        return { review: "manual", status: "pending", scan }
+      }
+      logScan(input.orderId, { outcome: "verifying_deposit" })
+      return { review: "verifying_deposit", status: "verifying", scan }
+    }
+    // Sin credencial consultable se sigue el camino de aprobación inmediata
+    // de siempre (jamás se bloquea la renovación por falta de credencial).
+  }
+
   // Autorización en background: la respuesta no espera la renovación (el
   // panel puede tardar ~90 s y la verificación de vencimiento hace lecturas
   // extra). La clave determinista `mp-<orderId>` hace el proceso idempotente
@@ -594,5 +709,12 @@ export async function reviewTransferReceiptFromOrder(
     userName: order.user_name,
     amountMxn: order.amount,
     conceptCode: order.concept_code ?? "",
+    // Re-revisión (reintento admin): misma resolución de vendedor que el
+    // flujo vivo — cliente de distribuidor → cuenta del distribuidor
+    // (credencial propia); cualquier otro → plataforma.
+    deposit: {
+      sellerUserId:
+        order.origin === ORDER_ORIGIN_WA_CLIENTE ? order.buyer_user_id : null,
+    },
   })
 }

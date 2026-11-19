@@ -152,10 +152,9 @@ export const MODULOS: Modulo[] = [
   {
     title: "Reporte SPEI",
     description:
-      "Depósitos por transferencia SPEI a la CLABE acreditados en Mercado Pago, del día actual o de un día específico.",
+      "Depósitos por transferencia SPEI acreditados en Mercado Pago, del día actual o de un día específico: el admin consulta la cuenta del servidor y cada distribuidor la suya con su token del Perfil.",
     href: "/modulos/reporte-spei",
     icon: LandmarkIcon,
-    adminOnly: true,
   },
   {
     title: "Distribuidores",

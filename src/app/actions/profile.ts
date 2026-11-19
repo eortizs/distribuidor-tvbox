@@ -4,6 +4,10 @@ import { requireUser } from "@/server/auth/guards"
 import { hashPassword, verifyPassword } from "@/server/auth/password"
 import { saveProfile } from "@/server/auth/profile"
 import { findUserById, updatePassword } from "@/server/auth/users"
+import {
+  clearUserMpToken,
+  saveUserMpToken,
+} from "@/server/mercadopago/tokens"
 import { setWhatsAppPhone } from "@/server/whatsapp/service"
 import { AppError } from "@/server/umejson/types"
 
@@ -88,6 +92,9 @@ export async function updateBankingAction(
   const bankClabe = String(formData.get("bankClabe") ?? "")
     .trim()
     .replace(/\s+/g, "")
+  // WRITE-ONLY: el token nunca viaja de vuelta al navegador; el campo llega
+  // vacío cuando el usuario no lo está (re)registrando y entonces no se toca.
+  const mpToken = String(formData.get("mpToken") ?? "").trim()
 
   if (bankName.length > BANK_NAME_MAX) {
     return {
@@ -114,9 +121,23 @@ export async function updateBankingAction(
       bankHolder,
       bankClabe,
     })
+
+    // Token de Mercado Pago propio: se valida contra MP antes de cifrarse;
+    // un token rechazado deja el error inline y NO guarda nada del token.
+    let tokenChanged = false
+    if (mpToken.length > 0) {
+      await saveUserMpToken(user.id, mpToken)
+      tokenChanged = true
+    }
+
     return {
       error: null,
-      success: changed ? "Datos bancarios actualizados" : "Sin cambios que guardar",
+      success:
+        changed || tokenChanged
+          ? tokenChanged
+            ? "Datos actualizados; token de Mercado Pago vinculado"
+            : "Datos bancarios actualizados"
+          : "Sin cambios que guardar",
     }
   } catch (error) {
     if (error instanceof AppError) {
@@ -126,6 +147,28 @@ export async function updateBankingAction(
           success: null,
         }
       }
+      return { error: error.message, success: null }
+    }
+    throw error
+  }
+}
+
+/**
+ * Quita el token propio de Mercado Pago del usuario en sesión. Acción PLAIN
+ * (sin el contrato de formulario): la llama la UI con una transacción porque
+ * el botón vive DENTRO del formulario de datos bancarios y un <form>
+ * anidado es HTML inválido.
+ */
+export async function clearMpToken(): Promise<UpdateProfileState> {
+  const user = await requireUser()
+  try {
+    await clearUserMpToken(user.id)
+    return {
+      error: null,
+      success: "Token de Mercado Pago eliminado",
+    }
+  } catch (error) {
+    if (error instanceof AppError) {
       return { error: error.message, success: null }
     }
     throw error

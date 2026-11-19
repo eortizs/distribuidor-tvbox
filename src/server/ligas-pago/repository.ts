@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto"
 
-import { pool } from "@/server/db"
+import { pool, type PoolClientLike } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 
 /*
@@ -19,8 +19,9 @@ import { AppError } from "@/server/umejson/types"
  *     que el pagador escribe como concepto y por el que el comprobante
  *     descubre la orden.
  *   - 'verifying': comprobante válido (escaneo aprobado), esperando la
- *     confirmación del DEPÓSITO en la cuenta de Mercado Pago (misma fuente
- *     que /modulos/reporte-spei, ambos rieles). MP no expone el concepto
+ *     confirmación del DEPÓSITO en la cuenta de Mercado Pago del creador
+ *     (credencial propia o la de plataforma para el admin; misma fuente que
+ *     /modulos/reporte-spei, ambos rieles). MP no expone el concepto
  *     escrito por el pagador, así que el depósito se casa por importe
  *     exacto + ventana y el ID del pago de MP queda reservado en exclusiva
  *     (mp_payment_id, índice único parcial): un depósito valida una sola
@@ -510,19 +511,71 @@ export async function cancelPaymentOrder(input: {
 }
 
 /**
- * True si el creador es ADMIN: sus órdenes son las ÚNICAS cuya verificación
- * automática de depósito es posible — el pagador de una orden de
- * distribuidor paga a la CLABE del snapshot del creador (su propia cuenta),
- * que el token de Mercado Pago de la plataforma no ve. Para distribuidores
- * el comprobante válido queda en la orden y el creador confirma la
- * recepción en su cuenta y resuelve manualmente.
+ * Reserva CRUZADA de depósitos: los IDs de pago de MP ya reclamados por
+ * CUALQUIER orden (ligas de pago `payment_orders` o renovaciones
+ * `mp_orders`). Ambos flujos leen la MISMA cuenta de Mercado Pago, así que
+ * un depósito solo puede confirmar UNA orden en todo el panel — el índice
+ * único de cada tabla no ve la otra.
  */
-export async function isPlatformPaymentOrderCreator(userId: string): Promise<boolean> {
-  const result = await pool.query<{ role: string }>(
-    `SELECT role FROM users WHERE id = $1::uuid LIMIT 1`,
-    [userId]
+export async function findReservedMpPaymentIds(
+  mpPaymentIds: string[]
+): Promise<Set<string>> {
+  const ids = [...new Set(mpPaymentIds.filter((id) => id.length > 0))]
+  const reserved = new Set<string>()
+  if (ids.length === 0) return reserved
+  const [orders, renewals] = await Promise.all([
+    pool.query<{ mp_payment_id: string }>(
+      `SELECT mp_payment_id FROM payment_orders
+        WHERE mp_payment_id = ANY($1) AND mp_payment_id IS NOT NULL`,
+      [ids]
+    ),
+    pool.query<{ mp_payment_id: string }>(
+      `SELECT mp_payment_id FROM mp_orders
+        WHERE mp_payment_id = ANY($1) AND mp_payment_id IS NOT NULL`,
+      [ids]
+    ),
+  ])
+  for (const row of orders.rows) reserved.add(String(row.mp_payment_id))
+  for (const row of renewals.rows) reserved.add(String(row.mp_payment_id))
+  return reserved
+}
+
+/**
+ * Re-verificación AUTORITATIVA de la reserva de un depósito, a correr DENTRO
+ * de la transacción que reclama (con el advisory lock del ID de pago tomado
+ * — ver `confirmPaymentOrderDeposit`): los índices únicos son por tabla y no
+ * se ven entre sí, así que el check-then-claim suelto tiene una ventana
+ * TOCTOU entre los dos verificadores (comparten la misma cuenta MP y el
+ * mismo pool de depósitos). Bajo el candado, esta consulta es la última
+ * palabra: `true` = otro flujo ya reclamó el pago.
+ */
+export async function isMpDepositClaimed(
+  client: PoolClientLike,
+  mpPaymentId: string,
+  exclude?: { paymentOrderId?: string; mpOrderId?: string }
+): Promise<boolean> {
+  const result = await client.query(
+    `SELECT (
+       EXISTS (
+         SELECT 1 FROM payment_orders
+          WHERE mp_payment_id = $1::bigint
+            AND ($3::uuid IS NULL OR id <> $3::uuid)
+       )
+       OR EXISTS (
+         SELECT 1 FROM mp_orders
+          WHERE mp_payment_id = $1::bigint
+            AND ($4::uuid IS NULL OR id <> $4::uuid)
+       )
+     ) AS taken`,
+    [
+      mpPaymentId,
+      mpPaymentId,
+      exclude?.paymentOrderId ?? null,
+      exclude?.mpOrderId ?? null,
+    ]
   )
-  return result.rows[0]?.role === "admin"
+  const taken = (result.rows[0] as { taken?: boolean } | undefined)?.taken
+  return taken === true
 }
 
 /* -------------------------------------------------------------------------- */
@@ -555,10 +608,9 @@ export async function markPaymentOrderVerifying(orderId: string): Promise<Paymen
 /**
  * Órdenes en 'verifying' con sondeo vencido y sin escalar (la cola del
  * verificador), la más atrasada primero, con tope por tick. SOLO creadores
- * admin: sus cobros apuntan a la cuenta de Mercado Pago de la plataforma
- * (el token que lee el reporte SPEI); el pagador de una orden de
- * distribuidor paga a la CLABE del snapshot del creador — una cuenta que el
- * token de la plataforma no ve — y su verificación es manual por diseño.
+ * con verificación posible (credencial propia de MP o admin con la de
+ * plataforma): los demás cobros apuntan a una cuenta sin credencial
+ * consultable y su verificación es manual por diseño.
  */
 export async function listDueVerifyingOrders(limit = 4): Promise<PaymentOrder[]> {
   const capped = Math.min(Math.max(Math.trunc(limit), 1), 20)
@@ -568,7 +620,12 @@ export async function listDueVerifyingOrders(limit = 4): Promise<PaymentOrder[]>
         AND deposit_next_check_at IS NOT NULL AND deposit_next_check_at <= now()
         AND EXISTS (
           SELECT 1 FROM users u2
-           WHERE u2.id = o.creator_user_id AND u2.role = 'admin'
+           WHERE u2.id = o.creator_user_id
+             AND (u2.role = 'admin'
+                  OR EXISTS (
+                    SELECT 1 FROM user_mp_tokens t
+                     WHERE t.user_id = u2.id AND t.status = 'active'
+                  ))
         )
       ORDER BY o.deposit_next_check_at ASC LIMIT $1`,
     [capped]
@@ -612,10 +669,13 @@ export async function markDepositEscalated(orderId: string): Promise<boolean> {
 
 /**
  * Confirmación atómica del depósito: reclama la orden en 'verifying' y la
- * resuelve `paid` reservando el ID del pago de MP (índice único parcial: si
- * otra orden ya consumió ese depósito, la UPDATE viola la unique y devuelve
- * null — el llamador sigue verificando su propio depósito).
- * `reviewedBy` es el propio creador (aprobación automática con quién).
+ * resuelve `paid` reservando el ID del pago de MP. La exclusividad es
+ * CRUZADA con las renovaciones (`mp_orders` — ambos flujos leen la misma
+ * cuenta): el advisory lock por ID de pago serializa a los dos reclamantes
+ * y `isMpDepositClaimed` re-verifica DENTRO del candado (los índices únicos
+ * de cada tabla no se ven entre sí). `reviewedBy` es el propio creador
+ * (aprobación automática con quién). Null = otro actor ganó el depósito o
+ * la orden.
  */
 export async function confirmPaymentOrderDeposit(input: {
   orderId: string
@@ -623,8 +683,23 @@ export async function confirmPaymentOrderDeposit(input: {
   mpDepositAt: string | null
   reviewedBy: string
 }): Promise<PaymentOrder | null> {
+  const tx = await pool.connect()
   try {
-    const result = await pool.query(
+    await tx.query("BEGIN")
+    // Clave del candado = el ID del pago de MP en texto (la MISMA que usa el
+    // claim de renovaciones en mercadopago/service.ts).
+    await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      input.mpPaymentId,
+    ])
+    if (
+      await isMpDepositClaimed(tx, input.mpPaymentId, {
+        paymentOrderId: input.orderId,
+      })
+    ) {
+      await tx.query("ROLLBACK").catch(() => {})
+      return null
+    }
+    const result = await tx.query(
       `UPDATE payment_orders
           SET status = 'paid', reviewed_by = $4::uuid, resolved_at = now(),
               mp_payment_id = $2, mp_deposit_at = $3::timestamptz,
@@ -633,11 +708,18 @@ export async function confirmPaymentOrderDeposit(input: {
         RETURNING id`,
       [input.orderId, input.mpPaymentId, input.mpDepositAt, input.reviewedBy]
     )
-    if ((result.rowCount ?? 0) === 0) return null
+    if ((result.rowCount ?? 0) === 0) {
+      await tx.query("ROLLBACK").catch(() => {})
+      return null
+    }
+    await tx.query("COMMIT")
     return getPaymentOrder(input.orderId)
   } catch (error) {
+    await tx.query("ROLLBACK").catch(() => {})
     if (isUniqueViolation(error)) return null
     throw error
+  } finally {
+    tx.release()
   }
 }
 

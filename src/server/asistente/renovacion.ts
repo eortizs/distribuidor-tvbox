@@ -333,6 +333,13 @@ function textForReviewOutcome(input: {
       `Orden \`${shortOrderId(input.orderId)}\` registrada por **${money(input.amount)}**: la renovación de **${input.userName}** (1 mes) se está aplicando en segundo plano. Te llega la notificación (campana y WhatsApp) cuando termine; suele tardar unos minutos. Si quieres el estado más tarde, pregúntame por la orden \`${shortOrderId(input.orderId)}\`.`,
     ].join("\n")
   }
+  if (input.review.review === "verifying_deposit") {
+    return [
+      "**Comprobante validado** — el pago cumple las condiciones: fecha del mes, concepto de pago, importe y beneficiario.",
+      "",
+      `Falta confirmar la **acreditación del depósito** en la cuenta receptora (suele llegar en minutos). En cuanto acredite, la orden \`${shortOrderId(input.orderId)}\` por **${money(input.amount)}** se aprueba sola y la renovación de **${input.userName}** se aplica; te llega la notificación (campana y WhatsApp) con el resultado.`,
+    ].join("\n")
+  }
   if (input.review.review === "auto_rejected") {
     const reasons = input.review.scan?.reasons ?? []
     return [
@@ -466,6 +473,9 @@ async function registrarYRevisar(input: {
     amountMxn: result.amount,
     conceptCode: input.concept.code,
     preextracted: input.preextracted,
+    // Verificación de depósito: el dinero va a la cuenta del env
+    // (plataforma) — el token de plataforma la consulta.
+    deposit: {},
   })
   logEvent("asistente.renovar_receipt_review", {
     actor: `user:${input.user.username}`,

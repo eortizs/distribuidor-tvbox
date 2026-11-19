@@ -14,12 +14,12 @@ import { createPaymentOrderNotification } from "@/server/notifications/service"
 
 import {
   getPaymentOrder,
-  isPlatformPaymentOrderCreator,
   markPaymentOrderVerifying,
   savePaymentOrderScan,
   type PaymentOrder,
 } from "./repository"
 import { tryConfirmOrderDeposit } from "./deposit-check"
+import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
 
 /*
  * Revisión del comprobante de una orden de pago: el MISMO motor de
@@ -37,24 +37,25 @@ import { tryConfirmOrderDeposit } from "./deposit-check"
  * DEPÓSITO acreditado en la cuenta (ver deposit-check.ts), no el papel.
  * Las renovaciones de FlujoTV conservan la validación completa.
  *
- * Con el comprobante válido la orden NO se declara `paid`. GATE DE CUENTA
- * PLATAFORMA: la verificación de depósito consulta la cuenta de Mercado
- * Pago del vendedor (token único) — solo alcanza los cobros de creadores
- * ADMIN, cuya snapshot bancaria es esa cuenta:
+ * Con el comprobante válido la orden NO se declara `paid`. GATE DE CUENTA:
+ * la verificación de depósito consulta la cuenta de Mercado Pago donde el
+ * pagador depositó — la del SNAPSHOT del creador — y solo es posible con
+ * una credencial que la vea:
  *
- *   - ADMIN: la orden pasa a 'verifying' y solo se resuelve cuando el
- *     DEPÓSITO aparece acreditado (misma fuente que /modulos/reporte-spei;
- *     MP no expone el concepto escrito por el pagador, así que el depósito
- *     se casa por importe exacto + ventana y el ID queda reservado en
- *     exclusiva — ver deposit-check.ts). Chequeo inmediato con presupuesto
- *     corto dentro del turno; si no acredita, el verificador en background
- *     (deposit-verifier.ts) sondea con backoff y publica el resultado por
- *     WhatsApp.
- *   - DISTRIBUIDOR: el pagador paga a la CLABE del snapshot del creador (su
- *     propia cuenta, invisible para el token de la plataforma) — la
- *     verificación automática no aplica: el comprobante válido queda en la
- *     orden (outcome `awaiting_creator`), campana al creador para confirmar
- *     la recepción en SU cuenta y resolver manualmente.
+ *   - CREADOR CON CREDENCIAL (propia del distribuidor o la de plataforma
+ *     para el admin): la orden pasa a 'verifying' y solo se resuelve cuando
+ *     el DEPÓSITO aparece acreditado (misma fuente que
+ *     /modulos/reporte-spei; MP no expone el concepto escrito por el
+ *     pagador, así que el depósito se casa por importe exacto + ventana y
+ *     el ID queda reservado en exclusiva — ver deposit-check.ts). Chequeo
+ *     inmediato con presupuesto corto dentro del turno; si no acredita, el
+ *     verificador en background (deposit-verifier.ts) sondea con backoff y
+ *     publica el resultado por WhatsApp.
+ *   - DISTRIBUIDOR SIN TOKEN PROPIO: el pagador paga a la CLABE del
+ *     snapshot del creador, cuenta que ninguna credencial consultable
+ *     alcanza — la verificación automática no aplica: el comprobante válido
+ *     queda en la orden (outcome `awaiting_creator`), campana al creador
+ *     para confirmar la recepción en SU cuenta y resolver manualmente.
  *
  * Diferencias con las renovaciones (a propósito):
  *   - Sin guardia anti-doble-renovación (no hay renovación que duplicar).
@@ -332,15 +333,15 @@ export async function reviewPaymentReceipt(input: {
     return { review: "manual", scan }
   }
 
-  // GATE DE CUENTA PLATAFORMA: el pagador de una orden de DISTRIBUIDOR
-  // paga a la CLABE del snapshot del creador (su propia cuenta, invisible
-  // para el token de la plataforma) — la verificación de depósito por MP no
-  // aplica. El comprobante válido queda en la orden (sigue 'pending') y el
-  // creador confirma la recepción en su cuenta y resuelve manualmente.
-  const platformCreator = await isPlatformPaymentOrderCreator(
+  // GATE DE CUENTA: la verificación de depósito requiere una credencial que
+  // vea la cuenta receptora del creador (propia del distribuidor o la de
+  // plataforma para el admin). Sin ella el comprobante válido queda en la
+  // orden (sigue 'pending') y el creador confirma la recepción en SU cuenta
+  // y resuelve manualmente.
+  const accessToken = await resolvePaymentOrderDepositToken(
     order.creatorUserId
-  ).catch(() => false)
-  if (!platformCreator) {
+  ).catch(() => null)
+  if (!accessToken) {
     logEvent("orden_pago.review_approved_creator", {
       order_id: order.id,
       code: order.code,
@@ -378,6 +379,7 @@ export async function reviewPaymentReceipt(input: {
     order: verifying,
     budgetMs: IMMEDIATE_DEPOSIT_BUDGET_MS,
     pageTimeoutMs: IMMEDIATE_PAGE_TIMEOUT_MS,
+    accessToken,
   }).catch(() => null)
 
   if (confirmed) {

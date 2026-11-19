@@ -549,6 +549,15 @@ interface RenewalBlock {
  */
 const RENEWAL_SLOW_AFTER_MS = 90_000
 
+/**
+ * Tope del sondeo del bloqueo (10 min): con la verificación de DEPÓSITO la
+ * orden puede esperar la acreditación bancaria más allá de la paciencia de
+ * un overlay — al agotarse se libera la app con un aviso honesto (el proceso
+ * sigue en el servidor y el resultado final llega por campana/WhatsApp);
+ * seguir bloqueando horas no ayuda a nadie.
+ */
+const RENEWAL_POLL_MAX_WAIT_MS = 10 * 60_000
+
 function persistRenewalBlock(block: RenewalBlock): void {
   try {
     window.localStorage.setItem(
@@ -1585,9 +1594,11 @@ export function ClientesAccordion({
         if (
           result.status === "renewed" ||
           result.status === "paid" ||
+          result.status === "verifying" ||
           result.status === "renewal_failed"
         ) {
-          // Renovación aplicada o en curso: el sondeo del bloqueo lleva la
+          // Renovación aplicada o en curso (incluida la espera de la
+          // acreditación del depósito): el sondeo del bloqueo lleva la
           // orden a su estado final (éxito con vencimiento verificado / fallo).
           const block: RenewalBlock = {
             orderId: result.orderId,
@@ -1615,9 +1626,15 @@ export function ClientesAccordion({
         }
         return
       }
-      if (result.review === "auto_approved") {
+      if (
+        result.review === "auto_approved" ||
+        result.review === "verifying_deposit"
+      ) {
         // Etapa 2: renovación en el panel; el sondeo del bloqueo lleva la
-        // orden hasta su estado final antes de liberar.
+        // orden hasta su estado final antes de liberar. Con
+        // `verifying_deposit` la orden espera la ACREDITACIÓN del depósito en
+        // la cuenta del vendedor (el sondeo continúa; al acreditar se aprueba
+        // sola y lanza la renovación).
         const block: RenewalBlock = {
           orderId: result.orderId,
           userName,
@@ -1738,6 +1755,10 @@ export function ClientesAccordion({
    * consulta la orden cada 3 s. La lectura además concilia estados varados
    * en el servidor (pagado sin renovar se reintenta a los 10 min), así que
    * el sondeo siempre acaba en un estado final: renewed o renewal_failed.
+   * Estados de la verificación de depósito (`verifying`, y `pending` si el
+   * verificador aún no la ve) siguen sondeando; `rejected` (decisión manual
+   * durante la verificación) corta con fallo. Tope de espera de 10 min:
+   * liberar con aviso honesto si el depósito tarda más que eso.
    */
   useEffect(() => {
     if (renewalBlock?.stage !== "renovando" || !renewalBlock.orderId) return
@@ -1755,11 +1776,26 @@ export function ClientesAccordion({
             verifiedExpiresAt: order.renewal_verified_expires_at,
           })
           refreshRow(block.userName)
-        } else if (order.status === "renewal_failed") {
+          return
+        }
+        if (
+          order.status === "renewal_failed" ||
+          order.status === "rejected"
+        ) {
           clearRenewalStorage()
           setRenewalBlock({ ...block, stage: "fallo" })
+          return
         }
-        // Estados intermedios (pending/paid): se sigue sondeando.
+        if (Date.now() - block.startedAt >= RENEWAL_POLL_MAX_WAIT_MS) {
+          clearRenewalStorage()
+          setRenewalBlock(null)
+          setPurchaseOpen(false)
+          toast.info("Seguimos verificando tu pago", {
+            description: `La renovación de ${block.userName} continúa en el servidor: en cuanto se confirme el depósito, la orden se aprueba sola y te avisamos por campana o WhatsApp. Puedes seguir usando el panel.`,
+          })
+          return
+        }
+        // Estados intermedios (pending/verifying/paid): se sigue sondeando.
       } catch {
         // Error puntual de red: el siguiente tick reintenta.
       }

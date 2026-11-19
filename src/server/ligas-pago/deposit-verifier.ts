@@ -1,6 +1,6 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
-import { speiReportConfigured } from "@/server/mercadopago/spei"
+import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
 import { paymentOrderMoney } from "@/lib/ligas-pago"
 
 import { tryConfirmOrderDeposit } from "./deposit-check"
@@ -14,18 +14,18 @@ import {
 
 /*
  * Verificador en background de depósitos de órdenes de pago: una orden en
- * 'verifying' (comprobante válido de un creador ADMIN — la cola excluye al
- * resto, cuyo cobro apunta a una cuenta invisible para el token de la
- * plataforma) se confirma cuando su depósito aparece acreditado en la
- * cuenta de Mercado Pago (misma fuente que el reporte SPEI). Sondea la cola
+ * 'verifying' (comprobante válido de un creador CON credencial consultable
+ * — la cola excluye al resto, cuyo cobro apunta a una cuenta sin credencial)
+ * se confirma cuando su depósito aparece acreditado en la cuenta de Mercado
+ * Pago del creador (misma fuente que el reporte SPEI). Sondea la cola
  * `deposit_next_check_at <= now()` con backoff (2 → 5 → 15 min, también
  * para fallos de infraestructura) y, tras 24 h sin hallazgo, escala UNA
  * sola vez a resolución manual avisando a creador (campana) y pagador
  * (WhatsApp) — la orden queda 'verifying' para que el creador resuelva
  * (Marcar pagada / Rechazar / Cancelar).
  *
- * Sin `MERCADOPAGO_ACCESS_TOKEN` no hay consulta (las órdenes reprograman a
- * 15 min y escalan por edad): jamás se auto-aprueba sin depósito visible.
+ * Sin credencial para la cuenta del creador no hay consulta (las órdenes
+ * reprograman a 15 min y escalan por edad): jamás se auto-aprueba a ciegas.
  *
  * Arranque: `src/instrumentation.ts` (hook `register`, runtime Node), mismo
  * patrón del scheduler de alertas: intervalo de 60 s, guard `ticking` contra
@@ -103,9 +103,13 @@ async function verifyOrder(order: PaymentOrder): Promise<void> {
     return
   }
 
-  if (!speiReportConfigured()) {
-    // Sin credencial de MP no hay verificación posible: reprogra para que el
-    // escalamiento por edad siga corriendo (jamás se aprueba a ciegas).
+  const accessToken = await resolvePaymentOrderDepositToken(
+    order.creatorUserId
+  ).catch(() => null)
+  if (!accessToken) {
+    // Sin credencial para la cuenta del creador no hay verificación posible:
+    // reprogra para que el escalamiento por edad siga corriendo (jamás se
+    // aprueba a ciegas).
     await savePaymentOrderDepositCheck({
       orderId: order.id,
       checks: order.depositChecks + 1,
@@ -116,7 +120,7 @@ async function verifyOrder(order: PaymentOrder): Promise<void> {
 
   let confirmed: PaymentOrder | null = null
   try {
-    confirmed = await tryConfirmOrderDeposit({ order })
+    confirmed = await tryConfirmOrderDeposit({ order, accessToken })
   } catch (error) {
     // Fallo de MP/BD: cuenta como intento fallido para el backoff (la edad
     // sigue mandando el escalamiento a 24 h) — una credencial roja o MP

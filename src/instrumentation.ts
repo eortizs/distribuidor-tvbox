@@ -9,6 +9,9 @@
  * - Verificador de depósitos de órdenes de pago: sondea Mercado Pago (fuente
  *   del reporte SPEI) las órdenes con comprobante válido hasta ver el
  *   depósito acreditado; escala a manual tras 24 h.
+ * - Verificador de depósitos de renovaciones por transferencia: ídem para las
+ *   órdenes de licencias en 'verifying' (credencial propia del distribuidor o
+ *   plataforma); sin acreditación en 24 h vuelven a revisión manual.
  * - Scheduler del módulo Alertas: revisa cada minuto las alertas de búsqueda
  *   vencidas (grounding) y dispara recordatorios.
  * - Gateway WhatsApp (Baileys): vincula el número del agente IA como
@@ -28,6 +31,10 @@ export async function register(): Promise<void> {
     "@/server/ligas-pago/deposit-verifier"
   )
   startPaymentOrderDepositVerifier()
+  const { startRenewalDepositVerifier } = await import(
+    "@/server/mercadopago/renewal-deposit-verifier"
+  )
+  startRenewalDepositVerifier()
   const { startAlertasScheduler } = await import(
     "@/server/alertas/scheduler"
   )

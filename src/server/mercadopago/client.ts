@@ -42,7 +42,7 @@ export async function mercadoPagoRequest<T = unknown>(
   init: MercadoPagoRequestInit = {}
 ): Promise<MercadoPagoResponse<T>> {
   const { accessToken } = resolveMercadoPagoConfig()
-  return mercadoPagoRequestWithToken<T>(accessToken, path, init)
+  return mercadoPagoRequestAs<T>(accessToken, path, init)
 }
 
 /**
@@ -55,13 +55,20 @@ export async function mercadoPagoGatewayRequest<T = unknown>(
   init: MercadoPagoRequestInit = {}
 ): Promise<MercadoPagoResponse<T>> {
   const { accessToken } = resolveMercadoPagoGateway()
-  return mercadoPagoRequestWithToken<T>(accessToken, path, init)
+  return mercadoPagoRequestAs<T>(accessToken, path, init)
 }
 
-async function mercadoPagoRequestWithToken<T = unknown>(
+/**
+ * Llamada con un token EXPLÍCITO, distinto del de la plataforma: la
+ * credencial propia de un distribuidor (tabla `user_mp_tokens`) que consulta
+ * depósitos de SU cuenta (reporte SPEI, verificador de depósitos de ligas de
+ * pago y de renovaciones por transferencia). El token nunca se registra; los
+ * errores se traducen a `MercadoPagoError` igual que el resto.
+ */
+export async function mercadoPagoRequestAs<T = unknown>(
   accessToken: string,
   path: string,
-  init: MercadoPagoRequestInit
+  init: MercadoPagoRequestInit = {}
 ): Promise<MercadoPagoResponse<T>> {
   const url = `${MERCADOPAGO_API_BASE}${path}`
 
