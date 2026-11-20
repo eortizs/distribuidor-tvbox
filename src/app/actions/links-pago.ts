@@ -8,6 +8,11 @@ import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/w
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { resolveCreatorBankData } from "@/server/links-pago/bank"
 import {
+  normalizePaymentOrderConcepto,
+  paymentOrderConceptAnchor,
+  PAYMENT_ORDER_CONCEPTO_ERROR,
+} from "@/lib/links-pago"
+import {
   cancelPaymentOrder,
   checkRateLimitPaymentOrderCreation,
   createPaymentOrder,
@@ -51,7 +56,8 @@ export interface CreatePaymentOrderResult {
  */
 export async function createPaymentOrderAction(input: {
   amountMxn: number
-  note?: string
+  /** Concepto de pago: UNA palabra alfanumérica (obligatorio). */
+  note: string
 }): Promise<CreatePaymentOrderResult> {
   const user = await requireUser()
 
@@ -63,7 +69,13 @@ export async function createPaymentOrderAction(input: {
     return { error: `El monto máximo es $${PAYMENT_ORDER_MAX_MXN.toLocaleString("es-MX")} MXN`, order: null }
   }
 
-  const note = (input.note ?? "").trim().slice(0, 120) || null
+  // El concepto de pago es el ANCLA de conciliación: el pagador lo recibe
+  // por WhatsApp, lo escribe en su SPEI y el escaneo valida el comprobante
+  // contra esta palabra (el código del link queda como identificador).
+  const note = normalizePaymentOrderConcepto(input.note ?? "")
+  if (!note) {
+    return { error: PAYMENT_ORDER_CONCEPTO_ERROR, order: null }
+  }
 
   const bank = await resolveCreatorBankData(user)
   if (!bank) {
@@ -250,7 +262,7 @@ export async function resolvePaymentOrderAction(input: {
     notifyPayerOfResolution(
       resolved,
       "Pago confirmado",
-      `Confirmamos tu pago de ${money(resolved.amountMxn)} con el código ${resolved.code}. Gracias.`
+      `Confirmamos tu pago de ${money(resolved.amountMxn)} con el concepto de pago ${paymentOrderConceptAnchor(resolved)}. Gracias.`
     )
     if (user.id !== resolved.creatorUserId) {
       createPaymentOrderNotification({
@@ -264,7 +276,7 @@ export async function resolvePaymentOrderAction(input: {
     notifyPayerOfResolution(
       resolved,
       "Pago no confirmado",
-      `El comprobante del código ${resolved.code} no fue aceptado${
+      `El comprobante con el concepto de pago ${paymentOrderConceptAnchor(resolved)} no fue aceptado${
         reason ? `: ${reason}` : ""
       }. Contacta a quien te emitió el link.`
     )

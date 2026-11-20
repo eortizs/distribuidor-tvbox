@@ -11,10 +11,17 @@ import {
 import { saveUserFile } from "@/server/storage/user-files"
 
 import {
+  amountsEqualCents,
+  paymentOrderConceptAnchor,
+  PAYMENT_ORDER_CONCEPTO_MAX,
+  PAYMENT_ORDER_CONCEPTO_MIN,
+} from "@/lib/links-pago"
+import {
   findActivePaymentOrdersByPayerPhone,
   findLatestResolvedPaymentOrderByPayerPhone,
   findPendingPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyCode,
+  findResolvedPaymentOrderByAnyConcepto,
   listPendingPaymentOrders,
   listPendingPaymentOrdersByAmount,
   savePaymentOrderScan,
@@ -37,18 +44,21 @@ import { notifyPayerContacted } from "./notify"
  *   - Texto: el link corto spei.link llega con la SOLICITUD prellenada
  *     («Solicito un link de pago por $X», sin código — la orden se descubre
  *     por el importe que definió el cobrador; la forma antigua «orden de
- *     pago» sigue aceptándose) o con un código pegado a mano. La
+ *     pago» sigue aceptándose) o con el código del link pegado a mano. La
  *     respuesta va en TRES mensajes de golpe: las INSTRUCCIONES del pago
- *     (con importe/banco/titular), el CÓDIGO de concepto SOLO y la CLABE
- *     SOLO — código y CLABE sin nada más para copiar/pegar fácil.
- *   - Comprobante (foto/PDF solo o con caption): el CÓDIGO IMPRESO en el
- *     comprobante descubre la orden entre las pendientes (mismo criterio de
- *     match que distribuidor y clientes); sin impresión legible manda el
- *     código del caption, y sin ambos, el teléfono de un pagador ya
- *     conocido. El escaneo valida (fecha, código, importe, beneficiario) y
- *     responde el veredicto; sin verificador, el archivo queda ligado a la
- *     orden para revisión manual del creador — el comprobante nunca se
- *     pierde.
+ *     (con importe/banco/titular), el CONCEPTO DE PAGO SOLO y la CLABE
+ *     SOLO — concepto y CLABE sin nada más para copiar/pegar fácil. El
+ *     concepto de pago (la palabra del creador) queda OCULTO hasta este
+ *     momento: la entrega por WhatsApp es la única vía y binding del
+ *     pagador; el código del link solo identifica y desambigua.
+ *   - Comprobante (foto/PDF solo o con caption): el CONCEPTO DE PAGO
+ *     IMPRESO en el comprobante descubre la orden entre las pendientes
+ *     (mismo criterio de match que distribuidor y clientes; el importe
+ *     leído desambigua entre palabras repetidas); sin impresión legible
+ *     manda el código del caption, y sin ambos, el teléfono de un pagador
+ *     ya conocido. El escaneo valida (concepto, importe) y responde el
+ *     veredicto; sin verificador, el archivo queda ligado a la orden para
+ *     revisión manual del creador — el comprobante nunca se pierde.
  *
  * Guardas anti-fraude del binding: un mensaje grande no sondea la tabla
  * token a token (tope de tokens + UNA consulta ANY), y una orden cuyo código
@@ -115,24 +125,33 @@ function findPaymentOrderCodeTokens(text: string): string[] {
 /**
  * Mensaje 1 de la respuesta: las INSTRUCCIONES del pago. Texto
  * DETERMINISTA (siempre idéntico, plantilla fija): sentencia del pago con
- * el código como concepto + los datos de la orden (importe, referencia,
- * banco, CLABE y titular) — el CLABE se imprime aquí para que el pagador
- * sepa a qué refiere el número que llega suelto en el tercer mensaje.
+ * el CONCEPTO DE PAGO de la orden + los datos (importe, banco, CLABE y
+ * titular) — la CLABE se imprime aquí para que el pagador sepa a qué refiere
+ * el número que llega suelto en el tercer mensaje. En las órdenes de la era
+ * previa (sin palabra) el ancla sigue siendo el CÓDIGO del link y el texto
+ * lo nombra como tal.
  *
- * La identificación del pagador por el CÓDIGO de concepto es MANDATORIA: el
- * comprobante (con el código escrito como concepto e impreso en el ticket)
- * es la única evidencia que confirma la orden automáticamente — sin él el
- * pago queda para revisión del creador, aunque el depósito acredite. Así
- * dos cobros del mismo importe (sucursales distintas, sin coordinación de
- * centavos) jamás se confunden de pagador.
+ * La identificación del pagador por el CONCEPTO DE PAGO es MANDATORIA: el
+ * comprobante (con el concepto escrito como concepto e impreso en el
+ * ticket) es la única evidencia que confirma la orden automáticamente — sin
+ * él el pago queda para revisión del creador, aunque el depósito acredite.
+ * Así dos cobros del mismo importe (sucursales distintas, sin coordinación
+ * de centavos) jamás se confunden de pagador.
  */
 function instruccionesDePago(order: PaymentOrder): string {
-  const sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
+  const ancla = paymentOrderConceptAnchor(order)
+  const porPalabra = ancla !== order.code
+  const sentencia = porPalabra
+    ? `Realiza tu pago SPEI con el concepto de pago *${ancla}* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
+    : `Realiza tu pago SPEI con el código ${ancla} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
   return [
     sentencia,
     "",
     `Importe: ${money(order.amountMxn)}`,
-    order.note ? `Referencia: ${order.note}` : "",
+    // En las órdenes de palabra la REFERENCIA es el propio concepto (ya va
+    // en la sentencia): el renglón solo agrega contexto en las de la era
+    // previa, cuya nota era texto libre.
+    !porPalabra && order.note ? `Referencia: ${order.note}` : "",
     "Banco: " + order.bank.bank,
     "CLABE: " + order.bank.account,
     "Titular: " + order.bank.holder,
@@ -143,17 +162,17 @@ function instruccionesDePago(order: PaymentOrder): string {
 
 /**
  * Respuesta en TRES mensajes enviados de golpe: 1) instrucciones, 2) el
- * CÓDIGO de concepto SOLO y 3) la CLABE SOLO — el código y la CLABE viajan
+ * CONCEPTO DE PAGO SOLO y 3) la CLABE SOLO — el concepto y la CLABE viajan
  * sin nada más para que el pagador los copie/pegue con un toque en su app
  * bancaria.
  */
-function respuestaConCodigo(
+function respuestaConConcepto(
   order: PaymentOrder,
   inboundText: string
 ): PaymentOrderTurnResult {
   return {
     text: instruccionesDePago(order),
-    additionalTexts: [order.code, order.bank.account],
+    additionalTexts: [paymentOrderConceptAnchor(order), order.bank.account],
     orderId: order.id,
     inboundText,
     mediaMime: null,
@@ -165,7 +184,7 @@ function textoPagadorAjeno(): string {
   return [
     "Ese link de pago ya tiene un pagador asignado.",
     "",
-    "Si es tuyo, solicita a quien te lo emitió el CÓDIGO de pago (4 letras) y envíamelo como mensaje.",
+    "Si es tuyo, solicita a quien te lo emitió el CÓDIGO de tu link (las 4 letras al final del enlace spei.link) y envíamelo como mensaje.",
   ].join("\n")
 }
 
@@ -230,7 +249,7 @@ function textoSinOrdenPorMonto(monto: number): string {
   return [
     `No encontré un link de pago pendiente por ${money(monto)}.`,
     "",
-    "Verifica el importe con quien te emitió la orden; si tienes el CÓDIGO de pago (4 letras), envíamelo como mensaje.",
+    "Verifica el importe con quien te emitió la orden; si tienes el CÓDIGO de tu link (las 4 letras al final del enlace spei.link), envíamelo como mensaje.",
   ].join("\n")
 }
 
@@ -239,8 +258,68 @@ function textoMontoAmbiguo(monto: number): string {
   return [
     `Hay varios links de pago pendientes por ${money(monto)}.`,
     "",
-    "Pide a quien te emitió la orden el CÓDIGO de pago (4 letras) y envíamelo como mensaje para identificar la tuya.",
+    "Pide a quien te emitió la orden el CÓDIGO de tu link (las 4 letras al final del enlace spei.link) y envíamelo como mensaje para identificar la tuya.",
   ].join("\n")
+}
+
+/** Guía cuando el comprobante coincide con varias órdenes pendientes. */
+function textoComprobanteAmbiguo(): string {
+  return [
+    "Tu comprobante coincide con varios links de pago pendientes y no pude identificar cuál es el tuyo.",
+    "",
+    "Reenvíalo junto con el CÓDIGO de tu link escrito como mensaje (las 4 letras al final del enlace spei.link) y lo valido contra esa orden.",
+  ].join("\n")
+}
+
+/**
+ * Palabras alfanuméricas (3–20, ya normalizadas: mayúsculas y sin acentos)
+ * de un texto, sin duplicados y con tope: alimentan el replay de resueltas
+ * por CONCEPTO DE PAGO. Solo texto de comprobantes (concepto impreso o
+ * caption): el chat libre nunca sondea órdenes por palabras sueltas.
+ */
+function wordTokensDe(text: string): string[] {
+  const tokens = text
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .split(/[^A-Z0-9]+/)
+    .filter((token) => token.length >= PAYMENT_ORDER_CONCEPTO_MIN && token.length <= PAYMENT_ORDER_CONCEPTO_MAX)
+  return [...new Set(tokens)].slice(0, MAX_CODE_TOKENS_PER_MESSAGE)
+}
+
+/** Importe legible de un texto del comprobante (misma lectura del escaneo). */
+function importeLeido(value: string | null): number | null {
+  if (!value) return null
+  const parsed = Number(value.replace(/[,\s$]/g, ""))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+/**
+ * Descubre la orden pendiente cuyo CONCEPTO DE PAGO coincide con el texto
+ * dado (tolerancia del match de comprobantes). La palabra no es única entre
+ * órdenes (a diferencia del código): si varias coinciden, el importe leído
+ * del comprobante desambigua. Devuelve la orden, null por AMBIGÜEDAD
+ * resuelta-fracasada (el llamador responde la guía del código) o null sin
+ * coincidencias.
+ */
+function descubrirPorConceptoImpreso(
+  pending: PaymentOrder[],
+  conceptoImpreso: string,
+  importeTexto: string | null
+): { order: PaymentOrder | null; ambiguo: boolean } {
+  const coincidentes = pending.filter((order) =>
+    conceptoImpresoCoincide(paymentOrderConceptAnchor(order), conceptoImpreso)
+  )
+  if (coincidentes.length === 0) return { order: null, ambiguo: false }
+  if (coincidentes.length === 1) return { order: coincidentes[0], ambiguo: false }
+  const importe = importeLeido(importeTexto)
+  if (importe !== null) {
+    const porImporte = coincidentes.filter((order) =>
+      amountsEqualCents(order.amountMxn, importe)
+    )
+    if (porImporte.length === 1) return { order: porImporte[0], ambiguo: false }
+  }
+  return { order: null, ambiguo: true }
 }
 
 /**
@@ -306,7 +385,7 @@ async function maybeHandlePaymentConfirmation(input: {
     text: [
       "*¡Gracias por avisar!* Para confirmar tu pago necesito tu comprobante:",
       "",
-      `Adjunta en este chat la FOTO o el PDF de tu transferencia (con el código ${order.code} como concepto) y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
+      `Adjunta en este chat la FOTO o el PDF de tu transferencia (con el concepto de pago ${paymentOrderConceptAnchor(order)}) y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
     ].join("\n"),
     orderId: order.id,
     inboundText: input.text,
@@ -363,7 +442,7 @@ export async function maybeHandlePaymentOrderText(input: {
         mediaMime: null,
       }
     }
-    return respuestaConCodigo(order, input.text)
+    return respuestaConConcepto(order, input.text)
   }
 
   // Replay honesto: el código corresponde a una orden YA resuelta (evita
@@ -507,7 +586,7 @@ export async function maybeHandlePaymentOrderText(input: {
     code: candidata.code,
     monto,
   })
-  return respuestaConCodigo(candidata, input.text)
+  return respuestaConConcepto(candidata, input.text)
 }
 
 /** Veredicto del chat para el resultado de la revisión. */
@@ -792,41 +871,68 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   }
 
   // Descubrimiento, de la fuente más específica a la más débil:
-  //   1. código IMPRESO en el comprobante (la fuente de verdad),
-  //   2. código escrito en el caption,
+  //   1. CONCEPTO DE PAGO impreso en el comprobante (la fuente de verdad;
+  //      el importe leído desambigua entre palabras repetidas),
+  //   2. código escrito en el caption (desambiguador del link),
   //   3. teléfono de un pagador ya conocido (impreso ilegible o lector
   //      caído).
   const conceptoImpreso = extraccion?.datos?.concepto ?? null
   let candidate: PaymentOrder | null = null
   if (conceptoImpreso) {
-    candidate =
-      pending.find((order) =>
-        conceptoImpresoCoincide(order.code, conceptoImpreso)
-      ) ?? null
+    const porConcepto = descubrirPorConceptoImpreso(
+      pending,
+      conceptoImpreso,
+      extraccion?.datos?.importe ?? null
+    )
+    if (porConcepto.ambiguo) {
+      // La palabra coincide con varias pendientes y el importe no eligió:
+      // responder la guía del código en vez de arriesgar la orden equivocada.
+      logEvent("orden_pago.whatsapp_receipt_ambigua", {
+        phone: maskPhone(input.phone),
+        coincidentes: pending.filter((order) =>
+          conceptoImpresoCoincide(paymentOrderConceptAnchor(order), conceptoImpreso)
+        ).length,
+      })
+      return {
+        text: textoComprobanteAmbiguo(),
+        orderId: null,
+        inboundText: input.text,
+        mediaMime: input.media.mimeType,
+      }
+    }
+    candidate = porConcepto.order
   }
   if (!candidate) {
     candidate =
       pending.find((order) => tokens.includes(order.code)) ?? null
   }
 
-  // Sin orden pendiente: ¿el código corresponde a una orden YA resuelta?
-  // Replay honesto del estado real (evita un segundo pago por una respuesta
-  // perdida): los códigos impresos y del caption, UNA consulta.
+  // Sin orden pendiente: ¿el concepto o el código corresponden a una orden
+  // YA resuelta? Replay honesto del estado real (evita un segundo pago por
+  // una respuesta perdida): los códigos impresos y del caption UNA consulta,
+  // y las palabras del concepto impreso OTRA (replay por concepto de pago).
   if (!candidate) {
     const resolved = await findResolvedPaymentOrderByAnyCode([
       ...(conceptoImpreso ? findPaymentOrderCodeTokens(conceptoImpreso) : []),
       ...tokens,
     ]).catch(() => null)
-    if (resolved) {
+    const resolvedPorPalabra =
+      resolved ??
+      (conceptoImpreso
+        ? await findResolvedPaymentOrderByAnyConcepto(
+            wordTokensDe(conceptoImpreso)
+          ).catch(() => null)
+        : null)
+    if (resolvedPorPalabra) {
       logEvent("orden_pago.whatsapp_replay", {
         phone: maskPhone(input.phone),
-        order_id: resolved.id,
-        code: resolved.code,
-        status: resolved.status,
+        order_id: resolvedPorPalabra.id,
+        code: resolvedPorPalabra.code,
+        status: resolvedPorPalabra.status,
       })
       return {
-        text: textoEstadoResuelto(resolved),
-        orderId: resolved.id,
+        text: textoEstadoResuelto(resolvedPorPalabra),
+        orderId: resolvedPorPalabra.id,
         inboundText: input.text,
         mediaMime: input.media.mimeType,
       }
@@ -1004,9 +1110,10 @@ export async function maybeHandlePaymentOrderReceipt(input: {
  * dos formatos de pago por transferencia (renovaciones tv3 y cobros
  * abiertos) comparten el canal y el concepto impreso decide a cuál pertenece
  * el comprobante. Orden del más específico al más débil: activa por
- * concepto impreso (misma tolerancia del descubrimiento), activa por token
- * exacto, resuelta por token (replay honesto). Null = no es una orden de
- * pago: el turno sigue el curso de renovación.
+ * CONCEPTO DE PAGO impreso (misma tolerancia del descubrimiento), activa por
+ * token de código exacto, resuelta por código (replay honesto) y resuelta
+ * por concepto de pago. Null = no es una orden de pago: el turno sigue el
+ * curso de renovación.
  */
 export async function findPaymentOrderForReceiptConcept(
   concepto: string
@@ -1015,12 +1122,20 @@ export async function findPaymentOrderForReceiptConcept(
   if (normalized.length === 0) return null
   const pending = await listPendingPaymentOrders().catch(() => [])
   const porImpreso = pending.find((order) =>
-    conceptoImpresoCoincide(order.code, normalized)
+    conceptoImpresoCoincide(paymentOrderConceptAnchor(order), normalized)
   )
   if (porImpreso) return porImpreso
   const tokens = findPaymentOrderCodeTokens(normalized)
-  if (tokens.length === 0) return null
-  const porToken = pending.find((order) => tokens.includes(order.code))
+  const porToken = tokens.length
+    ? pending.find((order) => tokens.includes(order.code)) ?? null
+    : null
   if (porToken) return porToken
-  return findResolvedPaymentOrderByAnyCode(tokens).catch(() => null)
+  return (
+    (tokens.length
+      ? await findResolvedPaymentOrderByAnyCode(tokens).catch(() => null)
+      : null) ??
+    (await findResolvedPaymentOrderByAnyConcepto(wordTokensDe(normalized)).catch(
+      () => null
+    ))
+  )
 }

@@ -145,7 +145,7 @@ export const MODULOS: Modulo[] = [
   {
     title: "SPEILink",
     description:
-      "Emite un cobro de monto libre: link corto spei.link con el código de concepto y QR para que el pagador pague por SPEI y suba su comprobante.",
+      "Emite un cobro de monto libre con concepto de pago: link corto spei.link con QR; el pagador solicita el pago por WhatsApp, recibe su concepto y paga por SPEI.",
     href: "/modulos/links-de-pago",
     icon: QrCodeIcon,
   },

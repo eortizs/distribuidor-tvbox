@@ -17,9 +17,11 @@ import type { CreatedPaymentOrder } from "@/app/actions/links-pago"
 /*
  * Diálogo de link de pago creado: QR + datos SPEI + copiar/compartir link.
  * El QR y el link compartido son el CORTO (spei.link/<código>, misma
- * identidad que el código de concepto); el botón de apertura usa wa.me
- * directo (un salto menos). Compartido por /modulos/links-de-pago y el
- * cobro desde la Calculadora.
+ * identidad que el código); el botón de apertura usa wa.me directo (un
+ * salto menos). El CONCEPTO DE PAGO NO se imprime aquí: queda oculto hasta
+ * que el pagador solicite el pago por WhatsApp (el agente se lo entrega
+ * junto con la CLABE). Compartido por /modulos/links-de-pago y el cobro
+ * desde la Calculadora.
  */
 
 interface LinkCreadoDialogProps {
@@ -68,7 +70,7 @@ export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
               <DialogTitle>Link de pago {order.code}</DialogTitle>
               <DialogDescription>
                 Muestra el QR a tu cliente para que abra el chat con el mensaje
-                listo, o comparte el link corto.
+                listo: ahí recibe el concepto de pago para pagar por SPEI.
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col items-center gap-3">
@@ -100,11 +102,9 @@ export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
                 <p>Banco: {order.bank.bank}</p>
                 <p>Cuenta: {order.bank.account}</p>
                 <p>Titular: {order.bank.holder}</p>
-                <p>
-                  Concepto de pago:{" "}
-                  <span className="font-mono font-semibold">
-                    {order.code}
-                  </span>
+                <p className="text-muted-foreground">
+                  El concepto de pago se lo entrega el agente por WhatsApp
+                  cuando solicite el pago.
                 </p>
               </div>
             </div>

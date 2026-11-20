@@ -9,6 +9,8 @@ import {
   type ScanResult,
 } from "@/server/transferencias/scan"
 import { evaluarCondiciones } from "@/server/transferencias/verificar"
+import { conceptoImpresoCoincide } from "@/server/asistente/renovacion"
+import { paymentOrderConceptAnchor } from "@/lib/links-pago"
 import { notifyCreator, notifyDepositConfirmed } from "./notify"
 
 import {
@@ -26,8 +28,10 @@ import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
  * la validación REDUCIDA del cobro libre (`evaluarCondiciones` modo
  * "pago_libre"):
  *
- *  1. Concepto impreso con el código de la orden (el pagador lo recibió en
- *      el link corto spei.link y lo escribió como concepto en su SPEI).
+ *  1. Concepto impreso con el CONCEPTO DE PAGO de la orden (la palabra que
+ *      el pagador recibió por WhatsApp y escribió como concepto en su
+ *      SPEI; en las órdenes de la era previa el ancla sigue siendo el
+ *      código del link).
  *   2. Importe EXACTO al monto congelado de la orden (a centavos — el mismo
  *      criterio del casado del depósito).
  *
@@ -222,12 +226,36 @@ export async function reviewPaymentReceipt(input: {
     }
   }
 
+  // El ancla de conciliación es el CONCEPTO DE PAGO de la orden (el código
+  // del link en las órdenes de la era previa).
+  const ancla = paymentOrderConceptAnchor(order)
   const checks = evaluarCondiciones({
     datos: extraccion.datos,
-    conceptCode: order.code,
+    conceptCode: ancla,
     amountMxn: order.amountMxn,
     modo: "pago_libre",
   })
+
+  // Transición de mecánica: una orden de palabra cuyo comprobante trae
+  // impreso el CÓDIGO del link (pagador instruido antes del cambio, o quien
+  // lo leyó del propio enlace) pasa la condición de concepto — el código
+  // identifica esta orden con la misma fuerza (único entre activas).
+  if (ancla !== order.code) {
+    const codigoCheck = checks.find((check) => check.key === "codigo")
+    if (codigoCheck && !codigoCheck.passed) {
+      const codigoYaImpreso = conceptoImpresoCoincide(
+        order.code,
+        extraccion.datos.concepto
+      )
+      if (codigoYaImpreso) {
+        codigoCheck.passed = true
+        codigoCheck.detail = `esperado '${ancla}'; leído ${
+          extraccion.datos.concepto ? `«${extraccion.datos.concepto}»` : "ilegible"
+        } (código del link — orden previa al concepto de pago)`
+      }
+    }
+  }
+
   const reasons = checks
     .filter((check) => !check.passed)
     .map((check) => check.label)

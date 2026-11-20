@@ -42,6 +42,51 @@ export interface PaymentOrderListItem {
 export const PAYMENT_ORDER_MIN_MXN = 1
 export const PAYMENT_ORDER_MAX_MXN = 50_000
 
+/** Límites del concepto de pago: UNA palabra alfanumérica (sin espacios). */
+export const PAYMENT_ORDER_CONCEPTO_MIN = 3
+export const PAYMENT_ORDER_CONCEPTO_MAX = 20
+
+/**
+ * Normaliza el concepto de pago de una orden: UNA palabra alfanumérica,
+ * sin espacios ni caracteres especiales. Mayúsculas y sin acentos (las
+ * quitan también los bancos al imprimir el comprobante; el mismo criterio
+ * de `normalizarTexto` del matcheo). Null = inválido (vacío, con espacios,
+ * con caracteres especiales o fuera de 3–20 caracteres).
+ */
+export function normalizePaymentOrderConcepto(raw: string): string | null {
+  const upper = raw
+    .trim()
+    .toUpperCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+  if (!/^[A-Z0-9]+$/.test(upper)) return null
+  if (
+    upper.length < PAYMENT_ORDER_CONCEPTO_MIN ||
+    upper.length > PAYMENT_ORDER_CONCEPTO_MAX
+  ) {
+    return null
+  }
+  return upper
+}
+
+/** Mensaje de error compartido del concepto de pago inválido. */
+export const PAYMENT_ORDER_CONCEPTO_ERROR = `El concepto de pago es obligatorio: una sola palabra alfanumérica, sin espacios ni caracteres especiales, de ${PAYMENT_ORDER_CONCEPTO_MIN} a ${PAYMENT_ORDER_CONCEPTO_MAX} caracteres.`
+
+/**
+ * Ancla de CONCILIACIÓN de una orden: el concepto de pago que el pagador
+ * escribe en su SPEI y que el escaneo valida en el comprobante. Las órdenes
+ * nuevas lo traen en `note` (palabra obligatoria del creador); las de la era
+ * previa (sin palabra válida) conservan el CÓDIGO del link como ancla — su
+ * pagador ya lo recibió así. El código sigue existiendo siempre como
+ * identificador del link corto (spei.link/CÓDIGO) y desambiguador.
+ */
+export function paymentOrderConceptAnchor(order: {
+  note: string | null
+  code: string
+}): string {
+  return normalizePaymentOrderConcepto(order.note ?? "") ?? order.code
+}
+
 /**
  * Slack de la ventana de casado orden ↔ depósito: [`created_at` − slack,
  * ahora]. Compartido por el verificador (carriles `verifying` y `pending`),

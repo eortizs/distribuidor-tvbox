@@ -60,6 +60,8 @@ import {
 import {
   PAYMENT_ORDER_MAX_MXN,
   PAYMENT_ORDER_MIN_MXN,
+  PAYMENT_ORDER_CONCEPTO_ERROR,
+  normalizePaymentOrderConcepto,
 } from "@/lib/links-pago"
 import { createPaymentOrderAction, type CreatedPaymentOrder } from "@/app/actions/links-pago"
 
@@ -334,7 +336,7 @@ export function Calculadora({
   }, [cinta, cintaLista])
 
   // Cobro: el valor en pantalla se convierte en un link de pago con
-  // confirmación previa (monto editable + referencia opcional).
+  // confirmación previa (monto editable + concepto de pago obligatorio).
   const [cobroAbierto, setCobroAbierto] = useState(false)
   const [montoTexto, setMontoTexto] = useState("")
   const [referencia, setReferencia] = useState("")
@@ -379,6 +381,10 @@ export function Calculadora({
       setCobroError(
         `El monto máximo es $${PAYMENT_ORDER_MAX_MXN.toLocaleString("es-MX")} MXN.`
       )
+      return
+    }
+    if (!normalizePaymentOrderConcepto(referencia)) {
+      setCobroError(PAYMENT_ORDER_CONCEPTO_ERROR)
       return
     }
     startCreando(async () => {
@@ -593,8 +599,9 @@ export function Calculadora({
         <DialogHeader>
           <DialogTitle>Cobrar {cobroTitulo}</DialogTitle>
           <DialogDescription>
-            Se genera un link de pago con código de concepto: tu cliente
-            paga por SPEI y te llega la confirmación del cobro.
+            Se genera un link de pago: tu cliente lo abre, solicita el pago en
+            el chat del agente y ahí recibe su concepto de pago para pagar por
+            SPEI. Te llega la confirmación del cobro.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submitCobro} className="flex flex-col gap-3">
@@ -610,16 +617,20 @@ export function Calculadora({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="cobro-referencia">Referencia (opcional)</Label>
+            <Label htmlFor="cobro-referencia">Concepto de pago</Label>
             <Input
               id="cobro-referencia"
               autoComplete="off"
-              maxLength={120}
-              placeholder="Ej. Venta Juana"
+              maxLength={20}
+              placeholder="Ej. VentaJuana"
               value={referencia}
               onChange={(event) => setReferencia(event.target.value)}
               disabled={creando}
             />
+            <p className="text-muted-foreground text-xs">
+              Una sola palabra alfanumérica, sin espacios ni caracteres
+              especiales (3–20).
+            </p>
           </div>
           {cobroError ? (
             <p className="text-destructive text-sm" role="alert">

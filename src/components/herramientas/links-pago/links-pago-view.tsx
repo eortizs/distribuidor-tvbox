@@ -34,8 +34,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
+  paymentOrderConceptAnchor,
   paymentOrderMoney,
   paymentOrderStatusLabel,
+  PAYMENT_ORDER_CONCEPTO_ERROR,
+  normalizePaymentOrderConcepto,
   type PaymentOrderListItem,
 } from "@/lib/links-pago"
 import {
@@ -49,10 +52,11 @@ import { LinkCreadoDialog } from "@/components/herramientas/links-pago/link-crea
 
 /*
  * Vista del módulo SPEILink (/modulos/links-de-pago): formulario de
- * alta (monto libre + nota opcional) que devuelve el link corto
- * spei.link/<código> + QR para que el pagador pague por SPEI con el código
- * como concepto; listado de órdenes con el resultado del escaneo y las
- * acciones de revisión del creador.
+ * alta (importe + CONCEPTO DE PAGO obligatorio, una palabra alfanumérica)
+ * que devuelve el link corto spei.link/<código> + QR; el concepto queda
+ * OCULTO hasta que el pagador solicita el pago por WhatsApp y es el ancla
+ * de conciliación del comprobante; listado de órdenes con el resultado del
+ * escaneo y las acciones de revisión del creador.
  */
 
 const dateFormatter = new Intl.DateTimeFormat("es-MX", {
@@ -152,6 +156,12 @@ export function LinksPagoView({
     const parsed = Number(amount.replace(/[$,\s]/g, ""))
     if (!Number.isFinite(parsed) || parsed <= 0) {
       setFormError("Escribe el importe en pesos (ej. 350.00).")
+      return
+    }
+    // El concepto de pago es obligatorio y viaja normalizado (mayúsculas,
+    // sin acentos): es la palabra que el pagador escribe en su SPEI.
+    if (!normalizePaymentOrderConcepto(note)) {
+      setFormError(PAYMENT_ORDER_CONCEPTO_ERROR)
       return
     }
     startCreating(async () => {
@@ -286,8 +296,10 @@ export function LinksPagoView({
               Nuevo link de pago
             </FrameTitle>
             <FrameDescription>
-              Define el importe y genera el código de concepto con el link corto y el QR: el pagador abre el link, paga por SPEI con el
-              código y sube su comprobante en el chat del agente.
+              Define el importe y el concepto de pago: el pagador abre el link,
+              solicita el pago en el chat del agente y ahí recibe el concepto
+              para pagar por SPEI; el comprobante se valida contra ese
+              concepto.
             </FrameDescription>
           </FrameHeader>
           <div className="flex flex-col gap-3">
@@ -323,16 +335,20 @@ export function LinksPagoView({
                   />
                 </div>
                 <div className="flex flex-[2] flex-col gap-1.5">
-                  <Label htmlFor="orden-nota">Referencia (opcional)</Label>
+                  <Label htmlFor="orden-nota">Concepto de pago</Label>
                   <Input
                     id="orden-nota"
                     autoComplete="off"
-                    maxLength={120}
-                    placeholder="Ej. Instalación de Juan"
+                    maxLength={20}
+                    placeholder="Ej. PAGOJUAN"
                     value={note}
                     onChange={(event) => setNote(event.target.value)}
                     disabled={creating || !whatsappConfigured}
                   />
+                  <p className="text-muted-foreground text-xs">
+                    Una sola palabra alfanumérica, sin espacios ni caracteres
+                    especiales (3–20). El pagador la recibe por WhatsApp.
+                  </p>
                 </div>
               </div>
               {formError ? (
@@ -370,7 +386,7 @@ export function LinksPagoView({
           {orders.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <p className="text-muted-foreground text-sm">
-                Sin links todavía. Crea la primera con el importe a cobrar.
+                Sin links todavía. Crea la primera con el importe y el concepto de pago a cobrar.
               </p>
             </div>
           ) : (
@@ -435,6 +451,15 @@ export function LinksPagoView({
                               </dd>
                             </div>
                           ) : null}
+                          <div className="flex flex-col gap-0.5">
+                            <dt className="text-muted-foreground text-xs">Concepto de pago</dt>
+                            <dd className="font-mono">
+                              {paymentOrderConceptAnchor(order)}
+                            </dd>
+                            <dd className="text-muted-foreground text-xs">
+                              El pagador lo recibe al solicitar el pago por WhatsApp.
+                            </dd>
+                          </div>
                           <div className="flex flex-col gap-0.5">
                             <dt className="text-muted-foreground text-xs">Cuenta de cobro</dt>
                             <dd>

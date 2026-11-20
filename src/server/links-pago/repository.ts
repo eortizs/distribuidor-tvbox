@@ -3,25 +3,31 @@ import { randomInt } from "node:crypto"
 import { pool, type PoolClientLike } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
+import { paymentOrderConceptAnchor } from "@/lib/links-pago"
 
 /*
  * Órdenes de pago por WhatsApp (/modulos/links-de-pago): cobros de MONTO
  * LIBRE hacia un pagador EXTERNO (cualquier persona, sin cuenta en el
- * panel). El creador (admin o distribuidor) emite la orden; el pagador
- * recibe una link wa.me al agente con el código de concepto prellenado,
- * paga por SPEI escribiendo ese código como concepto y manda el comprobante
- * por el mismo chat; el escaneo del flujo de transferencias lo valida y
- * aprueba la orden o la deja en revisión del creador.
+ * panel). El creador (admin o distribuidor) emite la orden con IMPORTE y
+ * CONCEPTO DE PAGO (una palabra alfanumérica obligatoria); el pagador
+ * recibe un link wa.me al agente con la solicitud prellenada, solicita el
+ * pago y el agente le ENTREGA el concepto de pago; paga por SPEI escribiendo
+ * esa palabra como concepto y manda el comprobante por el mismo chat; el
+ * escaneo del flujo de transferencias lo valida contra la palabra y aprueba
+ * la orden o la deja en revisión del creador. La conciliación vive contra
+ * la PALABRA (`note`); el código de 4 caracteres solo identifica el link
+ * corto (spei.link/CÓDIGO) y desambigua.
  *
  * Ciclo de vida:
  *   - 'pending': activa. El código de 4 caracteres (mismo alfabeto sin
  *     ambigüedad que transfer_concepts) es ÚNICO GLOBAL solo entre las
- *     ACTIVAS (pending + verifying, índice único parcial): es el namespace
- *     que el pagador escribe como concepto y por el que el comprobante
- *     descubre la orden. La identificación del pagador por el código es
- *     MANDATORIA: sin comprobante que pase el escaneo con el código impreso
- *     la orden NO se autoconfirma por depósito (ni siquiera con monto
- *     único) — queda pendiente para el creador.
+ *     ACTIVAS (pending + verifying, índice único parcial): identifica el
+ *     link corto. El concepto de pago (palabra) es el ancla del comprobante
+ *     y queda OCULTO hasta que el pagador solicita el pago por WhatsApp.
+ *     La identificación del pagador por el concepto es MANDATORIA: sin
+ *     comprobante que pase el escaneo con el concepto impreso la orden NO
+ *     se autoconfirma por depósito (ni siquiera con monto único) — queda
+ *     pendiente para el creador.
  *   - 'verifying': comprobante válido (escaneo aprobado), esperando la
  *     confirmación del DEPÓSITO en la cuenta de Mercado Pago del creador
  *     (credencial propia o la de plataforma para el admin; misma fuente que
@@ -959,9 +965,12 @@ export async function confirmPaymentOrderDeposit(input: {
 }
 
 /**
- * Códigos de órdenes de pago ligados a IDs de pagos de MP (columna
+ * Anclas de conciliación (concepto de pago, o el código en las órdenes de la
+ * era previa) de las órdenes de pago ligadas a IDs de pagos de MP (columna
  * «Concepto» del reporte SPEI): el link es DETERMINISTA (el depósito que
- * confirmó la orden), no una inferencia por ventana.
+ * confirmó la orden), no una inferencia por ventana. La conciliación vive
+ * contra la PALABRA del concepto de pago; el código queda como respaldo de
+ * las órdenes creadas antes de que la palabra fuera obligatoria.
  */
 export async function findPaymentOrdersByMpPaymentIds(
   mpPaymentIds: string[]
@@ -969,14 +978,46 @@ export async function findPaymentOrdersByMpPaymentIds(
   const ids = [...new Set(mpPaymentIds.filter((id) => id.length > 0))]
   const result = new Map<string, string>()
   if (ids.length === 0) return result
-  const rows = await pool.query<{ id: string; mp_payment_id: string; code: string }>(
-    `SELECT id::text, mp_payment_id, code
+  const rows = await pool.query<{
+    id: string
+    mp_payment_id: string
+    code: string
+    note: string | null
+  }>(
+    `SELECT id::text, mp_payment_id, code, note
        FROM payment_orders
       WHERE mp_payment_id = ANY($1)`,
     [ids]
   )
   for (const row of rows.rows) {
-    result.set(String(row.mp_payment_id), String(row.code))
+    result.set(
+      String(row.mp_payment_id),
+      paymentOrderConceptAnchor({ note: row.note, code: String(row.code) })
+    )
   }
   return result
+}
+
+/**
+ * Última orden RESUELTA cuyo CONCEPTO DE PAGO matchee cualquiera de las
+ * palabras dadas (ya normalizadas por el llamador; la más recientemente
+ * resuelta). Replay honesto del comprobante/código de una orden de palabra
+ * ya resuelta — espejo de `findResolvedPaymentOrderByAnyCode`.
+ */
+export async function findResolvedPaymentOrderByAnyConcepto(
+  words: string[]
+): Promise<PaymentOrder | null> {
+  const normalized = [
+    ...new Set(
+      words.map((word) => word.trim().toUpperCase()).filter((word) => word.length > 0)
+    ),
+  ]
+  if (normalized.length === 0) return null
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.note = ANY($1) AND o.status IN ('paid','rejected','cancelled')
+      ORDER BY o.resolved_at DESC NULLS LAST LIMIT 1`,
+    [normalized]
+  )
+  return result.rows[0] ? mapRow(result.rows[0]) : null
 }

@@ -14,6 +14,9 @@ import {
   amountsEqualCents,
   depositWithinOrderWindow,
   isDepositLikePayment,
+  normalizePaymentOrderConcepto,
+  paymentOrderConceptAnchor,
+  PAYMENT_ORDER_CONCEPTO_ERROR,
   PAYMENT_ORDER_DEPOSIT_SLACK_MS,
 } from "../src/lib/links-pago.ts"
 
@@ -183,6 +186,59 @@ check("un centavo de diferencia NO es igualdad", () => {
 
 check("importes de distinto signo no son iguales", () => {
   assert.equal(amountsEqualCents(-5, 5), false)
+})
+
+/* --------------------- concepto de pago (ancla nueva) --------------------- */
+
+check("una palabra alfanumérica válida se normaliza a mayúsculas", () => {
+  assert.equal(normalizePaymentOrderConcepto("VentaJuana"), "VENTAJUANA")
+  assert.equal(normalizePaymentOrderConcepto("  pago350  "), "PAGO350")
+})
+
+check("los acentos se quitan (los bancos también al imprimir)", () => {
+  assert.equal(normalizePaymentOrderConcepto("Instalación"), "INSTALACION")
+  assert.equal(normalizePaymentOrderConcepto("ESPAÑA"), "ESPANA")
+})
+
+check("espacios y caracteres especiales NO se aceptan (una sola palabra)", () => {
+  assert.equal(normalizePaymentOrderConcepto("Venta Juana"), null)
+  assert.equal(normalizePaymentOrderConcepto("pago-juan"), null)
+  assert.equal(normalizePaymentOrderConcepto("pago_juan"), null)
+  assert.equal(normalizePaymentOrderConcepto("pago!"), null)
+  assert.equal(normalizePaymentOrderConcepto(""), null)
+})
+
+check("longitud del concepto: mínimo 3, máximo 20", () => {
+  assert.equal(normalizePaymentOrderConcepto("AB"), null)
+  assert.equal(normalizePaymentOrderConcepto("ABC"), "ABC")
+  assert.equal(normalizePaymentOrderConcepto("A".repeat(20)), "A".repeat(20))
+  assert.equal(normalizePaymentOrderConcepto("A".repeat(21)), null)
+})
+
+check("el mensaje de error del concepto menciona la regla", () => {
+  assert.match(PAYMENT_ORDER_CONCEPTO_ERROR, /una sola palabra alfanumérica/i)
+  assert.match(PAYMENT_ORDER_CONCEPTO_ERROR, /3 a 20/)
+})
+
+check("el ancla de conciliación es la palabra cuando existe", () => {
+  assert.equal(
+    paymentOrderConceptAnchor({ note: "VENTAJUANA", code: "P36E" }),
+    "VENTAJUANA"
+  )
+})
+
+check("el ancla de una orden previa (sin palabra) sigue siendo el código", () => {
+  assert.equal(
+    paymentOrderConceptAnchor({ note: null, code: "P36E" }),
+    "P36E"
+  )
+  assert.equal(
+    paymentOrderConceptAnchor({
+      note: "Instalación de Juan",
+      code: "P36E",
+    }),
+    "P36E"
+  )
 })
 
 console.log(`\n${passed} pruebas OK`)
