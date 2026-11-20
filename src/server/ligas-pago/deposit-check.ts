@@ -32,16 +32,15 @@ import {
  *
  * Dos LLAMADORES por orden:
  *   - `tryConfirmOrderDeposit` (order-side): busca el depósito de UNA orden
- *     en su ventana. Es la pieza del chequeo INMEDIATO tras el comprobante
- *     (dentro del turno de WhatsApp), del VERIFICADOR en background para
- *     órdenes 'verifying' (deposit-verifier.ts) y del CARRIL PENDING: con
- *     `uniqueOnly` el claim exige COINCIDENCIA ÚNICA dentro del candado —
- *     sin comprobante NO hay código impreso que desambigue, así que dos
- *     órdenes activas del mismo importe jamás se auto-confirman (ver
- *     `confirmPaymentOrderDeposit`).
+ *     'verifying' (comprobante ya validado con su código impreso — la
+ *     identificación del pagador por código es MANDATORIA) en su ventana.
+ *     Es la pieza del chequeo INMEDIATO tras el comprobante (dentro del
+ *     turno de WhatsApp) y del VERIFICADOR en background
+ *     (deposit-verifier.ts). No hay carril sin comprobante: una orden
+ *     'pending' jamás se autoconfirma por depósito.
  *   - `tryConfirmDepositPayment` (deposit-side): UN depósito (rama webhook,
  *     hoy inerte — MP no emite notificaciones por depósitos; blindaje por si
- *     empieza a emitirlas) busca su ÚNICA orden reclamante.
+ *     empieza a emitirlas) busca su ÚNICA orden 'verifying' reclamante.
  *
  * El TOKEN de consulta lo resuelve el llamador
  * (`resolvePaymentOrderDepositToken`): credencial propia del creador o la de
@@ -58,13 +57,6 @@ import {
  * el pagador pagó dos veces, cualquiera de los dos depósitos valida).
  * Devuelve la orden ya `paid`, o null si aún no hay depósito, el claim se
  * perfeccionó para otro actor o la orden dejó de ser reclamante.
- *
- * `uniqueOnly` (carril pending sin comprobante): el claim exige dentro del
- * candado que NINGUNA otra orden activa (payment_orders o mp_orders
- * verifying) del mismo importe cubra el depósito — ver
- * `confirmPaymentOrderDeposit`. Las dos órdenes del mismo importe quedan
- * para el comprobante o el creador: sin código impreso no hay
- * desambiguación posible.
  */
 export async function tryConfirmOrderDeposit(input: {
   order: PaymentOrder
@@ -74,8 +66,6 @@ export async function tryConfirmOrderDeposit(input: {
   pageTimeoutMs?: number
   /** Token de la cuenta receptora (credencial propia o plataforma). */
   accessToken: string
-  /** Exige coincidencia única en el claim (carril pending sin comprobante). */
-  uniqueOnly?: boolean
 }): Promise<PaymentOrder | null> {
   const createdMs = Date.parse(input.order.createdAt)
   const beginIso = new Date(
@@ -125,33 +115,22 @@ export async function tryConfirmOrderDeposit(input: {
     mpPaymentId: chosen.id,
     mpDepositAt: chosen.dateApproved,
     reviewedBy: input.order.creatorUserId,
-    uniqueOnly: input.uniqueOnly,
   })
 }
 
 /**
- * Resultado del match deposit-side: la orden confirmada y si traía
- * COMPROBANTE ya validado (verifying) — el llamador elige el aviso con el
- * texto correcto (con o sin comprobante).
- */
-export interface DepositPaymentMatch {
-  order: PaymentOrder
-  hadReceipt: boolean
-}
-
-/**
  * Match DEPOSIT-SIDE: UN depósito de MP ya acreditado busca su ÚNICA orden
- * reclamante. Lo comparten el BARRIDO del verificador (una búsqueda por
- * cuenta cubre todas sus órdenes — reacción en la fase del tick) y la rama
- * webhook (hoy inerte: MP no emite notificaciones por depósitos, 26 días de
- * logs con cero eventos; blindaje por si empieza a emitirlas). El
- * `sellerUserId` acota las candidatas a órdenes cuyo dinero apunta a la
- * MISMA cuenta que leyó el depósito (`null` = plataforma: admins sin token
- * propio); la ventana y el importe se filtran con los predicados puros
- * compartidos y la autoridad final es la guarda de unicidad DENTRO del
- * candado del claim (`uniqueOnly`). Null = sin candidata única, depósito ya
- * reservado o claim perdido — el flujo de siempre (verificador por orden,
- * comprobante, creador) sigue siendo el dueño del resultado.
+ * 'verifying' reclamante (comprobante ya validado con el código impreso —
+ * sin comprobante no hay confirmación). Lo comparten el BARRIDO del
+ * verificador (una búsqueda por cuenta cubre todas sus órdenes — reacción
+ * en la fase del tick) y la rama webhook (hoy inerte: MP no emite
+ * notificaciones por depósitos, 26 días de logs con cero eventos; blindaje
+ * por si empieza a emitirlas). El `sellerUserId` acota las candidatas a
+ * órdenes cuyo dinero apunta a la MISMA cuenta que leyó el depósito (`null`
+ * = plataforma: admins sin token propio); la ventana se filtra con el
+ * predicado puro compartido y la reserva del depósito es la guarda final
+ * dentro del candado del claim. Null = sin candidata única, depósito ya
+ * reservado o claim perdido.
  */
 export async function tryConfirmDepositPayment(input: {
   mpPaymentId: string
@@ -159,7 +138,7 @@ export async function tryConfirmDepositPayment(input: {
   dateApproved: string | null
   /** Cuenta receptora del depósito: null = plataforma (.env). */
   sellerUserId?: string | null
-}): Promise<DepositPaymentMatch | null> {
+}): Promise<PaymentOrder | null> {
   const depositAtMs = input.dateApproved ? Date.parse(input.dateApproved) : null
   if (!Number.isFinite(input.amountMxn) || depositAtMs === null) return null
 
@@ -182,14 +161,10 @@ export async function tryConfirmDepositPayment(input: {
   )
   if (reserved.has(input.mpPaymentId)) return null
 
-  const candidate = inWindow[0]
-  const hadReceipt = candidate.status === "verifying"
-  const confirmed = await confirmPaymentOrderDeposit({
-    orderId: candidate.id,
+  return confirmPaymentOrderDeposit({
+    orderId: inWindow[0].id,
     mpPaymentId: input.mpPaymentId,
     mpDepositAt: input.dateApproved,
-    reviewedBy: candidate.creatorUserId,
-    uniqueOnly: true,
+    reviewedBy: inWindow[0].creatorUserId,
   })
-  return confirmed === null ? null : { order: confirmed, hadReceipt }
 }

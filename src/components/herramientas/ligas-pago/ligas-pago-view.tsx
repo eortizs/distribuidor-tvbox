@@ -385,6 +385,17 @@ export function LigasPagoView({
                                 ? `+${order.payerPhone}`
                                 : "Aún no contacta"}
                             </dd>
+                            {order.payerBoundAt ? (
+                              <dd className="text-muted-foreground text-xs">
+                                Contactó el{" "}
+                                {dateFormatter.format(new Date(order.payerBoundAt))}
+                              </dd>
+                            ) : order.linkOpenedAt ? (
+                              <dd className="text-muted-foreground text-xs">
+                                Abrió la liga el{" "}
+                                {dateFormatter.format(new Date(order.linkOpenedAt))}
+                              </dd>
+                            ) : null}
                           </div>
                           {order.status === "verifying" ? (
                             <div className="flex flex-col gap-0.5">

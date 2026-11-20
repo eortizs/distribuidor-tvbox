@@ -27,7 +27,7 @@ import { publicSiteUrl, shortLinkBaseUrl } from "@/server/site-url"
 
 const TITLE = "SPEI Link — Links de pago por WhatsApp con 0% de comisión"
 const DESCRIPTION =
-  "Crea links de pago para WhatsApp y recibe el 100% de tu dinero directo en tu cuenta. El depósito se valida solo, automáticamente."
+  "Crea links de pago para WhatsApp y recibe el 100% de tu dinero directo en tu cuenta. Cada pago se valida con su código de concepto."
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -71,7 +71,7 @@ const STEPS = [
     step: "3",
     title: <><BrandInline /> valida todo</>,
     description:
-      "El sistema cruza el depósito real en tu cuenta y les confirma a ambos al instante.",
+      "El cliente envía su comprobante por el chat y el sistema valida el código de concepto y el depósito real en tu cuenta.",
   },
 ]
 
@@ -92,9 +92,9 @@ const TRUST_POINTS = [
     title: "Validación real del saldo",
     description: (
       <>
-        Una venta solo se confirma cuando el depósito está realmente en tu
-        cuenta, con cruce bancario automático. Si el dinero no cayó, no se
-        confirma.
+        Una venta solo se confirma cuando el pago lleva el código de concepto
+        y el depósito está realmente en tu cuenta. Si el dinero no cayó, no
+        se confirma.
       </>
     ),
   },
@@ -152,7 +152,7 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
     id: "sin-concepto",
     question: "¿Qué pasa si mi cliente olvida poner el concepto de pago?",
     answer:
-      "El sistema cruza el monto exacto, la hora y el depósito real para ayudarte a conciliarlo sin fricción.",
+      "El pago no se puede identificar solo y queda pendiente de revisión. Por eso el chat siempre recuerda escribir el código de 4 letras como concepto: con él, la confirmación es automática.",
   },
   {
     id: "mercado-pago-cliente",
@@ -367,7 +367,14 @@ export default function ShortLandingPage() {
                 <ChatBubble side="right" time="10:34">
                   Listo, ya hice la transferencia
                 </ChatBubble>
-                <ChatBubble side="left" variant="verified" time="10:35">
+                <ChatBubble side="left" variant="assistant" time="10:34">
+                  Envíame la foto del comprobante de tu transferencia para
+                  confirmar el pago.
+                </ChatBubble>
+                <ChatBubble side="right" time="10:35">
+                  Va, ya la envié 📎
+                </ChatBubble>
+                <ChatBubble side="left" variant="verified" time="10:36">
                   ✅{" "}
                   <span className="font-semibold">
                     ¡Pago verificado en cuenta!

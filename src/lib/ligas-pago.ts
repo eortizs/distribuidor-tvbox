@@ -16,6 +16,10 @@ export interface PaymentOrderListItem {
   status: PaymentOrder["status"]
   bank: PaymentOrder["bank"]
   payerPhone: string | null
+  /** Primera apertura de la liga corta (spei.link → wa.me). */
+  linkOpenedAt: string | null
+  /** Primer contacto del pagador (teléfono ligado por entrega del código). */
+  payerBoundAt: string | null
   ticketFileId: string | null
   scanStatus: string | null
   scanResult: Record<string, unknown> | null
@@ -110,6 +114,8 @@ export function toPaymentOrderListItem(order: PaymentOrder): PaymentOrderListIte
     status: order.status,
     bank: order.bank,
     payerPhone: order.payerPhone,
+    linkOpenedAt: order.linkOpenedAt,
+    payerBoundAt: order.payerBoundAt,
     ticketFileId: order.ticketFileId,
     scanStatus: order.scanStatus,
     scanResult: order.scanResult,

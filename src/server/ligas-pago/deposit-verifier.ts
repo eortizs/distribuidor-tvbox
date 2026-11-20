@@ -10,13 +10,13 @@ import { paymentOrderMoney } from "@/lib/ligas-pago"
 import { tryConfirmOrderDeposit, tryConfirmDepositPayment } from "./deposit-check"
 import {
   notifyDepositConfirmed,
-  notifyDepositAutoConfirmed,
 } from "./notify"
 import {
   listDueVerifyingOrders,
-  listDuePendingOrders,
   listDepositSweeperAccounts,
+  listDuePayerNudgeOrders,
   markDepositEscalated,
+  markPaymentOrderPayerNudged,
   savePaymentOrderDepositCheck,
   type DepositSweeperAccount,
   type PaymentOrder,
@@ -27,21 +27,20 @@ import {
  * mecanismos por tick (el BARRIDO primero, siempre):
  *
  *  - BARRIDO POR DEPÓSITO (reacción rápida): UNA búsqueda de MP por cuenta
- *    receptora con órdenes activas trae los depósitos recién acreditados
- *    (ventana de 2 min) y casa CADA uno contra las órdenes de ESA cuenta
- *    (importe exacto + ventana + coincidencia única). La latencia entre la
+ *    receptora con órdenes 'verifying' trae los depósitos recién acreditados
+ *    (ventana de 2 min) y casa CADA uno contra las órdenes 'verifying' de
+ *    ESA cuenta (importe exacto + ventana). La latencia entre la
  *    acreditación (visible en MP al instante — el reporte SPEI la enseña en
  *    segundos) y el reclamo queda acotada a la FASE DEL TICK (≤10 s), y el
  *    presupuesto de MP es CONSTANTE: 1 búsqueda por cuenta por tick, no una
  *    por orden (caso BPKE: 43 s de desfase con el esquema por orden).
  *
- *  - CARRILES POR ORDEN (fallback): sondean `deposit_next_check_at` con
- *    backoff (45 s ×6 → 2 min ×6 → 5 min ×6 → 15 min) y cubren lo que el
- *    barrido no ve (reinicios, ventanas largas, órdenes que ya pasaron la
- *    ventana de 2 min del barrido):
- *    - 'verifying' (comprobante válido): escalamiento a manual tras 24 h.
- *    - 'pending' (sin comprobante): sin escalamiento, tope de edad 72 h;
- *      el claim exige coincidencia única (misma guarda que el barrido).
+ *  - CARRIL POR ORDEN (fallback): sondea 'deposit_next_check_at' de las
+ *    órdenes 'verifying' (comprobante ya validado con su código impreso —
+ *    la identificación del pagador por código es MANDATORIA) con backoff
+ *    (45 s ×6 → 2 min ×6 → 5 min ×6 → 15 min) y escalamiento a manual tras
+ *    24 h. Las órdenes 'pending' SIN comprobante NO se autoconfirman jamás
+ *    (ni por barrido ni por sondeo): quedan para el creador.
  *
  * Arranque: `src/instrumentation.ts` (hook `register`, runtime Node), mismo
  * patrón del scheduler de alertas: intervalo de 10 s, guard `ticking`
@@ -69,9 +68,6 @@ const sweepFailLoggedAt = new Map<string, number>()
 
 /** Órdenes 'verifying' verificadas por pasada. */
 const MAX_PER_TICK = 4
-
-/** Órdenes 'pending' (carril sin comprobante) por pasada. */
-const MAX_PENDING_PER_TICK = 2
 
 /** Sondeos en paralelo por pasada. */
 const CONCURRENCY = 2
@@ -127,22 +123,18 @@ function notifyEscalated(order: PaymentOrder): void {
 }
 
 /**
- * Verifica UNA orden: en 'verifying' el escalamiento por edad primero
- * (siempre disponible, aun sin credencial de MP), después la consulta de
- * depósito; en el carril 'pending' no hay escalamiento y el claim exige
- * coincidencia única. Nunca lanza.
+ * Verifica UNA orden 'verifying': el escalamiento por edad primero (siempre
+ * disponible, aun sin credencial de MP), después la consulta de depósito.
+ * Nunca lanza.
  */
-async function verifyOrder(
-  order: PaymentOrder,
-  options: { uniqueOnly: boolean }
-): Promise<void> {
-  const source = options.uniqueOnly ? "pending_poll" : "verificador"
+async function verifyOrder(order: PaymentOrder): Promise<void> {
+  const source = "verificador"
   const sinceMs = order.verifyingSince
     ? Date.parse(order.verifyingSince)
     : Date.now()
   const waitingMs = Date.now() - (Number.isNaN(sinceMs) ? Date.now() : sinceMs)
 
-  if (!options.uniqueOnly && waitingMs >= ESCALATE_AFTER_MS) {
+  if (waitingMs >= ESCALATE_AFTER_MS) {
     const escalated = await markDepositEscalated(order.id).catch(() => false)
     if (escalated) {
       logEvent("orden_pago.deposit_escalated", {
@@ -177,7 +169,6 @@ async function verifyOrder(
     confirmed = await tryConfirmOrderDeposit({
       order,
       accessToken,
-      uniqueOnly: options.uniqueOnly,
     })
   } catch (error) {
     // Fallo de MP/BD: cuenta como intento fallido para el backoff (la edad
@@ -205,14 +196,9 @@ async function verifyOrder(
       mp_payment_id: confirmed.mpPaymentId,
       source,
       checks: order.depositChecks,
-      receipt_free: options.uniqueOnly,
       waiting_ms: Math.max(waitingMs, 0),
     })
-    if (options.uniqueOnly) {
-      notifyDepositAutoConfirmed(confirmed)
-    } else {
-      notifyDepositConfirmed(confirmed)
-    }
+    notifyDepositConfirmed(confirmed)
     return
   }
 
@@ -232,29 +218,50 @@ async function verifyOrder(
 
 /** Pasada del verificador con concurrencia acotada. Nunca lanza. */
 async function verifyTick(): Promise<void> {
-  const [due, duePending] = await Promise.all([
-    listDueVerifyingOrders(MAX_PER_TICK).catch(() => []),
-    listDuePendingOrders(MAX_PENDING_PER_TICK).catch(() => []),
-  ])
-  if (due.length === 0 && duePending.length === 0) return
-  const jobs = [
-    ...due.map((order) => ({ order, uniqueOnly: false })),
-    ...duePending.map((order) => ({ order, uniqueOnly: true })),
-  ]
+  const due = await listDueVerifyingOrders(MAX_PER_TICK).catch(() => [])
+  if (due.length === 0) return
   let index = 0
   const workers = Array.from(
-    { length: Math.min(CONCURRENCY, jobs.length) },
+    { length: Math.min(CONCURRENCY, due.length) },
     async () => {
-      while (index < jobs.length) {
-        const current = jobs[index]
+      while (index < due.length) {
+        const current = due[index]
         index += 1
-        await verifyOrder(current.order, {
-          uniqueOnly: current.uniqueOnly,
-        }).catch(() => {})
+        await verifyOrder(current).catch(() => {})
       }
     }
   )
   await Promise.all(workers)
+}
+
+/**
+ * RECORDATORIO proactivo al pagador: a los 10 min del contacto sin
+ * comprobante, la liga pide su comprobante por WhatsApp (UNA sola vez por
+ * orden, dedupe por `payer_nudged_at`). Cierra el ciclo de los pagadores
+ * que pagan y se van sin enviar la foto (casos Z93K/PLJ7/6HMR): sin el
+ * comprobante no hay identificación por código y la confirmación no puede
+ * salir. Nunca lanza.
+ */
+async function nudgeTick(): Promise<void> {
+  const due = await listDuePayerNudgeOrders().catch(() => [])
+  for (const order of due) {
+    const claimed = await markPaymentOrderPayerNudged(order.id).catch(() => false)
+    if (!claimed || !order.payerPhone) continue
+    logEvent("orden_pago.payer_nudge", {
+      order_id: order.id,
+      code: order.code,
+      amount: order.amountMxn,
+    })
+    await enqueueWhatsAppForPhone({
+      userId: order.creatorUserId,
+      phone: order.payerPhone,
+      kind: WHATSAPP_KIND_PAYMENT_ORDER,
+      title: "Comprobante pendiente",
+      body: `¿Ya hiciste tu pago de ${paymentOrderMoney(
+        order.amountMxn
+      )} con el código ${order.code}? Recuerda escribir ${order.code} como *concepto de pago* y envíame en este chat la FOTO de tu comprobante para validar tu pago al instante.`,
+    }).catch(() => {})
+  }
 }
 
 let timer: ReturnType<typeof setInterval> | null = null
@@ -285,29 +292,24 @@ async function sweepAccount(account: DepositSweeperAccount): Promise<void> {
     if (sweepSeen.has(key)) continue
     sweepSeen.set(key, Date.now())
 
-    const match = await tryConfirmDepositPayment({
+    const confirmed = await tryConfirmDepositPayment({
       mpPaymentId: deposit.id,
       amountMxn: deposit.amountMxn,
       dateApproved: deposit.dateApproved,
       sellerUserId: account.sellerUserId,
     }).catch(() => null)
-    if (match === null) continue
+    if (confirmed === null) continue
 
     logEvent("orden_pago.deposit_confirmed", {
-      order_id: match.order.id,
-      code: match.order.code,
-      amount: match.order.amountMxn,
-      mp_payment_id: match.order.mpPaymentId,
+      order_id: confirmed.id,
+      code: confirmed.code,
+      amount: confirmed.amountMxn,
+      mp_payment_id: confirmed.mpPaymentId,
       source: "sweeper",
       seller: account.sellerUserId ?? "platform",
-      checks: match.order.depositChecks,
-      receipt_free: !match.hadReceipt,
+      checks: confirmed.depositChecks,
     })
-    if (match.hadReceipt) {
-      notifyDepositConfirmed(match.order)
-    } else {
-      notifyDepositAutoConfirmed(match.order)
-    }
+    notifyDepositConfirmed(confirmed)
   }
 }
 
@@ -342,9 +344,12 @@ async function tick(): Promise<void> {
   ticking = true
   try {
     // Barrido primero: reacción en la fase del tick; los carriles por orden
-    // son el fallback (backoff) para lo que la ventana corta no cubre.
+    // son el fallback (backoff) para lo que la ventana corta no cubre. El
+    // recordatorio al pagador cierra el ciclo de los que pagan sin enviar
+    // comprobante.
     await sweepTick()
     await verifyTick()
+    await nudgeTick()
   } catch (error) {
     console.error(
       JSON.stringify({

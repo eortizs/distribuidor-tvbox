@@ -2,7 +2,6 @@ import { createHash } from "node:crypto"
 
 import { isTransferConceptCodeShape } from "@/server/transferencias/concepto"
 import { conceptoImpresoCoincide } from "@/server/asistente/renovacion"
-import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
 import {
   extraerComprobanteDeArchivo,
   receiptScanConfigured,
@@ -12,6 +11,7 @@ import {
 import { saveUserFile } from "@/server/storage/user-files"
 
 import {
+  findActivePaymentOrdersByPayerPhone,
   findLatestResolvedPaymentOrderByPayerPhone,
   findPendingPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyCode,
@@ -26,6 +26,7 @@ import {
   notifyPaymentOrderCreator,
   reviewPaymentReceipt,
 } from "./review"
+import { notifyPayerContacted } from "./notify"
 
 /*
  * Canal WhatsApp del PAGADOR de una orden de pago: cualquier persona sin
@@ -112,57 +113,21 @@ function findPaymentOrderCodeTokens(text: string): string[] {
 }
 
 /**
- * ¿El creador de la orden tiene credencial consultable para la cuenta
- * receptora (propia del distribuidor o la de plataforma para el admin)? Con
- * ella el depósito se confirma solo (carril `pending` del verificador) y las
- * instrucciones al pagador dejan de pedir comprobante. Caché en memoria con
- * TTL: el turno de texto corre por cada mensaje y la resolución consulta
- * BD — 5 min de gracia para altas/bajas de token es más que suficiente.
- */
-const CREDENTIAL_CACHE_TTL_MS = 5 * 60_000
-const credentialCache = new Map<string, { auto: boolean; at: number }>()
-
-async function creadorAutoconfirma(userId: string): Promise<boolean> {
-  const now = Date.now()
-  if (credentialCache.size > 500) {
-    for (const [key, entry] of credentialCache) {
-      if (now - entry.at > CREDENTIAL_CACHE_TTL_MS) credentialCache.delete(key)
-    }
-  }
-  const cached = credentialCache.get(userId)
-  if (cached && now - cached.at < CREDENTIAL_CACHE_TTL_MS) return cached.auto
-  const auto =
-    (await resolvePaymentOrderDepositToken(userId).catch(() => null)) !== null
-  credentialCache.set(userId, { auto, at: now })
-  return auto
-}
-
-/**
  * Mensaje 1 de la respuesta: las INSTRUCCIONES del pago. Texto
  * DETERMINISTA (siempre idéntico, plantilla fija): sentencia del pago con
  * el código como concepto + los datos de la orden (importe, referencia,
  * banco, CLABE y titular) — el CLABE se imprime aquí para que el pagador
  * sepa a qué refiere el número que llega suelto en el tercer mensaje.
  *
- * Con credencial consultable del creador el comprobante deja de pedirse:
- * el depósito se confirma solo (importe exacto + ventana con coincidencia
- * única) y el aviso llega por este chat; enviarlo queda como opción que
- * agiliza los casos con montos repetidos (el código impreso desambigua).
- * La promesa de aviso PERSONAL exige el teléfono ligado (`payerPhone`): el
- * flujo por monto de spei.link viaja sin código y NO liga el teléfono, así
- * que ahí se promete la confirmación automática de la orden pero se pide
- * el código como mensaje para poder avisar — prometer el aviso sin
- * teléfono sería una promesa que el sistema no puede cumplir.
+ * La identificación del pagador por el CÓDIGO de concepto es MANDATORIA: el
+ * comprobante (con el código escrito como concepto e impreso en el ticket)
+ * es la única evidencia que confirma la orden automáticamente — sin él el
+ * pago queda para revisión del creador, aunque el depósito acredite. Así
+ * dos cobros del mismo importe (sucursales distintas, sin coordinación de
+ * centavos) jamás se confunden de pagador.
  */
-function instruccionesDePago(order: PaymentOrder, autoConfirma: boolean): string {
-  let sentencia: string
-  if (!autoConfirma) {
-    sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
-  } else if (order.payerPhone !== null) {
-    sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago*. Cuando el depósito se acredite en la cuenta te avisaremos automáticamente por este chat: no necesitas enviar comprobante (si lo envías, se valida igual y agiliza los casos con montos repetidos).`
-  } else {
-    sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago*. La orden se confirma sola cuando el depósito se acredite en la cuenta: no necesitas enviar comprobante. Para recibir la confirmación aquí mismo, envía el CÓDIGO de pago como mensaje (antes o después de pagar).`
-  }
+function instruccionesDePago(order: PaymentOrder): string {
+  const sentencia = `Realiza tu pago SPEI con el código ${order.code} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
   return [
     sentencia,
     "",
@@ -184,11 +149,10 @@ function instruccionesDePago(order: PaymentOrder, autoConfirma: boolean): string
  */
 function respuestaConCodigo(
   order: PaymentOrder,
-  inboundText: string,
-  autoConfirma: boolean
+  inboundText: string
 ): PaymentOrderTurnResult {
   return {
-    text: instruccionesDePago(order, autoConfirma),
+    text: instruccionesDePago(order),
     additionalTexts: [order.code, order.bank.account],
     orderId: order.id,
     inboundText,
@@ -280,6 +244,77 @@ function textoMontoAmbiguo(monto: number): string {
 }
 
 /**
+ * ¿El mensaje es una CONFIRMACIÓN de pago del pagador («ya pagué», «ya hice
+ * la transferencia», «comprobante enviado»…)? Solo disamina cuando el
+ * teléfono tiene una liga ACTIVA ligada (ver abajo): el aviso del pagador
+ * NO confirma nada por sí solo — responde pidiendo el comprobante, que es
+ * la única evidencia que valida el pago (la revisión visual con el código
+ * impreso). Frases cerradas: no matchea agradecimientos ni charla suelta.
+ */
+const PAYMENT_CONFIRMATION_RE =
+  /\b(?:ya\s+(?:te\s+)?pagu[eé]|pagu[eé]|pagado|ya\s+hice\s+(?:la\s+)?(?:transferencia|pago)|ya\s+transfer[ií]|ya\s+realic[eé]\s+(?:el\s+)?pago|ya\s+se\s+hizo\s+el\s+pago|comprobante\s+(?:enviado|adjunto|mandado)|transferencia\s+realizada)\b/i
+
+/**
+ * Turno de CONFIRMACIÓN del pagador («ya pagué»): con una liga activa
+ * ligada al teléfono responde (a) el estado real si ya está verificando
+ * depósito, (b) la petición EXPLÍCITA del comprobante si sigue pendiente —
+ * el pagador acaba de declarar que pagó, el momento exacto para pedirle la
+ * foto que valida su pago. Null = sin ligas activas: el turno sigue su
+ * curso normal (el mensaje no es de liga de pago).
+ */
+async function maybeHandlePaymentConfirmation(input: {
+  phone: string
+  text: string
+}): Promise<PaymentOrderTurnResult | null> {
+  if (!PAYMENT_CONFIRMATION_RE.test(input.text)) return null
+  const activas = await findActivePaymentOrdersByPayerPhone(input.phone).catch(
+    () => []
+  )
+  if (activas.length === 0) return null
+
+  const verificando = activas.find((order) => order.status === "verifying")
+  if (verificando) {
+    logEvent("orden_pago.whatsapp_confirm_replay", {
+      phone: maskPhone(input.phone),
+      order_id: verificando.id,
+      code: verificando.code,
+    })
+    return {
+      text: textoVerificandoDeposito(verificando),
+      orderId: verificando.id,
+      inboundText: input.text,
+      mediaMime: null,
+    }
+  }
+
+  if (activas.length > 1) {
+    return {
+      text: "Tienes varias ligas de pago activas con este número. Envíame el comprobante junto con el CÓDIGO de la que pagaste como mensaje para identificarla.",
+      orderId: null,
+      inboundText: input.text,
+      mediaMime: null,
+    }
+  }
+
+  const order = activas[0]
+  logEvent("orden_pago.whatsapp_confirm", {
+    phone: maskPhone(input.phone),
+    order_id: order.id,
+    code: order.code,
+  })
+  return {
+    text: [
+      "*¡Gracias por avisar!* Para confirmar tu pago necesito tu comprobante:",
+      "",
+      `Adjunta en este chat la FOTO o el PDF de tu transferencia (con el código ${order.code} como concepto) y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
+    ].join("\n"),
+    orderId: order.id,
+    inboundText: input.text,
+    mediaMime: null,
+  }
+}
+
+/**
  * Turno de TEXTO del pagador (sin archivo), de la fuente más específica a
  * la más débil:
  *   1. token con forma de código que matchee una orden pendiente (liga
@@ -288,10 +323,11 @@ function textoMontoAmbiguo(monto: number): string {
  *   2. replay honesto del código de una orden YA resuelta,
  *   3. SOLICITUD por monto («Solicito una liga de pago por $X», el texto
  *      prellenado de la liga): UNA pendiente por ese importe y sin pagador
- *      de otro número → respuesta SIN ligar teléfono (el monto no prueba
- *      identidad); varias → se pide el código; ya ligada a otro número →
- *      guía sin revelar código ni datos; ninguna → replay por teléfono
- *      (orden resuelta) o guía honesta.
+ *      de otro número → respuesta LIGANDO el teléfono: la entrega del
+ *      código a ese chat es la identidad del pagador (ver
+ *      `touchPaymentOrderPayer`); varias → se pide el código; ya ligada a
+ *      otro número → guía sin revelar código ni datos; ninguna → replay por
+ *      teléfono (orden resuelta) o guía honesta.
  *
  * Null = no es un turno de liga de pago (el socket sigue con la cortesía).
  */
@@ -303,7 +339,14 @@ export async function maybeHandlePaymentOrderText(input: {
 
   const order = await findPendingPaymentOrderByAnyCode(tokens).catch(() => null)
   if (order) {
-    await touchPaymentOrderPayer(order.id, input.phone).catch(() => {})
+    // Saber el código ES la identidad del pagador: se liga el teléfono y
+    // (solo la primera vez) se avisa al creador que su liga está en uso.
+    const firstBind = await touchPaymentOrderPayer(order.id, input.phone).catch(
+      () => false
+    )
+    if (firstBind) {
+      notifyPayerContacted(order, input.phone)
+    }
     logEvent("orden_pago.whatsapp_text", {
       phone: maskPhone(input.phone),
       order_id: order.id,
@@ -320,11 +363,7 @@ export async function maybeHandlePaymentOrderText(input: {
         mediaMime: null,
       }
     }
-    return respuestaConCodigo(
-      order,
-      input.text,
-      await creadorAutoconfirma(order.creatorUserId)
-    )
+    return respuestaConCodigo(order, input.text)
   }
 
   // Replay honesto: el código corresponde a una orden YA resuelta (evita
@@ -346,6 +385,13 @@ export async function maybeHandlePaymentOrderText(input: {
       }
     }
   }
+
+  // Confirmación de pago del pagador («ya pagué»): con liga activa ligada
+  // responde el estado o pide el comprobante (la revisión visual con el
+  // código impreso es la única confirmación). Antes del parse de solicitud:
+  // un aviso de pago no es una solicitud por monto.
+  const confirmacion = await maybeHandlePaymentConfirmation(input)
+  if (confirmacion !== null) return confirmacion
 
   const monto = parsePaymentOrderRequestAmount(input.text)
   if (monto === null) return null
@@ -438,17 +484,30 @@ export async function maybeHandlePaymentOrderText(input: {
       mediaMime: null,
     }
   }
+  // Binding por ENTREGA DEL CÓDIGO: el sistema acaba de entregar el código
+  // y la CLABE a ESTE chat — la liga corta solo la comparte el cobrador con
+  // su pagador, así que el chat que la solicitó (candidata ÚNICA de ese
+  // monto, sin pagador de otro número, sin ambigüedad) ES el pagador. La
+  // entrega del código es la identidad; el monto solo resolvió a la orden.
+  // Sin esto el embudo quedaba ciego: el pagador contactaba, recibía sus
+  // datos y pagaba, pero la liga mostraba «aún no contacta» (caso PLJ7) y
+  // el creador no recibía aviso alguno hasta el comprobante. El binding NO
+  // interviene en decisiones de dinero: la confirmación sigue exigiendo el
+  // comprobante validado con el código impreso.
+  const firstBind = await touchPaymentOrderPayer(
+    candidata.id,
+    input.phone
+  ).catch(() => false)
+  if (firstBind) {
+    notifyPayerContacted(candidata, input.phone)
+  }
   logEvent("orden_pago.whatsapp_request", {
     phone: maskPhone(input.phone),
     order_id: candidata.id,
     code: candidata.code,
     monto,
   })
-  return respuestaConCodigo(
-    candidata,
-    input.text,
-    await creadorAutoconfirma(candidata.creatorUserId)
-  )
+  return respuestaConCodigo(candidata, input.text)
 }
 
 /** Veredicto del chat para el resultado de la revisión. */

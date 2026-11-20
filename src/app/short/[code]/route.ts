@@ -3,6 +3,7 @@ import { NextResponse, connection, type NextRequest } from "next/server"
 import {
   findPendingPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyCode,
+  markPaymentOrderLinkOpened,
 } from "@/server/ligas-pago/repository"
 import {
   buildPaymentOrderWaLink,
@@ -201,6 +202,10 @@ export async function GET(
     () => null
   )
   if (order) {
+    // Primera apertura de la liga (trazabilidad del embudo; escribe UNA
+    // vez y no interviene en decisiones de dinero). Best-effort detached:
+    // el redirect no espera por la bitácora.
+    void markPaymentOrderLinkOpened(order.id).catch(() => {})
     const target = buildPaymentOrderWaLink(order.amountMxn)
     if (!target) {
       return htmlResponse(

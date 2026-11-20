@@ -9,8 +9,9 @@ import type { PaymentOrder } from "./repository"
  * ligado. Viven en un módulo propio (sin depender del flujo de revisión del
  * comprobante) para que TODOS los confirmadores los compartan sin ciclos de
  * importación: el chequeo inmediato y el verificador en background
- * (deposit-verifier.ts, carriles verifying y pending) y la rama webhook de
- * depósitos (mercadopago/service.ts → deposit-check.ts).
+ * (deposit-verifier.ts) y la rama webhook de depósitos (mercadopago/
+ * service.ts → deposit-check.ts). Toda confirmación lleva comprobante
+ * validado (la identificación del pagador por código es mandatoria).
  */
 
 function money(amount: number): string {
@@ -48,9 +49,25 @@ function notifyPayer(order: PaymentOrder, title: string, body: string): void {
 }
 
 /**
- * Depósito confirmado CON comprobante (chequeo inmediato del turno y
- * verificador del carril 'verifying'): los textos mencionan el comprobante
- * validado.
+ * El pagador contactó (primer binding de su teléfono: recibió el código y
+ * la CLABE por WhatsApp). Campana SOLO al creador — el pagador ya está en
+ * el chat y su confirmación fluye por ahí. Se dispara UNA vez por orden
+ * (`touchPaymentOrderPayer` devuelve true solo en el primer binding).
+ */
+export function notifyPayerContacted(order: PaymentOrder, phone: string): void {
+  notifyCreator(
+    order,
+    "Pagador en contacto",
+    `El pagador (WhatsApp ${maskPhone(phone)}) abrió tu liga ${order.code} (${money(
+      order.amountMxn
+    )}) y recibió el código de concepto y la CLABE. Te avisaremos cuando envíe su comprobante o cuando el pago se confirme.`
+  )
+}
+
+/**
+ * Depósito confirmado CON comprobante validado (chequeo inmediato del
+ * turno, verificador del carril 'verifying' y barrido/webhook — toda
+ * confirmación pasa por el comprobante): los textos lo mencionan.
  */
 export function notifyDepositConfirmed(order: PaymentOrder): void {
   const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
@@ -70,32 +87,5 @@ export function notifyDepositConfirmed(order: PaymentOrder): void {
     `Recibimos tu comprobante y confirmamos el depósito de ${money(
       order.amountMxn
     )} con el código ${order.code} en la cuenta. Tu pago quedó validado. Gracias.`
-  )
-}
-
-/**
- * Depósito confirmado SIN comprobante (carril `pending` del verificador y
- * rama webhook): el depósito acreditado confirmó la orden por importe +
- * ventana con coincidencia única — nadie envió comprobante, así que los
- * textos no lo mencionan. Sin teléfono ligado solo se avisa al creador.
- */
-export function notifyDepositAutoConfirmed(order: PaymentOrder): void {
-  const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
-  const deposito = order.mpDepositAt
-    ? ` acreditado el ${new Date(order.mpDepositAt).toLocaleString("es-MX")}`
-    : ""
-  notifyCreator(
-    order,
-    "Cobro confirmado automáticamente",
-    `El pagador${pagador} de tu orden ${order.code} pagó ${money(
-      order.amountMxn
-    )}: el depósito quedó acreditado en tu cuenta${deposito} y la liga se marcó pagada automáticamente (sin comprobante: casado por importe y acreditación en tu cuenta).`
-  )
-  notifyPayer(
-    order,
-    "Pago confirmado",
-    `Confirmamos automáticamente el depósito de ${money(
-      order.amountMxn
-    )} con el código ${order.code} en la cuenta. Tu pago quedó validado y no necesitas enviar comprobante. Gracias.`
   )
 }
