@@ -48,7 +48,7 @@ import {
 import { LinkCreadoDialog } from "@/components/herramientas/links-pago/link-creado-dialog"
 
 /*
- * Vista del módulo Links de pago (/modulos/links-de-pago): formulario de
+ * Vista del módulo SPEILink (/modulos/links-de-pago): formulario de
  * alta (monto libre + nota opcional) que devuelve el link corto
  * spei.link/<código> + QR para que el pagador pague por SPEI con el código
  * como concepto; listado de órdenes con el resultado del escaneo y las

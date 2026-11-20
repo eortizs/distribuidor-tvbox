@@ -11,9 +11,9 @@
 -- Con su propio token el distribuidor convierte en posible la verificación
 -- AUTOMÁTICA de depósitos hacia SU cuenta (antes solo el admin con el token
 -- de plataforma del .env):
---   - Links de pago: sus órdenes con comprobante válido pasan a 'verifying'
+--   - SPEILink: sus órdenes con comprobante válido pasan a 'verifying'
 --     y se confirman solas cuando el dinero acredita en su cuenta MP.
---   - Reporte SPEI: consulta viva de los depósitos de su propia cuenta.
+--   - Reporte SPEILink: consulta viva de los depósitos de su propia cuenta.
 --   - Renovaciones por transferencia: la orden pasa a 'verifying' hasta que
 --     el depósito aparece acreditado en la cuenta del vendedor.
 

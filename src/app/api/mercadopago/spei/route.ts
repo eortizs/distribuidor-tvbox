@@ -9,7 +9,7 @@ import { getOwnMpAccessToken } from "@/server/mercadopago/tokens"
 import { AppError } from "@/server/umejson/types"
 
 /**
- * Reporte SPEI: depósitos por transferencia bancaria (CLABE) acreditados en
+ * Reporte SPEILink: depósitos por transferencia bancaria (CLABE) acreditados en
  * la cuenta de Mercado Pago que consulta el llamador:
  *
  *   - ADMIN → cuenta de plataforma (`MERCADOPAGO_ACCESS_TOKEN`), el

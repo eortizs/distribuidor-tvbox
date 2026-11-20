@@ -19,17 +19,17 @@ import {
 import { getOwnMpAccessToken } from "@/server/mercadopago/tokens"
 
 export const metadata: Metadata = {
-  title: "Reporte SPEI",
+  title: "Reporte SPEILink",
 }
 
 /** Degrade sin romper el render: tarjeta con la causa y la salida. */
 function Degradada({ titulo, texto }: { titulo: string; texto: string }) {
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-      <h1 className="sr-only">Reporte SPEI</h1>
+      <h1 className="sr-only">Reporte SPEILink</h1>
       <Frame spacing="default" className="w-full">
         <FrameHeader>
-          <FrameTitle className="text-xl font-semibold">Reporte SPEI</FrameTitle>
+          <FrameTitle className="text-xl font-semibold">Reporte SPEILink</FrameTitle>
           <FrameDescription>
             Depósitos por transferencia bancaria (SPEI a la CLABE) acreditados
             en Mercado Pago, por día.
@@ -79,7 +79,7 @@ export default async function ReporteSpeiPage() {
 
     return (
       <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-        <h1 className="sr-only">Reporte SPEI</h1>
+        <h1 className="sr-only">Reporte SPEILink</h1>
         <ReporteSpeiView
           initialReport={initialReport}
           initialError={initialError}
@@ -111,7 +111,7 @@ export default async function ReporteSpeiPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
-      <h1 className="sr-only">Reporte SPEI</h1>
+      <h1 className="sr-only">Reporte SPEILink</h1>
       <ReporteSpeiView
         initialReport={initialReport}
         initialError={initialError}

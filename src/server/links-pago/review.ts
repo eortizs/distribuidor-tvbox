@@ -287,7 +287,7 @@ export async function reviewPaymentReceipt(input: {
       order.amountMxn
     )}) no pasó la validación automática.${
       reasons.length > 0 ? ` Motivo(s): ${reasons.slice(0, 4).join("; ")}.` : ""
-    } Revísala en Módulos → Links de pago.`
+    } Revísala en Módulos → SPEILink.`
   )
   return { review: "auto_rejected", scan }
   }
@@ -325,7 +325,7 @@ export async function reviewPaymentReceipt(input: {
       "Comprobante validado",
     `El pagador${pagador} de tu orden ${order.code} (${money(
       order.amountMxn
-    )}) envió un comprobante válido (concepto e importe). Confirma la recepción del depósito en TU cuenta y marca el link como pagado en Módulos → Links de pago.`
+    )}) envió un comprobante válido (concepto e importe). Confirma la recepción del depósito en TU cuenta y marca el link como pagado en Módulos → SPEILink.`
     )
     return { review: "awaiting_creator" }
   }

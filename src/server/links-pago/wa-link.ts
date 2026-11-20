@@ -2,7 +2,7 @@ import { shortLinkBaseUrl } from "@/server/site-url"
 import { whatsappAgentNumber } from "@/server/whatsapp/config"
 
 /*
- * Links de pago de una orden (payment_orders): el dominio corto
+ * Links de pago (SPEILink) de una orden (payment_orders): el dominio corto
  * `spei.link/<CÓDIGO>` —el CÓDIGO es el mismo código de concepto de la
  * orden— es el link que se comparte y codifica el QR. Abierto, el shortener
  * redirige (302) a `wa.me` con el texto prellenado de SOLICITUD al número

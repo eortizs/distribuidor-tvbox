@@ -107,7 +107,7 @@ function notifyEscalated(order: PaymentOrder): void {
     title: "Link de pago sin depósito",
     body: `Tu orden ${order.code} (${paymentOrderMoney(
       order.amountMxn
-    )}) tiene comprobante válido pero el depósito no aparece acreditado en tu cuenta tras 24 h de verificación. Resuélvela manualmente en Módulos → Links de pago (Marcar pagada o Rechazar).`,
+    )}) tiene comprobante válido pero el depósito no aparece acreditado en tu cuenta tras 24 h de verificación. Resuélvela manualmente en Módulos → SPEILink (Marcar pagada o Rechazar).`,
   })
   if (order.payerPhone) {
     void enqueueWhatsAppForPhone({

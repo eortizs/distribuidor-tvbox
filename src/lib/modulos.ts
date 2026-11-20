@@ -143,14 +143,14 @@ export const MODULOS: Modulo[] = [
     icon: PiggyBankIcon,
   },
   {
-    title: "Links de pago",
+    title: "SPEILink",
     description:
       "Emite un cobro de monto libre: link corto spei.link con el código de concepto y QR para que el pagador pague por SPEI y suba su comprobante.",
     href: "/modulos/links-de-pago",
     icon: QrCodeIcon,
   },
   {
-    title: "Reporte SPEI",
+    title: "Reporte SPEILink",
     description:
       "Depósitos por transferencia SPEI acreditados en Mercado Pago, del día actual o de un día específico: el admin consulta la cuenta del servidor y cada distribuidor la suya con su token del Perfil.",
     href: "/modulos/reporte-spei",

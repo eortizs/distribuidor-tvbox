@@ -4,7 +4,7 @@ import { resolveConceptsForDeposits } from "@/server/transferencias/concepto"
 import { findPaymentOrdersByMpPaymentIds } from "@/server/links-pago/repository"
 
 /**
- * Reporte SPEI (`/modulos/reporte-spei`): depósitos por transferencia
+ * Reporte SPEILink (`/modulos/reporte-spei`): depósitos por transferencia
  * ACREDITADOS en la cuenta de Mercado Pago del vendedor, para el día actual
  * o un día específico, en DOS RIELES: SPEI a la CLABE (`clabe`/
  * `bank_transfer` con `operation_type = account_fund`) y transferencia desde

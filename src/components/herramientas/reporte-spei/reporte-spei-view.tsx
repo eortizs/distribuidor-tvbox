@@ -41,7 +41,7 @@ import type {
 } from "@/server/mercadopago/spei"
 
 /*
- * Vista del módulo «Reporte SPEI»: depósitos por transferencia bancaria
+ * Vista del módulo «Reporte SPEILink»: depósitos por transferencia bancaria
  * (SPEI a la CLABE) acreditados en Mercado Pago para un día calendario de
  * CDMX. El primer día llega servido por la RSC; cambiar de fecha o
  * refrescar consulta `GET /api/mercadopago/spei` en vivo.
@@ -320,7 +320,7 @@ export function ReporteSpeiView({
   return (
     <Frame spacing="default" className="w-full">
       <FrameHeader>
-        <FrameTitle className="text-xl font-semibold">Reporte SPEI</FrameTitle>
+        <FrameTitle className="text-xl font-semibold">Reporte SPEILink</FrameTitle>
         <FrameDescription>
           Depósitos acreditados en la cuenta de Mercado Pago por día calendario
           de Ciudad de México, en dos vías: SPEI a la CLABE y transferencia

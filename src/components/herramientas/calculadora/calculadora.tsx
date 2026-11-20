@@ -229,7 +229,7 @@ function esCintaEntrada(value: unknown): value is CintaEntrada {
 }
 
 interface CalculadoraProps {
-  /** El módulo Links de pago está visible para esta cuenta. */
+  /** El módulo SPEILink está visible para esta cuenta. */
   puedeCobrar: boolean
   /** Hay número de agente de WhatsApp en el servidor. */
   whatsappConfigured: boolean
@@ -644,7 +644,7 @@ export function Calculadora({
       </DialogContent>
     </Dialog>
 
-    {/* QR y link del link de pago creado (componente compartido con Links de pago) */}
+    {/* QR y link del link de pago creado (componente compartido con SPEILink) */}
     <LinkCreadoDialog order={creada} onClose={() => setCreada(null)} />
 
     {/* Confirmación de limpiar la cinta */}

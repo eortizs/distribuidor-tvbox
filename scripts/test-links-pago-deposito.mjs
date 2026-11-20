@@ -1,5 +1,5 @@
 /**
- * Pruebas de la lógica pura del casado orden ↔ depósito de Links de pago
+ * Pruebas de la lógica pura del casado orden ↔ depósito de SPEILink
  * (src/lib/links-pago.ts): clasificación de pagos tipo depósito
  * (`isDepositLikePayment`, ambos rieles SPEI CLABE y billetera MP),
  * ventana de casado (`depositWithinOrderWindow`, slack de 2 minutos) e

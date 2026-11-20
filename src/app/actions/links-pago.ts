@@ -21,7 +21,7 @@ import { buildPaymentOrderShortLink, buildPaymentOrderWaLink } from "@/server/li
 import type { PaymentOrder } from "@/server/links-pago/repository"
 
 /*
- * Acciones del módulo Links de pago (/modulos/links-de-pago). Contrato de
+ * Acciones del módulo SPEILink (/modulos/links-de-pago). Contrato de
  * estado del repo (patrón profile.ts): NUNCA lanzan hacia el cliente —
  * devuelven `{ error }` con el mensaje listo para pintar junto al campo.
  */

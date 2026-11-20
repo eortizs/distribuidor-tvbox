@@ -32,7 +32,7 @@ export type NotificationKind =
   | "reminder"
   /** Aviso al distribuidor sobre una renovación de cliente por WhatsApp. */
   | "client_renewal_notice"
-  /** Aviso del módulo Links de pago (cobro recibido, comprobante por revisar). */
+  /** Aviso del módulo SPEILink (cobro recibido, comprobante por revisar). */
   | "payment_order"
 
 export interface NotificationRow {

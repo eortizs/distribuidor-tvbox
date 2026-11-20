@@ -228,7 +228,7 @@ export async function resolveSellerMpAccessToken(
 
 /**
  * Token de verificación de depósitos para las órdenes de pago de UN creador
- * (módulo Links de pago): su credencial propia si tiene; si no, la de
+ * (módulo SPEILink): su credencial propia si tiene; si no, la de
  * plataforma SOLO para admins (los cobros del admin apuntan a la cuenta del
  * `.env`). Un distribuidor sin token propio → null: verificación manual.
  */

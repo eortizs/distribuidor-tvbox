@@ -590,7 +590,7 @@ function notifyCreatorManualReview(
     "Comprobante de link de pago por revisar",
     `El pagador (WhatsApp ${maskPhone(phone)}) envió un comprobante para tu orden ${order.code} (${money(
       order.amountMxn
-    )}). Revísala en Módulos → Links de pago para aprobarla o rechazarla.`
+    )}). Revísala en Módulos → SPEILink para aprobarla o rechazarla.`
   )
 }
 

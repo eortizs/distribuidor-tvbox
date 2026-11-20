@@ -13,7 +13,7 @@ export const metadata: Metadata = {
 export default async function CalculadoraPage() {
   const user = await requireUser()
 
-  // Cobrar comparte la capacidad del módulo Links de pago: si el admin la
+  // Cobrar comparte la capacidad del módulo SPEILink: si el admin la
   // ocultó para esta cuenta, la calculadora tampoco ofrece cobros (admins
   // siempre pueden).
   const hiddenModules =

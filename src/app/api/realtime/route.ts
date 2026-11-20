@@ -66,7 +66,7 @@ function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
     // por alcance; avisar a todos evita resolver la titularidad aquí.
     case "mp_order":
       return true
-    // Links de pago: mismo criterio que `mp_order` — el refetch del
+    // SPEILink: mismo criterio que `mp_order` — el refetch del
     // módulo ya filtra por creador (distribuidor ve solo las suyas).
     case "payment_order":
       return true
