@@ -1,8 +1,8 @@
 1. Barra Superior (Header fijo)
 
-• Qué se despliega en pantalla: Una barra blanca limpia y fija en la parte superior de la pantalla del celular (64px de alto) con una línea gris muy sutil en el borde inferior. A la izquierda va el isotipo azul de SPEI.link (sin subtítulo para que se lea nítido en móvil) y a la derecha un botón discreto con borde azul marino.
+• Qué se despliega en pantalla: Una barra blanca limpia y fija en la parte superior de la pantalla del celular (64px de alto) con una línea gris muy sutil en el borde inferior. A la izquierda va el isotipo azul de SPEILink (sin subtítulo para que se lea nítido en móvil) y a la derecha un botón discreto con borde azul marino.
 • Copy:
-	• Logo: SPEI.link
+	• Logo: SPEILink («SPEIL» en bold e «ink» en light, de la sans del panel)
 	• Botón: Iniciar sesión
 
 2. Pantalla Principal (Hero Section — Primer vistazo sin hacer scroll)
@@ -13,7 +13,7 @@
 	• Título Principal (H1): Empieza a cobrar hoy y quédate con el 100% de tus ventas.
 	• Subtítulo: Links de pago por WhatsApp con depósito directo a tu cuenta. Sin intermediarios y con verificación bancaria automática.
 	• Botón Principal (CTA): Crear mi cuenta gratis →
-	• Micro-texto de confianza: 🔒 Sin intermediarios • SPEI.link nunca retiene tu dinero
+	• Micro-texto de confianza: 🔒 Sin intermediarios • SPEILink nunca retiene tu dinero
 
 3. La Fórmula Visual (Bloque de Concepto Central)
 
@@ -24,7 +24,7 @@
 
 4. Demostración en Vivo (Simulación de Chat de WhatsApp)
 
-• Qué se despliega en pantalla: Una tarjeta que simula la interfaz de un chat de WhatsApp con encabezado azul marino (SPEI.link Asistente — Validación en tiempo real). Dentro se muestran 4 burbujas de chat ordenadas cronológicamente que ilustran la experiencia real del comprador sin necesidad de texto explicativo largo.
+• Qué se despliega en pantalla: Una tarjeta que simula la interfaz de un chat de WhatsApp con encabezado azul marino (SPEILink Asistente — Validación en tiempo real). Dentro se muestran 4 burbujas de chat ordenadas cronológicamente que ilustran la experiencia real del comprador sin necesidad de texto explicativo largo.
 • Copies (Burbujas del chat):
 	• Burbuja 1 (Cliente - verde claro a la derecha): Solicito un link de pago por $500.00 MXN
 	• Burbuja 2 (Asistente - blanca a la izquierda): Transfiere $500.00 MXN directo a: CLABE: 646180... | Concepto: XQK9 (con la CLABE y el código resaltados en recuadros punteados).
@@ -56,5 +56,5 @@
 • Qué se despliega en pantalla: Una tarjeta de alto contraste con fondo azul marino (#003366) e invita a crear la cuenta gratis, seguida de un pie de página con avisos legales y enlaces a términos de uso y soporte.
 • Copies principales:
 	• CTA Final: Deja de regalar el 4% en cada venta. Empieza a cobrar hoy y quédate con el 100% de tus ventas con 0% de comisión al cobrar con WhatsApp.
-	• Aviso legal: Aclaración de que SPEI.link es una herramienta tecnológica de conciliación y no un banco o ITF regulada.
+	• Aviso legal: Aclaración de que SPEILink es una herramienta tecnológica de conciliación y no un banco o ITF regulada.
 

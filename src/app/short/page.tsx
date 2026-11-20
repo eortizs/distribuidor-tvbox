@@ -25,7 +25,7 @@ import { publicSiteUrl, shortLinkBaseUrl } from "@/server/site-url"
  * deliberadamente FUERA del sistema de componentes del panel.
  */
 
-const TITLE = "SPEI Link — Links de pago por WhatsApp con 0% de comisión"
+const TITLE = "SPEILink — Links de pago por WhatsApp con 0% de comisión"
 const DESCRIPTION =
   "Crea links de pago para WhatsApp y recibe el 100% de tu dinero directo en tu cuenta. Cada pago se valida con su código de concepto."
 
@@ -39,7 +39,7 @@ export const metadata: Metadata = {
     title: TITLE,
     description: DESCRIPTION,
     url: "/",
-    siteName: "SPEI Link",
+    siteName: "SPEILink",
     locale: "es_MX",
     type: "website",
   },
@@ -113,13 +113,13 @@ const TRUST_POINTS = [
 const CAROUSEL_SLIDES = [
   {
     src: "/carrusel/abarrotes.webp",
-    alt: "Cajera cobrando en una tienda de abarrotes con un cartel que dice «Se aceptan transferencias con WhatsApp, usamos SPEI Link»",
+    alt: "Cajera cobrando en una tienda de abarrotes con un cartel que dice «Se aceptan transferencias con WhatsApp, usamos SPEILink»",
     title: "Abarrotes y tienditas",
     benefit: "Cobra directo en tu mostrador",
   },
   {
     src: "/carrusel/taller.webp",
-    alt: "Mecánico sonriente mostrando en su celular un link de pago SPEI Link con código QR por $2,300.00 MXN dentro de su taller",
+    alt: "Mecánico sonriente mostrando en su celular un link de pago SPEILink con código QR por $2,300.00 MXN dentro de su taller",
     title: "Talleres y servicios",
     benefit: "Link con QR listo para compartir",
   },
@@ -163,14 +163,16 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
 ]
 
 /**
- * Marca verbal: «SPEI» en bold y «Link» en light. La sans es la del panel
+ * Marca verbal: «SPEIL» en bold e «ink» en light, de la sans del panel
  * (`font-sans` → Geist de Google Fonts, cargada por el root layout con
- * `next/font/google` y ya heredada por la landing).
+ * `next/font/google` y ya heredada por la landing). Sin espacio: la marca es
+ * una sola palabra.
  */
 function BrandInline() {
   return (
     <>
-      <span className="font-bold">SPEI</span> <span className="font-light">Link</span>
+      <span className="font-bold">SPEIL</span>
+      <span className="font-light">ink</span>
     </>
   )
 }
@@ -250,7 +252,7 @@ export default function ShortLandingPage() {
           <Link
             href="/"
             className="flex items-center gap-2"
-            aria-label="SPEI Link, inicio"
+            aria-label="SPEILink, inicio"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
@@ -421,7 +423,7 @@ export default function ShortLandingPage() {
             <SectionTitle>Pensado para negocios como el tuyo</SectionTitle>
             <div
               tabIndex={0}
-              aria-label="Fotos de negocios que cobran con SPEI Link"
+              aria-label="Fotos de negocios que cobran con SPEILink"
               className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 focus-visible:outline-2 focus-visible:outline-[#1872cc] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
               {CAROUSEL_SLIDES.map((slide) => (
