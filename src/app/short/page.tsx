@@ -166,13 +166,16 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
  * Marca verbal: «SPEIL» en bold e «ink» en light, de la sans del panel
  * (`font-sans` → Geist de Google Fonts, cargada por el root layout con
  * `next/font/google` y ya heredada por la landing). Sin espacio: la marca es
- * una sola palabra.
+ * una sola palabra. El `ink` lleva margen negativo porque al cambiar de peso
+ * en la junta (la «L» en bold y la «i» en light) las bearings de cada glifo
+ * dejan un hueco que se lee como un espacio — sin este ajuste la marca
+ * aparece como «SPEIL ink».
  */
 function BrandInline() {
   return (
     <>
       <span className="font-bold">SPEIL</span>
-      <span className="font-light">ink</span>
+      <span className="-ml-[0.13em] font-light">ink</span>
     </>
   )
 }
