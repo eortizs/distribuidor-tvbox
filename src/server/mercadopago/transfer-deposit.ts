@@ -1,8 +1,8 @@
-import { findReservedMpPaymentIds } from "@/server/ligas-pago/repository"
+import { findReservedMpPaymentIds } from "@/server/links-pago/repository"
 import {
   amountsEqualCents,
   PAYMENT_ORDER_DEPOSIT_SLACK_MS,
-} from "@/lib/ligas-pago"
+} from "@/lib/links-pago"
 import { MercadoPagoError } from "./errors"
 import {
   approveTransferOrder,
@@ -14,13 +14,13 @@ import { markUserMpTokenInvalid, resolveSellerMpAccessToken } from "./tokens"
 
 /*
  * Casado orden de renovación ↔ depósito acreditado en Mercado Pago, espejo
- * del de las ligas de pago (`src/server/ligas-pago/deposit-check.ts`): el
+ * del de los links de pago (`src/server/links-pago/deposit-check.ts`): el
  * comprobante ya validó el escaneo (concepto, importe, beneficiario) y el
  * DEPÓSITO acreditado prueba que el dinero llegó a la cuenta del vendedor.
  * MP no expone el concepto escrito por el pagador, así que el casado es por
  * IMPORTE EXACTO (a centavos) + VENTANA [created_at − 2 min, ahora], con el
  * ID del pago reservado en exclusiva (índice único parcial + filtro CRUZADO
- * contra las reservas de las ligas de pago: ambos flujos leen la misma
+ * contra las reservas de los links de pago: ambos flujos leen la misma
  * cuenta cuando el vendedor es el admin).
  *
  * TOKEN por orden: `origin='wa_cliente'` → el dinero va a la cuenta del
@@ -120,7 +120,7 @@ export async function tryConfirmRenewalDeposit(input: {
   // Reserva CRUZADA: si el fallo de BD impide saber qué depósitos están
   // libres, se asume el peor caso (todos reservados) y el siguiente sondeo
   // reintenta — jamás se confirma con un depósito que pudo validar otra
-  // orden (ligas de pago comparten la misma cuenta).
+  // orden (links de pago comparten la misma cuenta).
   const reserved = await findReservedMpPaymentIds(
     candidates.map((deposit) => deposit.id)
   ).catch(() => new Set<string>(candidates.map((deposit) => deposit.id)))
@@ -134,7 +134,7 @@ export async function tryConfirmRenewalDeposit(input: {
       mpDepositAt: chosen.dateApproved,
     })
   } catch (error) {
-    // Carrera: el verificador de ligas de pago (u otro actor) reclamó el
+    // Carrera: el verificador de links de pago (u otro actor) reclamó el
     // mismo depósito o resolvió la orden entre la lectura y el claim. El
     // advisory lock del claim convierte el conflicto cruzado en
     // `deposit_claim_lost`; la unique residual (23505) mapea igual — en

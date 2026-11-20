@@ -31,7 +31,7 @@ import {
 } from "@/server/transferencias/scan"
 import { saveUserFile } from "@/server/storage/user-files"
 import { canonicalWhatsAppDigits } from "@/server/whatsapp/config"
-import { maybeHandlePaymentOrderReceipt } from "@/server/ligas-pago/whatsapp"
+import { maybeHandlePaymentOrderReceipt } from "@/server/links-pago/whatsapp"
 
 import { clienteEstadoLinea, conceptoImpresoCoincide, normalizeConceptCode } from "./renovacion"
 

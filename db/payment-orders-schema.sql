@@ -1,6 +1,6 @@
 -- Órdenes de pago por WhatsApp (/modulos/orden-de-pago): el creador (admin o
 -- distribuidor) emite un cobro de MONTO LIBRE hacia un pagador externo
--- (cualquier persona, sin cuenta en el panel). El pagador recibe una liga
+-- (cualquier persona, sin cuenta en el panel). El pagador recibe un link
 -- wa.me al agente con el CÓDIGO DE CONCEPTO de la orden prellenado, paga por
 -- SPEI escribiendo ese código como concepto y manda el comprobante por el
 -- mismo chat; el escaneo LLM del flujo de transferencias lo valida (fecha del
@@ -79,7 +79,7 @@ CREATE INDEX IF NOT EXISTS payment_orders_resolved_code_idx
   ON payment_orders (code, resolved_at DESC) WHERE status <> 'pending';
 
 -- Replay honesto de la SOLICITUD por monto («Solicito una orden de pago por
--- $X», el texto prellenado de la liga) cuando la orden del teléfono ya se
+-- $X», el texto prellenado del link) cuando la orden del teléfono ya se
 -- resolvió y su código ya no está entre las pendientes.
 CREATE INDEX IF NOT EXISTS payment_orders_resolved_payer_idx
   ON payment_orders (payer_phone, resolved_at DESC)

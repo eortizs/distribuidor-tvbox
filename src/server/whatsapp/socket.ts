@@ -41,7 +41,7 @@ import {
   maybeHandlePaymentOrderReceipt,
   maybeHandlePaymentOrderText,
   type PaymentOrderTurnResult,
-} from "@/server/ligas-pago/whatsapp"
+} from "@/server/links-pago/whatsapp"
 
 import {
   findUserByWhatsAppPhone,
@@ -374,8 +374,8 @@ const SILENT_PAYMENT_ORDER_RESULT = (inboundText: string, mediaMime: string | nu
 
 /**
  * Rama de ÓRDENES DE PAGO (números que no son usuarios ni clientes): el
- * pagador externo de /modulos/ligas-de-pago paga aquí con el código de
- * concepto de su liga corta y manda el comprobante por el mismo chat.
+ * pagador externo de /modulos/links-de-pago paga aquí con el código de
+ * concepto de su link corto y manda el comprobante por el mismo chat.
  * Null = el turno no apunta a ninguna orden de pago → cortesía de número
  * desconocido.
  */
@@ -389,7 +389,7 @@ async function handlePaymentOrderIncomingMessage(input: {
   const mediaInfo = extractMediaInfo(input.m.message)
   const messageText = (text || caption).trim()
 
-  // Solo texto (la liga wa.me llega con la SOLICITUD prellenada del monto;
+  // Solo texto (el link wa.me llega con la SOLICITUD prellenada del monto;
   // el código puede venir pegado o reenviado a mano).
   if (!mediaInfo) {
     if (messageText.length === 0) return null
@@ -697,8 +697,8 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
       }
       return
     }
-    // Rama de ÓRDENES DE PAGO: el pagador externo de /modulos/ligas-de-pago
-    // (cualquier persona) solicita la orden aquí con el monto de su liga
+    // Rama de ÓRDENES DE PAGO: el pagador externo de /modulos/links-de-pago
+    // (cualquier persona) solicita la orden aquí con el monto de su link
     // corta y paga con el código que el agente le entrega. Null =
     // el turno no apunta a ninguna orden → cortesía de número desconocido.
     const paymentHandled = await handlePaymentOrderIncomingMessage({
@@ -808,8 +808,8 @@ async function handleIncomingMessage(m: WAMessage): Promise<void> {
 
   /*
    * La SOLICITUD de orden de pago («Solicito una orden de pago por $X», el
-   * texto prellenado de la liga wa.me) también llega de un USUARIO
-   * registrado — el cobrador probando su propia liga, o un pagador con
+   * texto prellenado del link wa.me) también llega de un USUARIO
+   * registrado — el cobrador probando su propio link, o un pagador con
    * cuenta en el panel: interceptarla AQUÍ para que el agente LLM no
    * responda «no puedo generar órdenes de pago». Solo texto; los ADJUNTOS
    * de un usuario siguen su curso normal del asistente (con pendientes

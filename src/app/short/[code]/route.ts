@@ -4,30 +4,30 @@ import {
   findPendingPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyCode,
   markPaymentOrderLinkOpened,
-} from "@/server/ligas-pago/repository"
+} from "@/server/links-pago/repository"
 import {
   buildPaymentOrderWaLink,
   isPaymentLinkCode,
-} from "@/server/ligas-pago/wa-link"
+} from "@/server/links-pago/wa-link"
 
 /*
- * Shortener de ligas de pago (spei.link/<CÓDIGO>): el CÓDIGO es el mismo
+ * Shortener de links de pago (spei.link/<CÓDIGO>): el CÓDIGO es el mismo
  * código de concepto de la orden (payment_orders). El proxy reescribe aquí
  * las peticiones cuyo host es el dominio corto (SPEI_LINK_BASE_URL), así
  * que esta ruta no requiere sesión y solo se alcanza por ese host.
  *
  *   - código ACTIVO (pending | verifying) → 302 a wa.me con la SOLICITUD
  *     prellenada (el pagador aterriza en el chat del agente, igual que con
- *     la liga wa.me de siempre). Los lookups reusan las puertas del canal
+ *     el link wa.me de siempre). Los lookups reusan las puertas del canal
  *     WhatsApp (activas primero, resueltas después): los códigos son
  *     reciclables y un código que hoy tiene orden viva NUNCA debe responder
  *     con el estado de una orden resuelta vieja que lo tuvo antes.
  *   - código RESUELTO (paid | rejected | cancelled) → 410 con página mínima
- *     honesta (la liga ya no está activa; el código pudo ser reasignado).
+ *     honesta (el link ya no está activo; el código pudo ser reasignado).
  *   - código desconocido o de forma inválida → 404 con página mínima.
  *
  * Cabeceras en TODAS las respuestas: `Cache-Control: no-store` (el destino
- * de una liga puede cambiar en cualquier momento — nunca 301 ni caché de
+ * de un link puede cambiar en cualquier momento — nunca 301 ni caché de
  * borde) y `X-Robots-Tag: noindex`. Anti-enumeración: tope de 30 códigos
  * fallidos/min por IP real (bucket en memoria, con tope duro de tamaño).
  * El PEEK del bucket corre ANTES de tocar BD — el límite corta el coste de
@@ -153,7 +153,7 @@ function tooManyRequests(): NextResponse {
 function notFound(): NextResponse {
   return htmlResponse(
     404,
-    "Liga no encontrada",
+    "Link no encontrado",
     "Este enlace de pago no existe o expiró. Verifica el enlace con quien te lo compartió."
   )
 }
@@ -161,8 +161,8 @@ function notFound(): NextResponse {
 function gone(): NextResponse {
   return htmlResponse(
     410,
-    "Liga ya no activa",
-    "Este enlace de pago ya fue resuelto. Pide una liga nueva a quien te lo compartió."
+    "Link ya no activo",
+    "Este enlace de pago ya fue resuelto. Pide un link nuevo a quien te lo compartió."
   )
 }
 
@@ -202,7 +202,7 @@ export async function GET(
     () => null
   )
   if (order) {
-    // Primera apertura de la liga (trazabilidad del embudo; escribe UNA
+    // Primera apertura del link (trazabilidad del embudo; escribe UNA
     // vez y no interviene en decisiones de dinero). Best-effort detached:
     // el redirect no espera por la bitácora.
     void markPaymentOrderLinkOpened(order.id).catch(() => {})

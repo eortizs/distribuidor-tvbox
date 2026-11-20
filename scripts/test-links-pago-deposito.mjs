@@ -1,12 +1,12 @@
 /**
- * Pruebas de la lógica pura del casado orden ↔ depósito de Ligas de pago
- * (src/lib/ligas-pago.ts): clasificación de pagos tipo depósito
+ * Pruebas de la lógica pura del casado orden ↔ depósito de Links de pago
+ * (src/lib/links-pago.ts): clasificación de pagos tipo depósito
  * (`isDepositLikePayment`, ambos rieles SPEI CLABE y billetera MP),
  * ventana de casado (`depositWithinOrderWindow`, slack de 2 minutos) e
  * igualdad de importes a centavos (`amountsEqualCents`). Corre con Node
  * directo (Node 24 elimina tipos al importar .ts):
  *
- *   node scripts/test-ligas-pago-deposito.mjs
+ *   node scripts/test-links-pago-deposito.mjs
  */
 import assert from "node:assert/strict"
 
@@ -15,7 +15,7 @@ import {
   depositWithinOrderWindow,
   isDepositLikePayment,
   PAYMENT_ORDER_DEPOSIT_SLACK_MS,
-} from "../src/lib/ligas-pago.ts"
+} from "../src/lib/links-pago.ts"
 
 let passed = 0
 function check(name, run) {

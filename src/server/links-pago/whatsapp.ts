@@ -34,8 +34,8 @@ import { notifyPayerContacted } from "./notify"
  * llama a estos handlers; ambos devuelven null cuando el turno NO es de una
  *     orden de pago y el flujo debe seguir (cortesía de número desconocido).
  *
- *   - Texto: la liga corta spei.link llega con la SOLICITUD prellenada
- *     («Solicito una liga de pago por $X», sin código — la orden se descubre
+ *   - Texto: el link corto spei.link llega con la SOLICITUD prellenada
+ *     («Solicito un link de pago por $X», sin código — la orden se descubre
  *     por el importe que definió el cobrador; la forma antigua «orden de
  *     pago» sigue aceptándose) o con un código pegado a mano. La
  *     respuesta va en TRES mensajes de golpe: las INSTRUCCIONES del pago
@@ -76,7 +76,7 @@ export interface PaymentOrderTurnResult {
 /**
  * Tope de tokens con forma de código que se buscan por mensaje: un mensaje
  * enorme no debe poder sondear el espacio de códigos (los tokens reales de
- * una liga o caption van en las primeras palabras).
+ * un link o caption van en las primeras palabras).
  */
 const MAX_CODE_TOKENS_PER_MESSAGE = 5
 
@@ -99,8 +99,8 @@ function sha256Of(bytes: Uint8Array): string {
 /**
  * Primeros tokens del mensaje con FORMA de código de concepto (4 caracteres
  * del alfabeto sin 0/O/1/I), sin duplicados. El código llega pegado a mano
- * o reenviado (la liga prellenada actual viaja SIN código: «Solicito una
- * liga de pago por $X»); viaja como una palabra más y aquí se aísla.
+ * o reenviado (el link prellenado actual viaja SIN código: «Solicito un
+ * link de pago por $X»); viaja como una palabra más y aquí se aísla.
  * Un token solo cuenta si además matchea una orden real (chequeo en BD),
  * así que un «chat» o «test» suelto nunca secuestra el turno.
  */
@@ -163,25 +163,25 @@ function respuestaConCodigo(
 /** Guía cuando la orden por monto ya tiene pagador de OTRO número. */
 function textoPagadorAjeno(): string {
   return [
-    "Esa liga de pago ya tiene un pagador asignado.",
+    "Ese link de pago ya tiene un pagador asignado.",
     "",
-    "Si es tuya, solicita a quien te la emitió el CÓDIGO de pago (4 letras) y envíamelo como mensaje.",
+    "Si es tuyo, solicita a quien te lo emitió el CÓDIGO de pago (4 letras) y envíamelo como mensaje.",
   ].join("\n")
 }
 
 /**
- * Monto de una SOLICITUD de liga de pago («Solicito una liga de pago por
- * $500» — el texto prellenado de la liga corta, a veces editado a mano).
- * Acepta también la forma antigua «orden de pago» (ligas wa.me previas al
- * dominio corto siguen circulando). Acepta $500 / 500 / 1,500.50 / 500,50 y
- * «MXN» pegado al final. Null = el texto no tiene forma de solicitud o el
- * monto no se entiende.
+ * Monto de una SOLICITUD de link de pago («Solicito un link de pago por
+ * $500» — el texto prellenado del link corto, a veces editado a mano).
+ * Acepta también las formas antiguas «liga de pago» y «orden de pago» (links
+ * wa.me previos al dominio corto siguen circulando). Acepta $500 / 500 /
+ * 1,500.50 / 500,50 y «MXN» pegado al final. Null = el texto no tiene forma de
+ * solicitud o el monto no se entiende.
  */
 function parsePaymentOrderRequestAmount(text: string): number | null {
   const match = text
     .trim()
     .match(
-      /solicito\s+(?:una\s+)?(?:orden|liga)\s+de\s+pago\s+por\s+\$?\s*(\d[\d.,]*)/i
+      /solicito\s+(?:un[ao]?\s+)?(?:orden|liga|link)\s+de\s+pago\s+por\s+\$?\s*(\d[\d.,]*)/i
     )
   if (!match) return null
   const raw = match[1]
@@ -201,18 +201,18 @@ function textoEstadoResuelto(order: PaymentOrder): string {
       return textoVerificandoDeposito(order)
     case "paid":
       return [
-        `La liga de pago *${order.code}* ya está pagada`,
+        `El link de pago *${order.code}* ya está pagado`,
         order.resolvedAt ? `(confirmada el ${new Date(order.resolvedAt).toLocaleString("es-MX")})` : "",
         ". No es necesario volver a enviar el comprobante.",
       ]
         .filter((line) => line.length > 0)
         .join(" ")
     case "rejected":
-      return `La liga de pago *${order.code}* fue rechazada. Si tu pago fue real, contacta a quien te emitió la orden para revisar el caso.`
+      return `El link de pago *${order.code}* fue rechazado. Si tu pago fue real, contacta a quien te emitió la orden para revisar el caso.`
     case "cancelled":
-      return `La liga de pago *${order.code}* fue cancelada y el código ya no está activo. Pide una liga de pago nueva.`
+      return `El link de pago *${order.code}* fue cancelado y el código ya no está activo. Pide un link de pago nuevo.`
     default:
-      return `La liga de pago *${order.code}* ya no está activa (estado: ${order.status}).`
+      return `El link de pago *${order.code}* ya no está activo (estado: ${order.status}).`
   }
 }
 
@@ -228,7 +228,7 @@ function textoVerificandoDeposito(order: PaymentOrder): string {
 /** Guía cuando la solicitud no resolvió una orden concreta. */
 function textoSinOrdenPorMonto(monto: number): string {
   return [
-    `No encontré una liga de pago pendiente por ${money(monto)}.`,
+    `No encontré un link de pago pendiente por ${money(monto)}.`,
     "",
     "Verifica el importe con quien te emitió la orden; si tienes el CÓDIGO de pago (4 letras), envíamelo como mensaje.",
   ].join("\n")
@@ -237,7 +237,7 @@ function textoSinOrdenPorMonto(monto: number): string {
 /** Guía cuando hay AMBIGÜEDAD de órdenes pendientes del mismo monto. */
 function textoMontoAmbiguo(monto: number): string {
   return [
-    `Hay varias ligas de pago pendientes por ${money(monto)}.`,
+    `Hay varios links de pago pendientes por ${money(monto)}.`,
     "",
     "Pide a quien te emitió la orden el CÓDIGO de pago (4 letras) y envíamelo como mensaje para identificar la tuya.",
   ].join("\n")
@@ -246,7 +246,7 @@ function textoMontoAmbiguo(monto: number): string {
 /**
  * ¿El mensaje es una CONFIRMACIÓN de pago del pagador («ya pagué», «ya hice
  * la transferencia», «comprobante enviado»…)? Solo disamina cuando el
- * teléfono tiene una liga ACTIVA ligada (ver abajo): el aviso del pagador
+ * teléfono tiene un link ACTIVO ligado (ver abajo): el aviso del pagador
  * NO confirma nada por sí solo — responde pidiendo el comprobante, que es
  * la única evidencia que valida el pago (la revisión visual con el código
  * impreso). Frases cerradas: no matchea agradecimientos ni charla suelta.
@@ -255,12 +255,12 @@ const PAYMENT_CONFIRMATION_RE =
   /\b(?:ya\s+(?:te\s+)?pagu[eé]|pagu[eé]|pagado|ya\s+hice\s+(?:la\s+)?(?:transferencia|pago)|ya\s+transfer[ií]|ya\s+realic[eé]\s+(?:el\s+)?pago|ya\s+se\s+hizo\s+el\s+pago|comprobante\s+(?:enviado|adjunto|mandado)|transferencia\s+realizada)\b/i
 
 /**
- * Turno de CONFIRMACIÓN del pagador («ya pagué»): con una liga activa
+ * Turno de CONFIRMACIÓN del pagador («ya pagué»): con un link activo
  * ligada al teléfono responde (a) el estado real si ya está verificando
  * depósito, (b) la petición EXPLÍCITA del comprobante si sigue pendiente —
  * el pagador acaba de declarar que pagó, el momento exacto para pedirle la
- * foto que valida su pago. Null = sin ligas activas: el turno sigue su
- * curso normal (el mensaje no es de liga de pago).
+ * foto que valida su pago. Null = sin links activos: el turno sigue su
+ * curso normal (el mensaje no es de link de pago).
  */
 async function maybeHandlePaymentConfirmation(input: {
   phone: string
@@ -289,7 +289,7 @@ async function maybeHandlePaymentConfirmation(input: {
 
   if (activas.length > 1) {
     return {
-      text: "Tienes varias ligas de pago activas con este número. Envíame el comprobante junto con el CÓDIGO de la que pagaste como mensaje para identificarla.",
+      text: "Tienes varios links de pago activos con este número. Envíame el comprobante junto con el CÓDIGO del que pagaste como mensaje para identificarlo.",
       orderId: null,
       inboundText: input.text,
       mediaMime: null,
@@ -317,19 +317,19 @@ async function maybeHandlePaymentConfirmation(input: {
 /**
  * Turno de TEXTO del pagador (sin archivo), de la fuente más específica a
  * la más débil:
- *   1. token con forma de código que matchee una orden pendiente (liga
- *      vieja, código reenviado o pegado a mano) — aquí SÍ se binda el
+ *   1. token con forma de código que matchee una orden pendiente (link
+ *      viejo, código reenviado o pegado a mano) — aquí SÍ se binda el
  *      teléfono: saber el código ES la identidad del pagador,
  *   2. replay honesto del código de una orden YA resuelta,
- *   3. SOLICITUD por monto («Solicito una liga de pago por $X», el texto
- *      prellenado de la liga): UNA pendiente por ese importe y sin pagador
+ *   3. SOLICITUD por monto («Solicito un link de pago por $X», el texto
+ *      prellenado del link): UNA pendiente por ese importe y sin pagador
  *      de otro número → respuesta LIGANDO el teléfono: la entrega del
  *      código a ese chat es la identidad del pagador (ver
  *      `touchPaymentOrderPayer`); varias → se pide el código; ya ligada a
  *      otro número → guía sin revelar código ni datos; ninguna → replay por
  *      teléfono (orden resuelta) o guía honesta.
  *
- * Null = no es un turno de liga de pago (el socket sigue con la cortesía).
+ * Null = no es un turno de link de pago (el socket sigue con la cortesía).
  */
 export async function maybeHandlePaymentOrderText(input: {
   phone: string
@@ -340,7 +340,7 @@ export async function maybeHandlePaymentOrderText(input: {
   const order = await findPendingPaymentOrderByAnyCode(tokens).catch(() => null)
   if (order) {
     // Saber el código ES la identidad del pagador: se liga el teléfono y
-    // (solo la primera vez) se avisa al creador que su liga está en uso.
+    // (solo la primera vez) se avisa al creador que su link está en uso.
     const firstBind = await touchPaymentOrderPayer(order.id, input.phone).catch(
       () => false
     )
@@ -386,7 +386,7 @@ export async function maybeHandlePaymentOrderText(input: {
     }
   }
 
-  // Confirmación de pago del pagador («ya pagué»): con liga activa ligada
+  // Confirmación de pago del pagador («ya pagué»): con link activo ligada
   // responde el estado o pide el comprobante (la revisión visual con el
   // código impreso es la única confirmación). Antes del parse de solicitud:
   // un aviso de pago no es una solicitud por monto.
@@ -485,12 +485,12 @@ export async function maybeHandlePaymentOrderText(input: {
     }
   }
   // Binding por ENTREGA DEL CÓDIGO: el sistema acaba de entregar el código
-  // y la CLABE a ESTE chat — la liga corta solo la comparte el cobrador con
+  // y la CLABE a ESTE chat — el link corto solo la comparte el cobrador con
   // su pagador, así que el chat que la solicitó (candidata ÚNICA de ese
   // monto, sin pagador de otro número, sin ambigüedad) ES el pagador. La
   // entrega del código es la identidad; el monto solo resolvió a la orden.
   // Sin esto el embudo quedaba ciego: el pagador contactaba, recibía sus
-  // datos y pagaba, pero la liga mostraba «aún no contacta» (caso PLJ7) y
+  // datos y pagaba, pero el link mostraba «aún no contacta» (caso PLJ7) y
   // el creador no recibía aviso alguno hasta el comprobante. El binding NO
   // interviene en decisiones de dinero: la confirmación sigue exigiendo el
   // comprobante validado con el código impreso.
@@ -587,10 +587,10 @@ function notifyCreatorManualReview(
   notifyPaymentOrderCreator(
     order,
     sha256,
-    "Comprobante de liga de pago por revisar",
+    "Comprobante de link de pago por revisar",
     `El pagador (WhatsApp ${maskPhone(phone)}) envió un comprobante para tu orden ${order.code} (${money(
       order.amountMxn
-    )}). Revísala en Módulos → Ligas de pago para aprobarla o rechazarla.`
+    )}). Revísala en Módulos → Links de pago para aprobarla o rechazarla.`
   )
 }
 
@@ -840,7 +840,7 @@ export async function maybeHandlePaymentOrderReceipt(input: {
       candidate = delPagador[0]
     } else if (delPagador.length > 1) {
       return {
-        text: "Tienes varias ligas de pago activas con este número. Envía el comprobante junto con el CÓDIGO de la que pagaste como mensaje para identificarla.",
+        text: "Tienes varios links de pago activos con este número. Envía el comprobante junto con el CÓDIGO del que pagaste como mensaje para identificarlo.",
         orderId: null,
         inboundText: input.text,
         mediaMime: input.media.mimeType,

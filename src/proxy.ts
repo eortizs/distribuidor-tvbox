@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { findSessionUser } from "@/server/auth/session-lookup"
 import { pool } from "@/server/db"
-import { isPaymentLinkCode } from "@/server/ligas-pago/wa-link"
+import { isPaymentLinkCode } from "@/server/links-pago/wa-link"
 import { shortLinkHost } from "@/server/site-url"
 
 const SESSION_COOKIE = "reseller_session"
@@ -58,7 +58,7 @@ function requestHost(request: NextRequest): string {
 }
 
 export async function proxy(request: NextRequest) {
-  // Dominio corto de ligas de pago (spei.link): reescritura interna al
+  // Dominio corto de links de pago (spei.link): reescritura interna al
   // handler /short ANTES del gate de sesión — el pagador externo no tiene
   // cuenta y jamás debe ver /login. La forma del código se valida AQUÍ con
   // el mismo validador del módulo (fuente única): basura o segmentos
@@ -73,7 +73,7 @@ export async function proxy(request: NextRequest) {
         : url.pathname
     const segment = trimmed.slice(1)
     if (segment.length > 0 && !isPaymentLinkCode(segment.toUpperCase())) {
-      return new NextResponse("Liga no encontrada", {
+      return new NextResponse("Link no encontrado", {
         status: 404,
         headers: {
           "content-type": "text/plain; charset=utf-8",

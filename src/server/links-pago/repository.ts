@@ -5,10 +5,10 @@ import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
 
 /*
- * Órdenes de pago por WhatsApp (/modulos/ligas-de-pago): cobros de MONTO
+ * Órdenes de pago por WhatsApp (/modulos/links-de-pago): cobros de MONTO
  * LIBRE hacia un pagador EXTERNO (cualquier persona, sin cuenta en el
  * panel). El creador (admin o distribuidor) emite la orden; el pagador
- * recibe una liga wa.me al agente con el código de concepto prellenado,
+ * recibe una link wa.me al agente con el código de concepto prellenado,
  * paga por SPEI escribiendo ese código como concepto y manda el comprobante
  * por el mismo chat; el escaneo del flujo de transferencias lo valida y
  * aprueba la orden o la deja en revisión del creador.
@@ -61,7 +61,7 @@ export interface PaymentOrder {
   status: PaymentOrderStatus
   bank: { bank: string; account: string; holder: string }
   payerPhone: string | null
-  /** Primera apertura de la liga corta (spei.link → wa.me). */
+  /** Primera apertura del link corto (spei.link → wa.me). */
   linkOpenedAt: string | null
   /** Primer contacto del pagador (teléfono ligado por entrega del código). */
   payerBoundAt: string | null
@@ -90,7 +90,7 @@ export interface PaymentOrder {
 }
 
 /** Límites del monto libre (CHECK de la tabla como respaldo duro). */
-export { PAYMENT_ORDER_MAX_MXN, PAYMENT_ORDER_MIN_MXN } from "@/lib/ligas-pago"
+export { PAYMENT_ORDER_MAX_MXN, PAYMENT_ORDER_MIN_MXN } from "@/lib/links-pago"
 
 /**
  * Tope de órdenes ACTIVAS simultáneas por creador (pending + verifying): un
@@ -162,7 +162,7 @@ function isoOrNull(value: unknown): string | null {
  * el listado del módulo: creación, escaneo del comprobante, contacto del
  * pagador, verifying/paid/rejected/cancelled, sondeos y escalamiento. Llega
  * a todas las sesiones (el alcance ya lo filtra cada refetch) y el provider
- * refresca el RSC — /modulos/ligas-de-pago se actualiza sin recargar.
+ * refresca el RSC — /modulos/links-de-pago se actualiza sin recargar.
  * Best-effort: jamás rompe la mutación que la origina.
  */
 function notifyPaymentOrderChange(orderId: string): void {
@@ -261,7 +261,7 @@ export async function createPaymentOrder(input: {
     throw new AppError(
       422,
       "payment_order_limit",
-      `Tienes ${MAX_PENDING_PAYMENT_ORDERS} ligas de pago pendientes. Resuelve o cancela alguna antes de crear otra.`
+      `Tienes ${MAX_PENDING_PAYMENT_ORDERS} links de pago pendientes. Resuelve o cancela alguna antes de crear otra.`
     )
   }
 
@@ -288,7 +288,7 @@ export async function createPaymentOrder(input: {
       )
       const created = await getPaymentOrder(String(result.rows[0].id))
       if (!created) {
-        throw new Error("La liga de pago no se pudo leer tras crearse.")
+        throw new Error("El link de pago no se pudo leer tras crearse.")
       }
       notifyPaymentOrderChange(created.id)
       return created
@@ -365,7 +365,7 @@ export async function findResolvedPaymentOrderByAnyCode(
 /**
  * TODAS las órdenes ACTIVAS (pending + verifying) de UN monto exacto (del
  * más viejo al más nuevo, con tope de seguridad). Es la puerta del canal
- * WhatsApp para la SOLICITUD prellenada de la liga («Solicito una orden de
+ * WhatsApp para la SOLICITUD prellenada del link («Solicito una orden de
  * pago por $X»), que viaja sin código: la orden se descubre por el importe
  * que el cobrador definió.
  */
@@ -441,7 +441,7 @@ export async function listPaymentOrders(input: {
  * Guarda el teléfono del pagador capturado en su primer contacto y fija
  * `payer_bound_at`. El binding ocurre cuando el sistema ENTREGA el código a
  * ese chat (solicitud por monto con candidata única, código explícito o
- * comprobante): la entrega del código ES la identidad del pagador — la liga
+ * comprobante): la entrega del código ES la identidad del pagador — el link
  * solo la comparte el cobrador con su pagador. Devuelve true solo en el
  * PRIMER binding (NULL → teléfono): el llamador avisa al creador una sola
  * vez por orden. Re-bindings (mismo u otro teléfono tras resolución) no
@@ -464,7 +464,7 @@ export async function touchPaymentOrderPayer(
 }
 
 /**
- * Primera apertura de la liga corta (spei.link/<CÓDIGO> → 302 a wa.me):
+ * Primera apertura del link corto (spei.link/<CÓDIGO> → 302 a wa.me):
  * escribe `link_opened_at` UNA sola vez y solo si la orden sigue ACTIVA.
  * Etapa de trazabilidad del embudo — no interviene en decisiones de dinero.
  */
@@ -576,7 +576,7 @@ export async function cancelPaymentOrder(input: {
 
 /**
  * Reserva CRUZADA de depósitos: los IDs de pago de MP ya reclamados por
- * CUALQUIER orden (ligas de pago `payment_orders` o renovaciones
+ * CUALQUIER orden (links de pago `payment_orders` o renovaciones
  * `mp_orders`). Ambos flujos leen la MISMA cuenta de Mercado Pago, así que
  * un depósito solo puede confirmar UNA orden en todo el panel — el índice
  * único de cada tabla no ve la otra.
@@ -616,7 +616,7 @@ export async function findReservedMpPaymentIds(
  * TIPOS: `payment_orders.mp_payment_id` es TEXT y `mp_orders.mp_payment_id`
  * es BIGINT — el cast se hace POR TABLA ($1::text / $2::bigint sobre el
  * mismo ID). Un cast único ::bigint contra la columna text fallaba con
- * «operator does not exist: text = bigint» y rompía TODO claim de liga (y
+ * «operator does not exist: text = bigint» y rompía TODO claim de link (y
  * de renovación con verificación de depósito).
  */
 export async function isMpDepositClaimed(
@@ -744,7 +744,7 @@ export async function findActivePaymentOrdersByPayerPhone(
 export const PAYER_NUDGE_DELAY_MS = 10 * 60_000
 
 /**
- * Cola del RECORDATORIO al pagador: ligas pendientes cuyo pagador contactó
+ * Cola del RECORDATORIO al pagador: links pendientes cuyo pagador contactó
  * (teléfono ligado), hace 10+ min, SIN comprobante recibido (nunca escaneó)
  * y sin recordatorio previo. UN solo aviso por orden (dedupe por
  * `payer_nudged_at`): nunca spam.
@@ -827,7 +827,7 @@ export async function listDepositSweeperAccounts(): Promise<
  * `sellerUserId = null` son los admins SIN token propio (su cuenta es la
  * plataforma, la que lee el token del `.env`); un usuario concreto es el
  * dueño de la credencial con que se leyó el depósito (distribuidor o admin
- * con token propio). Un depósito de una cuenta jamás confirma la liga de
+ * con token propio). Un depósito de una cuenta jamás confirma el link de
  * otra. La ventana se decide después (predicado puro
  * `depositWithinOrderWindow`); la reserva cruzada del depósito es la guarda
  * final dentro del candado del claim.

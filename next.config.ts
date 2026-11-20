@@ -42,10 +42,17 @@ const nextConfig: NextConfig = {
         permanent: false,
       },
       {
-        // El módulo pasó de «Orden de pago» a «Ligas de pago»; los enlaces
+        // El módulo pasó de «Orden de pago» a «Links de pago»; los enlaces
         // guardados y los revalidatePath viejos siguen.
         source: "/modulos/orden-de-pago",
-        destination: "/modulos/ligas-de-pago",
+        destination: "/modulos/links-de-pago",
+        permanent: false,
+      },
+      {
+        // Rebautizo «Ligas de pago» → «Links de pago» (2026-11-20): la URL
+        // anterior sigue viva para los enlaces guardados.
+        source: "/modulos/ligas-de-pago",
+        destination: "/modulos/links-de-pago",
         permanent: false,
       },
     ];

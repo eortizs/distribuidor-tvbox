@@ -5,7 +5,7 @@ import {
   resolveSellerMpAccessToken,
 } from "@/server/mercadopago/tokens"
 import { findDepositsForPaymentOrderWindow } from "@/server/mercadopago/spei"
-import { paymentOrderMoney } from "@/lib/ligas-pago"
+import { paymentOrderMoney } from "@/lib/links-pago"
 
 import { tryConfirmOrderDeposit, tryConfirmDepositPayment } from "./deposit-check"
 import {
@@ -80,7 +80,7 @@ const NO_CREDENTIAL_DELAY_MS = 15 * 60_000
 
 /**
  * Backoff por intentos acumulados sin hallazgo. Denso en la VENTANA
- * CRÍTICA (el pagador pide la liga y paga en los minutos siguientes —
+ * CRÍTICA (el pagador pide el link y paga en los minutos siguientes —
  * caso BPKE: acreditó 94 s después de la solicitud): 45 s ×6 cubre los
  * primeros ~4.5 min con desfase ≤45 s; después se relaja 2 min ×6 (~18
  * min), 5 min ×6 (~48 min) y 15 min en adelante (72 h de ventana del
@@ -104,10 +104,10 @@ function notifyEscalated(order: PaymentOrder): void {
   createPaymentOrderNotification({
     userId: order.creatorUserId,
     orderId: order.id,
-    title: "Liga de pago sin depósito",
+    title: "Link de pago sin depósito",
     body: `Tu orden ${order.code} (${paymentOrderMoney(
       order.amountMxn
-    )}) tiene comprobante válido pero el depósito no aparece acreditado en tu cuenta tras 24 h de verificación. Resuélvela manualmente en Módulos → Ligas de pago (Marcar pagada o Rechazar).`,
+    )}) tiene comprobante válido pero el depósito no aparece acreditado en tu cuenta tras 24 h de verificación. Resuélvela manualmente en Módulos → Links de pago (Marcar pagada o Rechazar).`,
   })
   if (order.payerPhone) {
     void enqueueWhatsAppForPhone({
@@ -236,7 +236,7 @@ async function verifyTick(): Promise<void> {
 
 /**
  * RECORDATORIO proactivo al pagador: a los 10 min del contacto sin
- * comprobante, la liga pide su comprobante por WhatsApp (UNA sola vez por
+ * comprobante, el link pide su comprobante por WhatsApp (UNA sola vez por
  * orden, dedupe por `payer_nudged_at`). Cierra el ciclo de los pagadores
  * que pagan y se van sin enviar la foto (casos Z93K/PLJ7/6HMR): sin el
  * comprobante no hay identificación por código y la confirmación no puede

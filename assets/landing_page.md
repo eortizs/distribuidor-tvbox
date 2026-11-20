@@ -26,7 +26,7 @@
 
 • Qué se despliega en pantalla: Una tarjeta que simula la interfaz de un chat de WhatsApp con encabezado azul marino (SPEI.link Asistente — Validación en tiempo real). Dentro se muestran 4 burbujas de chat ordenadas cronológicamente que ilustran la experiencia real del comprador sin necesidad de texto explicativo largo.
 • Copies (Burbujas del chat):
-	• Burbuja 1 (Cliente - verde claro a la derecha): Solicito una orden de pago por $500.00 MXN
+	• Burbuja 1 (Cliente - verde claro a la derecha): Solicito un link de pago por $500.00 MXN
 	• Burbuja 2 (Asistente - blanca a la izquierda): Transfiere $500.00 MXN directo a: CLABE: 646180... | Concepto: XQK9 (con la CLABE y el código resaltados en recuadros punteados).
 	• Burbuja 3 (Cliente - verde claro a la derecha): 📎 Comprobante_SPEI.jpg
 	• Burbuja 4 (Asistente - blanca con borde verde a la izquierda): ✅ ¡Pago verificado en cuenta! Depósito de $500.00 MXN confirmado con folio XQK9.

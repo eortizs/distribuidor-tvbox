@@ -61,7 +61,7 @@ export async function mercadoPagoGatewayRequest<T = unknown>(
 /**
  * Llamada con un token EXPLÍCITO, distinto del de la plataforma: la
  * credencial propia de un distribuidor (tabla `user_mp_tokens`) que consulta
- * depósitos de SU cuenta (reporte SPEI, verificador de depósitos de ligas de
+ * depósitos de SU cuenta (reporte SPEI, verificador de depósitos de links de
  * pago y de renovaciones por transferencia). El token nunca se registra; los
  * errores se traducen a `MercadoPagoError` igual que el resto.
  */

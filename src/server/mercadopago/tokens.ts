@@ -12,7 +12,7 @@ import { MercadoPagoError } from "./errors"
  * conectores) y es WRITE-ONLY: nunca vuelve al navegador ni se registra en
  * logs; el formulario muestra solo el estado (cuenta MP destino, últimos 4
  * caracteres, vigencia). Con su propio token, un distribuidor habilita la
- * verificación automática de depósitos hacia SU cuenta (ligas de pago,
+ * verificación automática de depósitos hacia SU cuenta (links de pago,
  * renovaciones por transferencia) y el reporte SPEI de su propia cuenta.
  *
  * El admin conserva el token de plataforma del `.env`
@@ -228,7 +228,7 @@ export async function resolveSellerMpAccessToken(
 
 /**
  * Token de verificación de depósitos para las órdenes de pago de UN creador
- * (módulo Ligas de pago): su credencial propia si tiene; si no, la de
+ * (módulo Links de pago): su credencial propia si tiene; si no, la de
  * plataforma SOLO para admins (los cobros del admin apuntan a la cuenta del
  * `.env`). Un distribuidor sin token propio → null: verificación manual.
  */

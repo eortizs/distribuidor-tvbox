@@ -11,23 +11,23 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { paymentOrderMoney } from "@/lib/ligas-pago"
-import type { CreatedPaymentOrder } from "@/app/actions/ligas-pago"
+import { paymentOrderMoney } from "@/lib/links-pago"
+import type { CreatedPaymentOrder } from "@/app/actions/links-pago"
 
 /*
  * Diálogo de link de pago creado: QR + datos SPEI + copiar/compartir link.
  * El QR y el link compartido son el CORTO (spei.link/<código>, misma
  * identidad que el código de concepto); el botón de apertura usa wa.me
- * directo (un salto menos). Compartido por /modulos/ligas-de-pago y el
+ * directo (un salto menos). Compartido por /modulos/links-de-pago y el
  * cobro desde la Calculadora.
  */
 
-interface LigaCreadaDialogProps {
+interface LinkCreadoDialogProps {
   order: CreatedPaymentOrder | null
   onClose: () => void
 }
 
-export function LigaCreadaDialog({ order, onClose }: LigaCreadaDialogProps) {
+export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
   function copyText(value: string, label: string) {
     void navigator.clipboard
       .writeText(value)
@@ -36,12 +36,12 @@ export function LigaCreadaDialog({ order, onClose }: LigaCreadaDialogProps) {
   }
 
   /**
-   * Comparte la liga corta con el medio que elija el cobrador (WhatsApp,
+   * Comparte el link corto con el medio que elija el cobrador (WhatsApp,
    * SMS, etc.) vía Web Share API del sistema. Sin soporte (desktop sin
    * share sheet) o ante un fallo real, cae a copiar al portapapeles;
    * cancelar el sheet nativo (AbortError) no es error ni copia nada.
    */
-  async function shareLiga(order: CreatedPaymentOrder) {
+  async function shareLink(order: CreatedPaymentOrder) {
     const text = `Link de pago ${order.code} por ${paymentOrderMoney(order.amountMxn)}`
     if (typeof navigator.share === "function") {
       try {
@@ -68,7 +68,7 @@ export function LigaCreadaDialog({ order, onClose }: LigaCreadaDialogProps) {
               <DialogTitle>Link de pago {order.code}</DialogTitle>
               <DialogDescription>
                 Muestra el QR a tu cliente para que abra el chat con el mensaje
-                listo, o comparte la liga corta.
+                listo, o comparte el link corto.
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col items-center gap-3">
@@ -115,7 +115,7 @@ export function LigaCreadaDialog({ order, onClose }: LigaCreadaDialogProps) {
                   variant="outline"
                   className="flex-1"
                   onClick={() => {
-                    void shareLiga(order)
+                    void shareLink(order)
                   }}
                 >
                   <Share2Icon data-icon="inline-start" />
@@ -130,7 +130,7 @@ export function LigaCreadaDialog({ order, onClose }: LigaCreadaDialogProps) {
                       href={order.waUrl}
                       target="_blank"
                       rel="noreferrer"
-                      aria-label="Abrir la liga de pago en WhatsApp"
+                      aria-label="Abrir el link de pago en WhatsApp"
                     />
                   }
                 >

@@ -119,9 +119,9 @@ const CAROUSEL_SLIDES = [
   },
   {
     src: "/carrusel/taller.webp",
-    alt: "Mecánico sonriente mostrando en su celular una liga de pago SPEI Link con código QR por $2,300.00 MXN dentro de su taller",
+    alt: "Mecánico sonriente mostrando en su celular un link de pago SPEI Link con código QR por $2,300.00 MXN dentro de su taller",
     title: "Talleres y servicios",
-    benefit: "Liga con QR lista para compartir",
+    benefit: "Link con QR listo para compartir",
   },
   {
     src: "/carrusel/artesanias.webp",
@@ -343,7 +343,7 @@ export default function ShortLandingPage() {
               </div>
               <div className="flex flex-col gap-2 bg-[#e5ddd5] p-3">
                 <ChatBubble side="right" time="10:30">
-                  Solicito una orden de pago por{" "}
+                  Solicito un link de pago por{" "}
                   <span className="font-semibold tabular-nums">$500.00 MXN</span>
                 </ChatBubble>
                 <ChatBubble side="left" variant="assistant" time="10:30">

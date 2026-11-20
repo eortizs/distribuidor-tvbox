@@ -30,7 +30,7 @@ import { resolveRenewalDepositToken, tryConfirmRenewalDeposit } from "./transfer
  * reprograman a 15 min y escalan por edad): jamás se auto-aprueba a ciegas.
  *
  * Arranque: `src/instrumentation.ts` (hook `register`, runtime Node), mismo
- * patrón del verificador de ligas de pago: intervalo de 60 s, guard
+ * patrón del verificador de links de pago: intervalo de 60 s, guard
  * `ticking` contra solapamiento.
  */
 

@@ -1,8 +1,8 @@
-import type { PaymentOrder } from "@/server/ligas-pago/repository"
+import type { PaymentOrder } from "@/server/links-pago/repository"
 
 /*
  * Tipo compartido del listado de órdenes de pago para la UI
- * (/modulos/ligas-de-pago) y su serializador: fechas ISO y solo campos que
+ * (/modulos/links-de-pago) y su serializador: fechas ISO y solo campos que
  * viajan al cliente. Puro (sin server-only): lo importan la vista cliente,
  * la página RSC y las server actions.
  */
@@ -16,7 +16,7 @@ export interface PaymentOrderListItem {
   status: PaymentOrder["status"]
   bank: PaymentOrder["bank"]
   payerPhone: string | null
-  /** Primera apertura de la liga corta (spei.link → wa.me). */
+  /** Primera apertura del link corto (spei.link → wa.me). */
   linkOpenedAt: string | null
   /** Primer contacto del pagador (teléfono ligado por entrega del código). */
   payerBoundAt: string | null

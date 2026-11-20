@@ -255,7 +255,7 @@ export function ProfileForm({
                 Credenciales de producción). Queda cifrado en el servidor y no
                 se vuelve a mostrar. Con tu token, tus clientes pueden
                 depositarte directamente a tu cuenta y el sistema verifica sus
-                pagos automáticamente (ligas de pago, renovaciones y Reporte
+                pagos automáticamente (links de pago, renovaciones y Reporte
                 SPEI de tu cuenta).
                 {mpToken?.status === "invalid"
                   ? " El token registrado fue rechazado por Mercado Pago: regístralo nuevamente."

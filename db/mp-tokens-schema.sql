@@ -11,7 +11,7 @@
 -- Con su propio token el distribuidor convierte en posible la verificación
 -- AUTOMÁTICA de depósitos hacia SU cuenta (antes solo el admin con el token
 -- de plataforma del .env):
---   - Ligas de pago: sus órdenes con comprobante válido pasan a 'verifying'
+--   - Links de pago: sus órdenes con comprobante válido pasan a 'verifying'
 --     y se confirman solas cuando el dinero acredita en su cuenta MP.
 --   - Reporte SPEI: consulta viva de los depósitos de su propia cuenta.
 --   - Renovaciones por transferencia: la orden pasa a 'verifying' hasta que
@@ -42,7 +42,7 @@ CREATE INDEX IF NOT EXISTS user_mp_tokens_active_idx
 -- vendedor. El ID del pago de MP queda RESERVADO en exclusiva por orden
 -- (índice único parcial): un depósito valida una sola orden, y la reserva es
 -- CRUZADA entre flujos (payment_orders y mp_orders comparten la misma cuenta
--- MP: un depósito no puede confirmar una liga de pago y una renovación a la
+-- MP: un depósito no puede confirmar un link de pago y una renovación a la
 -- vez — el filtro cruzado vive también en el código que reclama).
 -- --------------------------------------------------------------------------- --
 

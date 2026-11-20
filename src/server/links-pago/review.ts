@@ -27,7 +27,7 @@ import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
  * "pago_libre"):
  *
  *  1. Concepto impreso con el código de la orden (el pagador lo recibió en
- *      la liga corta spei.link y lo escribió como concepto en su SPEI).
+ *      el link corto spei.link y lo escribió como concepto en su SPEI).
  *   2. Importe EXACTO al monto congelado de la orden (a centavos — el mismo
  *      criterio del casado del depósito).
  *
@@ -137,7 +137,7 @@ export type PaymentReviewOutcome =
  * llamador UNA vez por envío, antes de gastar visión.
  */
 export function checkPaymentOrderScanQuota(phone: string): boolean {
-  return checkRateLimitReceiptScan(`orden-pago:${phone}`)
+  return checkRateLimitReceiptScan(`links-pago:${phone}`)
 }
 
 /**
@@ -245,7 +245,7 @@ export async function reviewPaymentReceipt(input: {
     )
     if ((dup.rowCount ?? 0) > 0) {
       duplicate = true
-      reasons.push("Este comprobante ya fue registrado en otra liga de pago.")
+      reasons.push("Este comprobante ya fue registrado en otro link de pago.")
       logEvent("orden_pago.review_duplicate", { order_id: order.id })
     }
   }
@@ -282,12 +282,12 @@ export async function reviewPaymentReceipt(input: {
   notifyPaymentOrderCreator(
     order,
     sha256,
-    "Liga de pago por revisar",
+    "Link de pago por revisar",
     `El comprobante del pagador${pagador} de tu orden ${order.code} (${money(
       order.amountMxn
     )}) no pasó la validación automática.${
       reasons.length > 0 ? ` Motivo(s): ${reasons.slice(0, 4).join("; ")}.` : ""
-    } Revísala en Módulos → Ligas de pago.`
+    } Revísala en Módulos → Links de pago.`
   )
   return { review: "auto_rejected", scan }
   }
@@ -325,7 +325,7 @@ export async function reviewPaymentReceipt(input: {
       "Comprobante validado",
     `El pagador${pagador} de tu orden ${order.code} (${money(
       order.amountMxn
-    )}) envió un comprobante válido (concepto e importe). Confirma la recepción del depósito en TU cuenta y marca la liga como pagada en Módulos → Ligas de pago.`
+    )}) envió un comprobante válido (concepto e importe). Confirma la recepción del depósito en TU cuenta y marca el link como pagado en Módulos → Links de pago.`
     )
     return { review: "awaiting_creator" }
   }

@@ -5,7 +5,7 @@ import {
   amountsEqualCents,
   depositWithinOrderWindow,
   PAYMENT_ORDER_DEPOSIT_SLACK_MS,
-} from "@/lib/ligas-pago"
+} from "@/lib/links-pago"
 
 import {
   findReservedMpPaymentIds,
@@ -27,7 +27,7 @@ import {
  * exclusiva por orden (índice único parcial sobre mp_payment_id): un
  * depósito solo valida una orden y dos verificaciones concurrentes no pueden
  * aprobarse con el mismo pago. La reserva es CRUZADA entre flujos
- * (`findReservedMpPaymentIds`): ligas de pago y renovaciones comparten la
+ * (`findReservedMpPaymentIds`): links de pago y renovaciones comparten la
  * misma cuenta MP y el mismo feed de depósitos.
  *
  * Dos LLAMADORES por orden:

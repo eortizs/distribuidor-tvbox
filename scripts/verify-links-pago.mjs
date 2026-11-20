@@ -1,5 +1,5 @@
-// Verificación post-despliegue del shortener spei.link + rename Ligas de pago.
-// Uso: node scripts/verify-ligas-pago.mjs <CODIGO_ACTIVO_OPCIONAL>
+// Verificación post-despliegue del shortener spei.link + rename Links de pago.
+// Uso: node scripts/verify-links-pago.mjs <CODIGO_ACTIVO_OPCIONAL>
 const BASE = "https://spei.link"
 const PANEL = "https://distribuidor-tvbox.people-ia.com"
 
@@ -28,7 +28,8 @@ async function main() {
   await head("desconocido", `${BASE}/ZZZZ`)
   await head("forma inválida", `${BASE}/UGP0`)
   await head("url vieja módulo", `${PANEL}/modulos/orden-de-pago`)
-  await head("url nueva módulo", `${PANEL}/modulos/ligas-de-pago`)
+  await head("url anterior  ", `${PANEL}/modulos/ligas-de-pago`)
+  await head("url nueva módulo", `${PANEL}/modulos/links-de-pago`)
   await head("login panel", `${PANEL}/login`)
 
   if (activeCode) {
@@ -37,7 +38,7 @@ async function main() {
     if (res.status === 302 && target) {
       const decoded = decodeURIComponent(target)
       console.log(
-        `texto prellenado OK: ${decoded.includes("Solicito una liga de pago por")}`
+        `texto prellenado OK: ${decoded.includes("Solicito un link de pago por")}`
       )
     }
   }

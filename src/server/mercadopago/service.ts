@@ -6,10 +6,10 @@ import {
   createClientRenewalNotice,
   createRenewalNotification,
 } from "@/server/notifications/service"
-import { isMpDepositClaimed } from "@/server/ligas-pago/repository"
-import { tryConfirmDepositPayment } from "@/server/ligas-pago/deposit-check"
-import { notifyDepositConfirmed } from "@/server/ligas-pago/notify"
-import { isDepositLikePayment } from "@/lib/ligas-pago"
+import { isMpDepositClaimed } from "@/server/links-pago/repository"
+import { tryConfirmDepositPayment } from "@/server/links-pago/deposit-check"
+import { notifyDepositConfirmed } from "@/server/links-pago/notify"
+import { isDepositLikePayment } from "@/lib/links-pago"
 import { readFlujoLicenseExpiration, renewFlujoLicense } from "@/server/flujotv/service"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { consumeTransferConceptByOrder } from "@/server/transferencias/concepto"
@@ -2217,7 +2217,7 @@ async function approveClientTransferOrder(
   try {
     await tx.query("BEGIN")
     // Claim de depósito atómico y CRUZADO (ver comentario en
-    // `confirmPaymentOrderDeposit` de ligas-pago): advisory lock por ID de
+    // `confirmPaymentOrderDeposit` de links-pago): advisory lock por ID de
     // pago + re-verificación de reservas dentro del candado.
     if (deposit && deposit.mpPaymentId !== null) {
       await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
@@ -2373,7 +2373,7 @@ export async function approveTransferOrder(
 
   // Claim de depósito atómico y CRUZADO: advisory lock por ID de pago +
   // re-verificación de reservas dentro del candado (ver
-  // `confirmPaymentOrderDeposit` de ligas-pago — los índices únicos de cada
+  // `confirmPaymentOrderDeposit` de links-pago — los índices únicos de cada
   // tabla no se ven entre sí y los dos verificadores comparten la cuenta).
   let claim: { rowCount: number | null }
   if (deposit && deposit.mpPaymentId !== null) {
@@ -2517,8 +2517,8 @@ export async function rejectTransferOrder(
 /* -------------------------------------------------------------------------- */
 
 /*
- * Espejo de la verificación de depósito de las ligas de pago
- * (`src/server/ligas-pago/deposit-*`): tras un comprobante VÁLIDO, la orden
+ * Espejo de la verificación de depósito de los links de pago
+ * (`src/server/links-pago/deposit-*`): tras un comprobante VÁLIDO, la orden
  * pasa a 'verifying' y solo se aprueba cuando el DEPÓSITO aparece acreditado
  * en la cuenta de Mercado Pago del vendedor — el token que consulta la
  * cuenta lo resuelve `transfer-deposit.ts` (credencial propia del

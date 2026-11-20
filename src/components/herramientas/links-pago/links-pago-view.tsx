@@ -37,19 +37,19 @@ import {
   paymentOrderMoney,
   paymentOrderStatusLabel,
   type PaymentOrderListItem,
-} from "@/lib/ligas-pago"
+} from "@/lib/links-pago"
 import {
   cancelPaymentOrderAction,
   createPaymentOrderAction,
   getPaymentOrderLinkAction,
   resolvePaymentOrderAction,
   type CreatedPaymentOrder,
-} from "@/app/actions/ligas-pago"
-import { LigaCreadaDialog } from "@/components/herramientas/ligas-pago/liga-creada-dialog"
+} from "@/app/actions/links-pago"
+import { LinkCreadoDialog } from "@/components/herramientas/links-pago/link-creado-dialog"
 
 /*
- * Vista del módulo Ligas de pago (/modulos/ligas-de-pago): formulario de
- * alta (monto libre + nota opcional) que devuelve la liga corta
+ * Vista del módulo Links de pago (/modulos/links-de-pago): formulario de
+ * alta (monto libre + nota opcional) que devuelve el link corto
  * spei.link/<código> + QR para que el pagador pague por SPEI con el código
  * como concepto; listado de órdenes con el resultado del escaneo y las
  * acciones de revisión del creador.
@@ -97,19 +97,19 @@ function scanReasonsOf(order: PaymentOrderListItem): string[] {
   return raw.filter((item): item is string => typeof item === "string")
 }
 
-interface LigasPagoViewProps {
+interface LinksPagoViewProps {
   initialOrders: PaymentOrderListItem[]
   isAdmin: boolean
   whatsappConfigured: boolean
   scanConfigured: boolean
 }
 
-export function LigasPagoView({
+export function LinksPagoView({
   initialOrders,
   isAdmin,
   whatsappConfigured,
   scanConfigured,
-}: LigasPagoViewProps) {
+}: LinksPagoViewProps) {
   const router = useRouter()
   const [orders, setOrders] = useState(initialOrders)
   const [amount, setAmount] = useState("")
@@ -160,7 +160,7 @@ export function LigasPagoView({
         note,
       })
       if (result.error || !result.order) {
-        setFormError(result.error ?? "No se pudo crear la liga de pago.")
+        setFormError(result.error ?? "No se pudo crear el link de pago.")
         return
       }
       const created = result.order
@@ -205,7 +205,7 @@ export function LigasPagoView({
   }
 
   /**
-   * Vuelve a mostrar el QR y la liga de una orden ACTIVA: misma pieza del
+   * Vuelve a mostrar el QR y el link de una orden ACTIVA: misma pieza del
    * diálogo de creación, armada de nuevo desde el snapshot guardado.
    */
   function showLink(order: PaymentOrderListItem) {
@@ -213,7 +213,7 @@ export function LigasPagoView({
     void getPaymentOrderLinkAction({ orderId: order.id })
       .then((result) => {
         if (result.error || !result.order) {
-          toast.error(result.error ?? "No se pudo cargar la liga de pago.")
+          toast.error(result.error ?? "No se pudo cargar el link de pago.")
           return
         }
         setCreated(result.order)
@@ -235,8 +235,8 @@ export function LigasPagoView({
         }
         toast.success(
           decision === "approve"
-            ? `Liga ${order.code} marcada como pagada`
-            : `Liga ${order.code} rechazada`
+            ? `Link ${order.code} marcado como pagado`
+            : `Link ${order.code} rechazado`
         )
         setOrders((current) =>
           current.map((item) =>
@@ -263,7 +263,7 @@ export function LigasPagoView({
           toast.error(result.error)
           return
         }
-        toast.success(`Liga ${order.code} cancelada`)
+        toast.success(`Link ${order.code} cancelado`)
         setOrders((current) =>
           current.map((item) =>
             item.id === order.id
@@ -283,11 +283,10 @@ export function LigasPagoView({
         <FramePanel>
           <FrameHeader>
             <FrameTitle className="text-lg font-semibold">
-              Nueva liga de pago
+              Nuevo link de pago
             </FrameTitle>
             <FrameDescription>
-              Define el importe y genera el código de concepto con la liga
-              corta y el QR: el pagador abre la liga, paga por SPEI con el
+              Define el importe y genera el código de concepto con el link corto y el QR: el pagador abre el link, paga por SPEI con el
               código y sube su comprobante en el chat del agente.
             </FrameDescription>
           </FrameHeader>
@@ -297,7 +296,7 @@ export function LigasPagoView({
                 <AlertTitle>Canal de WhatsApp no configurado</AlertTitle>
                 <AlertDescription>
                   El servidor no tiene WHATSAPP_AGENT_NUMBER: no hay chat al
-                  que apuntar la liga de pago. Configúralo para usar el módulo.
+                  que apuntar el link de pago. Configúralo para usar el módulo.
                 </AlertDescription>
               </Alert>
             ) : !scanConfigured ? (
@@ -354,7 +353,7 @@ export function LigasPagoView({
         <FramePanel>
           <FrameHeader>
             <FrameTitle className="text-lg font-semibold">
-              {isAdmin ? "Ligas" : "Mis ligas"}
+              {isAdmin ? "Links" : "Mis links"}
               {orders.length > 0 ? (
                 <span className="ml-2 font-normal text-muted-foreground text-sm">
                   {orders.length} · {activeCount} activa
@@ -364,14 +363,14 @@ export function LigasPagoView({
             </FrameTitle>
             <FrameDescription>
               {isAdmin
-                ? "Todas las ligas del panel; puedes intervenir en cualquiera."
-                : "Tus ligas de pago y el resultado de cada comprobante."}
+                ? "Todos los links del panel; puedes intervenir en cualquiera."
+                : "Tus links de pago y el resultado de cada comprobante."}
             </FrameDescription>
           </FrameHeader>
           {orders.length === 0 ? (
             <div className="flex flex-col items-center gap-2 py-8 text-center">
               <p className="text-muted-foreground text-sm">
-                Sin ligas todavía. Crea la primera con el importe a cobrar.
+                Sin links todavía. Crea la primera con el importe a cobrar.
               </p>
             </div>
           ) : (
@@ -459,7 +458,7 @@ export function LigasPagoView({
                               </dd>
                             ) : order.linkOpenedAt ? (
                               <dd className="text-muted-foreground text-xs">
-                                Abrió la liga el{" "}
+                                Abrió el link el{" "}
                                 {dateFormatter.format(new Date(order.linkOpenedAt))}
                               </dd>
                             ) : null}
@@ -578,7 +577,7 @@ export function LigasPagoView({
                               disabled={busy}
                               onClick={() => setCancelTarget(order)}
                             >
-                              Cancelar liga
+                              Cancelar link
                             </Button>
                             <Button
                               size="lg"
@@ -587,7 +586,7 @@ export function LigasPagoView({
                               onClick={() => showLink(order)}
                             >
                               <QrCodeIcon data-icon="inline-start" />
-                              {linkOrderId === order.id ? "Cargando…" : "Ver QR y liga"}
+                              {linkOrderId === order.id ? "Cargando…" : "Ver QR y link"}
                             </Button>
                           </div>
                         ) : order.rejectionReason ? (
@@ -605,8 +604,8 @@ export function LigasPagoView({
         </FramePanel>
       </Frame>
 
-      {/* Diálogo de liga creada: QR + liga (componente compartido) */}
-      <LigaCreadaDialog order={created} onClose={() => setCreated(null)} />
+      {/* Diálogo de link creado: QR + link (componente compartido) */}
+      <LinkCreadoDialog order={created} onClose={() => setCreated(null)} />
 
       {/* Confirmación de aprobación */}
       <AlertDialog
@@ -618,7 +617,7 @@ export function LigasPagoView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              ¿Marcar la liga {approveTarget?.code} como pagada?
+              ¿Marcar el link {approveTarget?.code} como pagado?
             </AlertDialogTitle>
             <AlertDialogDescription>
               El pagador recibirá la confirmación por WhatsApp
@@ -653,10 +652,10 @@ export function LigasPagoView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              ¿Rechazar la liga {rejectTarget?.code}?
+              ¿Rechazar el link {rejectTarget?.code}?
             </AlertDialogTitle>
             <AlertDialogDescription>
-              El pagador recibirá el aviso por WhatsApp con el motivo. La liga
+              El pagador recibirá el aviso por WhatsApp con el motivo. El link
               queda en el historial y el código se libera.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -697,11 +696,11 @@ export function LigasPagoView({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              ¿Cancelar la liga {cancelTarget?.code}?
+              ¿Cancelar el link {cancelTarget?.code}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               El código deja de ser válido: si el pagador intenta pagar, el
-              agente le responderá que la liga fue cancelada.
+              agente le responderá que el link fue cancelado.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -713,7 +712,7 @@ export function LigasPagoView({
                 setCancelTarget(null)
               }}
             >
-              Cancelar liga
+              Cancelar link
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -1,7 +1,7 @@
 import { mercadoPagoGatewayRequest, mercadoPagoRequestAs } from "./client"
 import { MercadoPagoError } from "./errors"
 import { resolveConceptsForDeposits } from "@/server/transferencias/concepto"
-import { findPaymentOrdersByMpPaymentIds } from "@/server/ligas-pago/repository"
+import { findPaymentOrdersByMpPaymentIds } from "@/server/links-pago/repository"
 
 /**
  * Reporte SPEI (`/modulos/reporte-spei`): depósitos por transferencia

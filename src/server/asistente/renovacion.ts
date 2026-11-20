@@ -41,7 +41,7 @@ import { getUserFile, userFilePath } from "@/server/storage/user-files"
 import {
   findPaymentOrderForReceiptConcept,
   maybeHandlePaymentOrderReceipt,
-} from "@/server/ligas-pago/whatsapp"
+} from "@/server/links-pago/whatsapp"
 
 import { appendConversationMessage, type AssistantChannel } from "./conversations"
 import type { AssistantAttachmentMeta } from "./attachments"

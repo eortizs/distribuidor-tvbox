@@ -58,7 +58,7 @@ export function notifyPayerContacted(order: PaymentOrder, phone: string): void {
   notifyCreator(
     order,
     "Pagador en contacto",
-    `El pagador (WhatsApp ${maskPhone(phone)}) abrió tu liga ${order.code} (${money(
+    `El pagador (WhatsApp ${maskPhone(phone)}) abrió tu link ${order.code} (${money(
       order.amountMxn
     )}) y recibió el código de concepto y la CLABE. Te avisaremos cuando envíe su comprobante o cuando el pago se confirme.`
   )

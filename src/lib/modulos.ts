@@ -88,7 +88,7 @@ export const MODULOS: Modulo[] = [
   {
     title: "Calculadora",
     description:
-      "Cálculos rápidos con porcentaje, cinta de historial y cobro con liga de pago.",
+      "Cálculos rápidos con porcentaje, cinta de historial y cobro con link de pago.",
     href: "/modulos/calculadora",
     icon: CalculatorIcon,
   },
@@ -143,10 +143,10 @@ export const MODULOS: Modulo[] = [
     icon: PiggyBankIcon,
   },
   {
-    title: "Ligas de pago",
+    title: "Links de pago",
     description:
-      "Emite un cobro de monto libre: liga corta spei.link con el código de concepto y QR para que el pagador pague por SPEI y suba su comprobante.",
-    href: "/modulos/ligas-de-pago",
+      "Emite un cobro de monto libre: link corto spei.link con el código de concepto y QR para que el pagador pague por SPEI y suba su comprobante.",
+    href: "/modulos/links-de-pago",
     icon: QrCodeIcon,
   },
   {
