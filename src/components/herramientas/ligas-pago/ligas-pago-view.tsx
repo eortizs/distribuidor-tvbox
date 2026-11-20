@@ -7,6 +7,7 @@ import { toast } from "sonner"
 import {
   BadgeCheckIcon,
   ChevronDownIcon,
+  QrCodeIcon,
   XIcon,
 } from "lucide-react"
 
@@ -40,6 +41,7 @@ import {
 import {
   cancelPaymentOrderAction,
   createPaymentOrderAction,
+  getPaymentOrderLinkAction,
   resolvePaymentOrderAction,
   type CreatedPaymentOrder,
 } from "@/app/actions/ligas-pago"
@@ -121,6 +123,7 @@ export function LigasPagoView({
   const [cancelTarget, setCancelTarget] = useState<PaymentOrderListItem | null>(null)
   const [approveTarget, setApproveTarget] = useState<PaymentOrderListItem | null>(null)
   const [creating, startCreating] = useTransition()
+  const [linkOrderId, setLinkOrderId] = useState<string | null>(null)
 
   const activeCount = useMemo(
     () =>
@@ -152,6 +155,23 @@ export function LigasPagoView({
       setNote("")
       router.refresh()
     })
+  }
+
+  /**
+   * Vuelve a mostrar el QR y la liga de una orden ACTIVA: misma pieza del
+   * diálogo de creación, armada de nuevo desde el snapshot guardado.
+   */
+  function showLink(order: PaymentOrderListItem) {
+    setLinkOrderId(order.id)
+    void getPaymentOrderLinkAction({ orderId: order.id })
+      .then((result) => {
+        if (result.error || !result.order) {
+          toast.error(result.error ?? "No se pudo cargar la liga de pago.")
+          return
+        }
+        setCreated(result.order)
+      })
+      .finally(() => setLinkOrderId(null))
   }
 
   function resolveOrder(
@@ -512,6 +532,15 @@ export function LigasPagoView({
                               onClick={() => setCancelTarget(order)}
                             >
                               Cancelar liga
+                            </Button>
+                            <Button
+                              size="lg"
+                              variant="outline"
+                              disabled={busy || linkOrderId === order.id}
+                              onClick={() => showLink(order)}
+                            >
+                              <QrCodeIcon data-icon="inline-start" />
+                              {linkOrderId === order.id ? "Cargando…" : "Ver QR y liga"}
                             </Button>
                           </div>
                         ) : order.rejectionReason ? (

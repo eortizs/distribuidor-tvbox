@@ -130,6 +130,56 @@ export async function createPaymentOrderAction(input: {
   }
 }
 
+export interface PaymentOrderLinkResult {
+  error: string | null
+  order: CreatedPaymentOrder | null
+}
+
+/**
+ * Vuelve a armar el diálogo de creación (liga corta + QR + datos SPEI)
+ * para una orden ACTIVA ya existente (creador o admin): mismo contenido
+ * que cuando se creó, sin tocar la orden. Las resueltas no se comparten.
+ */
+export async function getPaymentOrderLinkAction(input: {
+  orderId: string
+}): Promise<PaymentOrderLinkResult> {
+  const user = await requireUser()
+
+  const order = await getPaymentOrder(input.orderId).catch(() => null)
+  if (!order) return { error: "La liga de pago no existe.", order: null }
+  if (user.role !== "admin" && order.creatorUserId !== user.id) {
+    return { error: "Solo el creador de la liga o un administrador puede verla.", order: null }
+  }
+  if (order.status !== "pending" && order.status !== "verifying") {
+    return { error: "La liga ya está resuelta.", order: null }
+  }
+
+  const waUrl = buildPaymentOrderWaLink(order.amountMxn)
+  if (!waUrl) {
+    return {
+      error: "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar la liga de pago.",
+      order: null,
+    }
+  }
+
+  const shortUrl = buildPaymentOrderShortLink(order.code)
+  const qrDataUrl = await QRCode.toDataURL(shortUrl, { margin: 1, width: 320 })
+
+  return {
+    error: null,
+    order: {
+      orderId: order.id,
+      code: order.code,
+      amountMxn: order.amountMxn,
+      note: order.note,
+      bank: order.bank,
+      shortUrl,
+      waUrl,
+      qrDataUrl,
+    },
+  }
+}
+
 export interface ResolvePaymentOrderResult {
   error: string | null
 }
