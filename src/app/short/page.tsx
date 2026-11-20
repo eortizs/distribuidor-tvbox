@@ -13,7 +13,7 @@ import {
 
 import { cn } from "cn"
 
-import { publicSiteUrl, shortLinkBaseUrl } from "@/server/site-url"
+import { shortLinkBaseUrl } from "@/server/site-url"
 
 /*
  * Landing pública del dominio corto (spei.link/): el proxy reescribe la raíz
@@ -53,14 +53,12 @@ export const metadata: Metadata = {
   },
 }
 
-const REGISTER_URL = `${publicSiteUrl()}/register`
-const LOGIN_URL = `${publicSiteUrl()}/login`
-
-/** Número del agente para el enlace de soporte; ausente → texto plano. */
-const WHATSAPP_SUPPORT_URL = (() => {
-  const digits = process.env.WHATSAPP_AGENT_NUMBER?.replace(/\D/g, "") ?? ""
-  return digits.length > 0 ? `https://wa.me/${digits}` : null
-})()
+/*
+ * Registro, inicio de sesión y soporte por WhatsApp deshabilitados: el
+ * servicio aún no abre al público. Al lanzar, restaurar los `<a href>` con
+ * `${publicSiteUrl()}/register`, `${publicSiteUrl()}/login` y el enlace
+ * `https://wa.me/<WHATSAPP_AGENT_NUMBER>` del footer.
+ */
 
 const STEPS = [
   {
@@ -160,7 +158,7 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
     id: "sin-concepto",
     question: "¿Qué pasa si mi cliente olvida poner el concepto de pago?",
     answer:
-      "El pago no se puede identificar solo y queda pendiente de revisión. Por eso el chat siempre recuerda escribir el código de 4 letras como concepto: con él, la confirmación es automática.",
+      "El pago no se puede identificar solo y queda pendiente de revisión. Por eso el chat siempre recuerda escribir el concepto de pago: con él, la confirmación es automática.",
   },
   {
     id: "mercado-pago-cliente",
@@ -177,14 +175,16 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
  * una sola palabra. El `ink` lleva margen negativo porque al cambiar de peso
  * en la junta (la «L» en bold y la «i» en light) las bearings de cada glifo
  * dejan un hueco que se lee como un espacio — sin este ajuste la marca
- * aparece como «SPEIL ink».
+ * aparece como «SPEIL ink». El envoltorio `<span>` agrupa ambas piezas en
+ * UN solo ítem: los padres flex con `gap-*` (micro-texto del hero, pregunta
+ * FAQ) separarían «SPEIL» e «ink» con el gap del contenedor.
  */
 function BrandInline() {
   return (
-    <>
+    <span>
       <span className="font-bold">SPEIL</span>
       <span className="-ml-[0.13em] font-light">ink</span>
-    </>
+    </span>
   )
 }
 
@@ -207,13 +207,14 @@ function SectionTitle({ children }: { children: string }) {
 /** Botón CTA ancho con degradado azul marino → azul de marca (48 px). */
 function GradientCta() {
   return (
-    <a
-      href={REGISTER_URL}
-      className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#003366] to-[#1872cc] text-base font-semibold text-white shadow-lg shadow-[#003366]/25 transition hover:brightness-110 focus-visible:ring-2 focus-visible:ring-[#1872cc] focus-visible:ring-offset-2 focus-visible:outline-none"
+    <button
+      type="button"
+      disabled
+      className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#003366] to-[#1872cc] text-base font-semibold text-white opacity-60 shadow-lg shadow-[#003366]/25 focus-visible:outline-none"
     >
       Crear mi cuenta gratis
       <ArrowRightIcon className="size-4" aria-hidden="true" />
-    </a>
+    </button>
   )
 }
 
@@ -274,12 +275,13 @@ export default function ShortLandingPage() {
             />
             <Wordmark className="text-base" />
           </Link>
-          <a
-            href={LOGIN_URL}
-            className="inline-flex h-9 items-center rounded-lg border border-[#003366] px-4 text-sm font-semibold text-[#003366] transition hover:bg-[#003366]/5 focus-visible:ring-2 focus-visible:ring-[#1872cc] focus-visible:ring-offset-2 focus-visible:outline-none"
+          <button
+            type="button"
+            disabled
+            className="inline-flex h-9 cursor-not-allowed items-center rounded-lg border border-[#003366] px-4 text-sm font-semibold text-[#003366] opacity-60 focus-visible:outline-none"
           >
             Iniciar sesión
-          </a>
+          </button>
         </div>
       </header>
 
@@ -496,7 +498,9 @@ export default function ShortLandingPage() {
               {FAQ_ITEMS.map((item) => (
                 <details key={item.id} className="group px-4">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-2 py-3.5 text-sm font-semibold text-[#0f172a] transition-colors hover:text-[#003366] focus-visible:ring-2 focus-visible:ring-[#1872cc] focus-visible:ring-offset-2 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
-                    {item.question}
+                    {/* Un solo ítem flex: sin el envoltorio, el `gap-2` parte
+                        la pregunta en segmentos con espacios de más. */}
+                    <span>{item.question}</span>
                     <ChevronDownIcon
                       className="size-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
                       aria-hidden="true"
@@ -519,13 +523,14 @@ export default function ShortLandingPage() {
               Empieza a cobrar hoy y quédate con el 100% de tus ventas con 0%
               de comisión al cobrar con WhatsApp.
             </p>
-            <a
-              href={REGISTER_URL}
-              className="inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-white text-base font-bold text-[#003366] shadow-lg transition hover:bg-white/90 focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:outline-none"
+            <button
+              type="button"
+              disabled
+              className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-white text-base font-bold text-[#003366] opacity-60 shadow-lg focus-visible:outline-none"
             >
               Crear mi cuenta gratis
               <ArrowRightIcon className="size-4" aria-hidden="true" />
-            </a>
+            </button>
           </section>
         </div>
       </main>
@@ -543,18 +548,13 @@ export default function ShortLandingPage() {
             <Wordmark className="text-sm" />
           </div>
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500">
-            {WHATSAPP_SUPPORT_URL ? (
-              <a
-                href={WHATSAPP_SUPPORT_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline underline-offset-3 transition-colors hover:text-[#003366]"
-              >
-                Soporte por WhatsApp
-              </a>
-            ) : (
-              <span>Soporte por WhatsApp</span>
-            )}
+            <button
+              type="button"
+              disabled
+              className="cursor-not-allowed underline underline-offset-3 opacity-60 focus-visible:outline-none"
+            >
+              Soporte por WhatsApp
+            </button>
             <span
               aria-hidden="true"
               className="size-1 shrink-0 rounded-full bg-slate-400"
