@@ -42,6 +42,14 @@ export const metadata: Metadata = {
     siteName: "SPEILink",
     locale: "es_MX",
     type: "website",
+    images: [
+      {
+        url: "/spei-link-og.png",
+        width: 480,
+        height: 480,
+        alt: "SPEILink - Links de pago por WhatsApp",
+      },
+    ],
   },
 }
 

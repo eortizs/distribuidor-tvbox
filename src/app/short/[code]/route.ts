@@ -1,11 +1,15 @@
 import { NextResponse, connection, type NextRequest } from "next/server"
 
+import { paymentOrderMoney } from "@/lib/links-pago"
+import { buildPaymentOrderOgHtml, isPreviewCrawler } from "@/lib/links-pago-og"
 import {
   findPendingPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyCode,
   markPaymentOrderLinkOpened,
 } from "@/server/links-pago/repository"
+import { shortLinkBaseUrl } from "@/server/site-url"
 import {
+  buildPaymentOrderShortLink,
   buildPaymentOrderWaLink,
   isPaymentLinkCode,
 } from "@/server/links-pago/wa-link"
@@ -22,6 +26,11 @@ import {
  *     WhatsApp (activas primero, resueltas después): los códigos son
  *     reciclables y un código que hoy tiene orden viva NUNCA debe responder
  *     con el estado de una orden resuelta vieja que lo tuvo antes.
+ *     Los RASTREADORES de vista previa (WhatsApp pide la metadata al
+ *     compartir el link) reciben la página Open Graph de SPEILink: la
+ *     tarjeta muestra el badge, el importe y cómo pagar, en lugar de la
+ *     portada genérica de wa.me. La persona que abre el link nunca pasa
+ *     por esa página: sigue con el 302.
  *   - código RESUELTO (paid | rejected | cancelled) → 410 con página mínima
  *     honesta (el link ya no está activo; el código pudo ser reasignado).
  *   - código desconocido o de forma inválida → 404 con página mínima.
@@ -142,6 +151,30 @@ function htmlResponse(
   )
 }
 
+/**
+ * Vista previa del link (la tarjeta de WhatsApp): página con las etiquetas
+ * Open Graph de SPEILink —badge, importe y cómo pagar—. Solo la sirven a
+ * los rastreadores; la persona que abre el link recibe el 302 al chat.
+ */
+function previewResponse(params: {
+  amountMxn: number
+  code: string
+  waUrl: string
+}): NextResponse {
+  const html = buildPaymentOrderOgHtml({
+    amountLabel: paymentOrderMoney(params.amountMxn),
+    canonicalUrl: buildPaymentOrderShortLink(params.code),
+    imageUrl: `${shortLinkBaseUrl()}/spei-link-og.png`,
+    waUrl: params.waUrl,
+  })
+  return withNoCache(
+    new NextResponse(html, {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    })
+  )
+}
+
 function tooManyRequests(): NextResponse {
   return htmlResponse(
     429,
@@ -202,10 +235,6 @@ export async function GET(
     () => null
   )
   if (order) {
-    // Primera apertura del link (trazabilidad del embudo; escribe UNA
-    // vez y no interviene en decisiones de dinero). Best-effort detached:
-    // el redirect no espera por la bitácora.
-    void markPaymentOrderLinkOpened(order.id).catch(() => {})
     const target = buildPaymentOrderWaLink(order.amountMxn)
     if (!target) {
       return htmlResponse(
@@ -214,6 +243,22 @@ export async function GET(
         "El canal de pagos no está disponible en este momento. Inténtalo más tarde."
       )
     }
+
+    // Tarjeta de WhatsApp: los rastreadores de vista previa reciben la
+    // metadata de SPEILink (badge, importe y cómo pagar). No cuentan como
+    // "apertura" del link: el pagador de verdad sigue entrando por el 302.
+    if (isPreviewCrawler(request.headers.get("user-agent"))) {
+      return previewResponse({
+        amountMxn: order.amountMxn,
+        code: order.code,
+        waUrl: target,
+      })
+    }
+
+    // Primera apertura del link (trazabilidad del embudo; escribe UNA
+    // vez y no interviene en decisiones de dinero). Best-effort detached:
+    // el redirect no espera por la bitácora.
+    void markPaymentOrderLinkOpened(order.id).catch(() => {})
     return withNoCache(NextResponse.redirect(target, 302))
   }
 
