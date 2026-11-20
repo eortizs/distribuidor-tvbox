@@ -19,6 +19,7 @@ import { pool, type PoolClientLike } from "@/server/db"
 export type RealtimeKind =
   | "entity"
   | "mp_order"
+  | "payment_order"
   | "expenses"
   | "users"
   | "prefs"
@@ -89,6 +90,7 @@ function parsePayload(raw: string | undefined): RealtimeEvent | null {
     if (
       candidate.kind !== "entity" &&
       candidate.kind !== "mp_order" &&
+      candidate.kind !== "payment_order" &&
       candidate.kind !== "expenses" &&
       candidate.kind !== "users" &&
       candidate.kind !== "prefs" &&

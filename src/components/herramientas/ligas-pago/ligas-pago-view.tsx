@@ -124,6 +124,19 @@ export function LigasPagoView({
   const [approveTarget, setApproveTarget] = useState<PaymentOrderListItem | null>(null)
   const [creating, startCreating] = useTransition()
   const [linkOrderId, setLinkOrderId] = useState<string | null>(null)
+  /** Último snapshot del servidor adoptado por el listado (identidad). */
+  const [serverOrders, setServerOrders] = useState(initialOrders)
+
+  // El RSC re-renderiza la página en cualquier momento (el bus de tiempo
+  // real refresca la ruta en cada evento y las acciones revalidan): al
+  // llegar un snapshot nuevo del servidor, adoptarlo — `useState` solo fija
+  // el primer render y dejaría la lista congelada hasta un refresh manual.
+  // Ajuste DURANTE el render (patrón React "adjust state when a prop
+  // changes"), sin efectos.
+  if (serverOrders !== initialOrders) {
+    setServerOrders(initialOrders)
+    setOrders(initialOrders)
+  }
 
   const activeCount = useMemo(
     () =>
@@ -150,9 +163,43 @@ export function LigasPagoView({
         setFormError(result.error ?? "No se pudo crear la liga de pago.")
         return
       }
-      setCreated(result.order)
+      const created = result.order
+      setCreated(created)
       setAmount("")
       setNote("")
+      // Alta optimista: la fila aparece al instante, sin esperar el refresco
+      // del RSC (y sin importar si el usuario cierra el diálogo antes). El
+      // snapshot del servidor la reemplaza con los mismos datos al llegar.
+      setOrders((current) =>
+        current.some((item) => item.id === created.orderId)
+          ? current
+          : [
+              {
+                id: created.orderId,
+                code: created.code,
+                creatorUsername: null,
+                amountMxn: created.amountMxn,
+                note: created.note,
+                status: "pending",
+                bank: created.bank,
+                payerPhone: null,
+                linkOpenedAt: null,
+                payerBoundAt: null,
+                ticketFileId: null,
+                scanStatus: null,
+                scanResult: null,
+                resolvedAt: null,
+                rejectionReason: null,
+                createdAt: new Date().toISOString(),
+                mpPaymentId: null,
+                mpDepositAt: null,
+                verifyingSince: null,
+                depositChecks: 0,
+                depositEscalatedAt: null,
+              },
+              ...current,
+            ]
+      )
       router.refresh()
     })
   }

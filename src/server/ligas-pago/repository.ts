@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto"
 
 import { pool, type PoolClientLike } from "@/server/db"
+import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
 
 /*
@@ -156,6 +157,18 @@ function isoOrNull(value: unknown): string | null {
     : new Date(value as string).toISOString()
 }
 
+/**
+ * Señal de tiempo real (kind `payment_order`) tras cada mutación que cambia
+ * el listado del módulo: creación, escaneo del comprobante, contacto del
+ * pagador, verifying/paid/rejected/cancelled, sondeos y escalamiento. Llega
+ * a todas las sesiones (el alcance ya lo filtra cada refetch) y el provider
+ * refresca el RSC — /modulos/ligas-de-pago se actualiza sin recargar.
+ * Best-effort: jamás rompe la mutación que la origina.
+ */
+function notifyPaymentOrderChange(orderId: string): void {
+  publishRealtimeDetached({ kind: "payment_order", entityId: orderId })
+}
+
 function mapRow(row: Record<string, unknown>): PaymentOrder {
   return {
     id: String(row.id),
@@ -277,6 +290,7 @@ export async function createPaymentOrder(input: {
       if (!created) {
         throw new Error("La liga de pago no se pudo leer tras crearse.")
       }
+      notifyPaymentOrderChange(created.id)
       return created
     } catch (error) {
       lastError = error
@@ -444,7 +458,9 @@ export async function touchPaymentOrderPayer(
       RETURNING id`,
     [orderId, phone]
   )
-  return (result.rowCount ?? 0) > 0
+  const bound = (result.rowCount ?? 0) > 0
+  if (bound) notifyPaymentOrderChange(orderId)
+  return bound
 }
 
 /**
@@ -461,7 +477,9 @@ export async function markPaymentOrderLinkOpened(orderId: string): Promise<boole
       RETURNING id`,
     [orderId]
   )
-  return (result.rowCount ?? 0) > 0
+  const opened = (result.rowCount ?? 0) > 0
+  if (opened) notifyPaymentOrderChange(orderId)
+  return opened
 }
 
 export interface PaymentOrderScanRow {
@@ -500,7 +518,9 @@ export async function savePaymentOrderScan(input: {
       input.ticketSha256,
     ]
   )
-  return (result.rowCount ?? 0) > 0
+  const saved = (result.rowCount ?? 0) > 0
+  if (saved) notifyPaymentOrderChange(input.orderId)
+  return saved
 }
 
 /**
@@ -532,7 +552,9 @@ export async function resolvePaymentOrder(input: {
     ]
   )
   if ((result.rowCount ?? 0) === 0) return null
-  return getPaymentOrder(input.orderId)
+  const resolved = await getPaymentOrder(input.orderId)
+  if (resolved) notifyPaymentOrderChange(resolved.id)
+  return resolved
 }
 
 /**
@@ -651,7 +673,9 @@ export async function markPaymentOrderVerifying(orderId: string): Promise<Paymen
     [orderId]
   )
   if ((result.rowCount ?? 0) === 0) return null
-  return getPaymentOrder(orderId)
+  const verifying = await getPaymentOrder(orderId)
+  if (verifying) notifyPaymentOrderChange(verifying.id)
+  return verifying
 }
 
 /**
@@ -847,12 +871,13 @@ export async function savePaymentOrderDepositCheck(input: {
   checks: number
   nextCheckAt: Date
 }): Promise<void> {
-  await pool.query(
+  const result = await pool.query(
     `UPDATE payment_orders
         SET deposit_checks = $2, deposit_next_check_at = $3, updated_at = now()
       WHERE id = $1::uuid AND status = 'verifying'`,
     [input.orderId, input.checks, input.nextCheckAt]
   )
+  if ((result.rowCount ?? 0) > 0) notifyPaymentOrderChange(input.orderId)
 }
 
 /**
@@ -868,7 +893,9 @@ export async function markDepositEscalated(orderId: string): Promise<boolean> {
       RETURNING id`,
     [orderId]
   )
-  return (result.rowCount ?? 0) > 0
+  const escalated = (result.rowCount ?? 0) > 0
+  if (escalated) notifyPaymentOrderChange(orderId)
+  return escalated
 }
 
 /**
@@ -920,6 +947,7 @@ export async function confirmPaymentOrderDeposit(input: {
       return null
     }
     await tx.query("COMMIT")
+    notifyPaymentOrderChange(input.orderId)
     return getPaymentOrder(input.orderId)
   } catch (error) {
     await tx.query("ROLLBACK").catch(() => {})
