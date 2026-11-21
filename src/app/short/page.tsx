@@ -58,7 +58,14 @@ export const metadata: Metadata = {
  * servicio aún no abre al público. Al lanzar, restaurar los `<a href>` con
  * `${publicSiteUrl()}/register`, `${publicSiteUrl()}/login` y el enlace
  * `https://wa.me/<WHATSAPP_AGENT_NUMBER>` del footer.
+  */
+
+/*
+ * Enlace personal de Mercado Pago «Invita y Gana» del dueño. Los dos accesos
+ * que apuntan a él (bloque de beneficios y FAQ) se habilitan con esta URL;
+ * si se deja en null, se muestran deshabilitados como el resto de CTAs.
  */
+const MP_REFERRAL_URL: string | null = "https://mpago.li/2KDRFs9"
 
 const STEPS = [
   {
@@ -87,9 +94,10 @@ const TRUST_POINTS = [
     title: "Tu dinero, directo a tu cuenta",
     description: (
       <>
-        Conectas tu propia cuenta —como Mercado Pago— con un clic. <BrandInline />{" "}
-        solo lee la confirmación del depósito; el dinero nunca pasa por
-        intermediarios.
+        Conectas tu cuenta de Mercado Pago con un clic —la única cuenta digital
+        en México capaz de notificar y monitorear movimientos SPEI en tiempo real
+        y sin costo de consulta—. <BrandInline /> solo lee la confirmación del
+        depósito; tu dinero nunca pasa por intermediarios.
       </>
     ),
   },
@@ -113,6 +121,24 @@ const TRUST_POINTS = [
         cualquier banco en México vía SPEI.
       </>
     ),
+  },
+]
+
+const MP_BENEFITS = [
+  {
+    title: "Tus ventas generan ganancias diarias",
+    description:
+      "El dinero que recibes por tus ventas no se queda detenido; genera rendimientos todos los días de forma automática y siempre está disponible para que lo uses o lo transfieras cuando quieras.",
+  },
+  {
+    title: "Sin costos de apertura ni mensualidades",
+    description:
+      "Abres tu cuenta en 3 minutos desde tu celular, sin saldos mínimos ni anualidades.",
+  },
+  {
+    title: "Control total de tu dinero",
+    description:
+      "Recibe pagos desde cualquier banco de México vía SPEI y administra tus ingresos desde una sola app.",
   },
 ]
 
@@ -143,10 +169,20 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
     question: "¿Qué necesito para empezar?",
     answer: (
       <>
-        Solo tu cuenta de Mercado Pago (persona física o empresa) y
-        registrarte en <BrandInline />.
+        Solo registrarte gratis en <BrandInline /> y conectar tu cuenta de
+        Mercado Pago (persona física o empresa). Si todavía no tienes una,{" "}
+        <ReferralInlineText>
+          puedes abrirla gratis en 3 minutos desde este enlace
+        </ReferralInlineText>{" "}
+        y empezar a recibir rendimientos diarios por el dinero de tus ventas.
       </>
     ),
+  },
+  {
+    id: "porque-mercado-pago",
+    question: "¿Por qué necesito usar una cuenta de Mercado Pago para recibir los pagos?",
+    answer:
+      "Porque actualmente es la única plataforma financiera en México que permite conectar y validar transferencias SPEI entrantes en tiempo real y sin costo por consulta. Otros bancos tradicionales cobran altas comisiones por acceso a sus sistemas de monitoreo, lo que nos obligaría a cobrarte por cada venta. Gracias a esto, tus clientes pueden pagarte desde cualquier banco (BBVA, Banorte, Nu, etc.) y tú recibes la confirmación al instante sin pagar comisiones.",
   },
   {
     id: "modelo-negocio",
@@ -215,6 +251,54 @@ function GradientCta() {
       Crear mi cuenta gratis
       <ArrowRightIcon className="size-4" aria-hidden="true" />
     </button>
+  )
+}
+
+/**
+ * Acceso al enlace de referido de Mercado Pago. Con URL es un enlace real; sin
+ * ella, un botón deshabilitado con el mismo aspecto que el resto de CTAs.
+ */
+function MercadoPagoReferralCta() {
+  const className =
+    "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#003366] to-[#1872cc] text-base font-semibold text-white shadow-lg shadow-[#003366]/25 focus-visible:outline-none"
+  return MP_REFERRAL_URL ? (
+    <a
+      href={MP_REFERRAL_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+    >
+      Abre tu cuenta gratis de Mercado Pago
+      <ArrowRightIcon className="size-4" aria-hidden="true" />
+    </a>
+  ) : (
+    <button
+      type="button"
+      disabled
+      className={cn(className, "cursor-not-allowed opacity-60")}
+    >
+      Abre tu cuenta gratis de Mercado Pago
+      <ArrowRightIcon className="size-4" aria-hidden="true" />
+    </button>
+  )
+}
+
+/** El acceso al enlace de referido dentro de la respuesta del FAQ. */
+function ReferralInlineText({ children }: { children: ReactNode }) {
+  const className = "font-semibold text-[#1872cc] underline underline-offset-2"
+  return MP_REFERRAL_URL ? (
+    <a
+      href={MP_REFERRAL_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+    >
+      {children}
+    </a>
+  ) : (
+    <span className={cn(className, "cursor-not-allowed opacity-70")}>
+      {children}
+    </span>
   )
 }
 
@@ -490,6 +574,45 @@ export default function ShortLandingPage() {
                 </div>
               ))}
             </div>
+          </section>
+
+          {/* Puente: el dinero ya cae en Mercado Pago; aquí ves qué ganas al
+              tenerlo ahí. Va justo antes del FAQ, sin CTA de alta general. */}
+          <section className="flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-[#ecfdf5] p-5 shadow-sm">
+            <h2 className="text-lg font-extrabold leading-snug tracking-tight text-balance text-[#003366]">
+              ¿Aún no tienes cuenta de Mercado Pago? Abrirla tiene grandes
+              ventajas para tu negocio
+            </h2>
+            <p className="text-sm leading-relaxed text-slate-600">
+              Para que <BrandInline /> valide tus ventas al instante con 0% de
+              comisión, solo necesitas conectar una cuenta gratuita de Mercado
+              Pago. Además de ahorrarte las comisiones de las terminales
+              tradicionales, tu negocio obtiene beneficios financieros
+              inmediatos:
+            </p>
+            <ul className="flex flex-col gap-3">
+              {MP_BENEFITS.map((benefit) => (
+                <li key={benefit.title} className="flex items-start gap-2.5">
+                  <span
+                    aria-hidden="true"
+                    className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[#d1fae5] text-[#065f46]"
+                  >
+                    <CheckIcon className="size-3.5" />
+                  </span>
+                  <p className="text-sm leading-relaxed text-slate-600">
+                    <strong className="font-semibold text-[#0f172a]">
+                      {benefit.title}:
+                    </strong>{" "}
+                    {benefit.description}
+                  </p>
+                </li>
+              ))}
+            </ul>
+            <MercadoPagoReferralCta />
+            <p className="text-center text-xs leading-relaxed text-slate-500">
+              Al registrarte desde este enlace, activas tu cuenta lista para
+              conectarse con <BrandInline />.
+            </p>
           </section>
 
           <section className="flex flex-col gap-3">
