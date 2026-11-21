@@ -2,37 +2,37 @@ import type { Metadata } from "next"
 import Link from "next/link"
 import type { ReactNode } from "react"
 import {
-  ArrowRightIcon,
+  ArrowLeftRightIcon,
+  CalculatorIcon,
   CheckIcon,
-  ChevronDownIcon,
-  LockIcon,
-  ShieldCheckIcon,
-  WalletIcon,
+  CircleCheckIcon,
   LandmarkIcon,
+  LockIcon,
+  MessageCircleIcon,
+  MessageSquareHeartIcon,
+  QrCodeIcon,
+  ShieldCheckIcon,
+  TrendingUpIcon,
+  WalletIcon,
 } from "lucide-react"
 
 import { cn } from "cn"
 
+import { BrandInline, Wordmark } from "@/components/short/brand"
+import { FloatingCommissionBadge } from "@/components/short/FloatingCommissionBadge"
+import { FaqAccordion, type FaqAccordionItem } from "@/components/short/faq-accordion"
+import {
+  FooterSupportButton,
+  NavbarLoginButton,
+  PrimarySignupCta,
+} from "@/components/short/landing-cta"
+import { SavingsCalculator } from "@/components/short/savings-calculator"
+import { WhatsAppPhoneDemo } from "@/components/short/whatsapp-phone-demo"
 import { shortLinkBaseUrl } from "@/server/site-url"
-
-/*
- * Landing pública del dominio corto (spei.link/): el proxy reescribe la raíz
- * del dominio corto aquí (sin gate de sesión). Página estática de marketing —
- * sin acceso a datos ni APIs de request — que Next prerenderiza en el build.
- * Diseño visual orientado a ventas por especificación directa del dueño
- * (assets/landing_page.md): paleta azul marino #003366 + azul de marca
- * #1872cc, tarjetas blancas sobre fondo #F8FAFC y demostración de chat —
- * deliberadamente FUERA del sistema de componentes del panel.
- *
- * Responsive: el layout móvil (max-w-[480px], una columna) queda intacto y se
- * enriquece en `lg` con un contenedor ancho, hero a dos columnas y cuadrículas
- * de tres columnas en pasos / casos de uso / seguridad / beneficios MP. El
- * orden del DOM no cambia entre móvil y escritorio.
- */
 
 const TITLE = "SPEILink — Links de pago por WhatsApp con 0% de comisión"
 const DESCRIPTION =
-  "Crea links de pago para WhatsApp y recibe el 100% de tu dinero directo en tu cuenta. Cada pago se valida con su código de concepto."
+  "Crea links de pago para WhatsApp y recibe el 100% de tu dinero directo en tu cuenta. Cada pago se valida con su concepto de pago y depósito bancario."
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -58,40 +58,58 @@ export const metadata: Metadata = {
   },
 }
 
-/*
- * Registro, inicio de sesión y soporte por WhatsApp deshabilitados: el
- * servicio aún no abre al público. Al lanzar, restaurar los `<a href>` con
- * `${publicSiteUrl()}/register`, `${publicSiteUrl()}/login` y el enlace
- * `https://wa.me/<WHATSAPP_AGENT_NUMBER>` del footer.
- */
-
-/*
- * Enlace personal de Mercado Pago «Invita y Gana» del dueño. Vive ÚNICAMENTE
- * como texto discreto en la FAQ (fuera del embudo de registro): la landing
- * tiene un solo objetivo — «Crear mi cuenta gratis» en SPEILink — y sacar al
- * visitante hacia Mercado Pago antes de capturarlo rompería el embudo.
- * Con null, el texto de la FAQ se muestra deshabilitado.
- */
 const MP_REFERRAL_URL: string | null = "https://mpago.li/2KDRFs9"
+
+const COMPATIBLE_BANKS = ["BBVA", "Banorte", "Santander", "Nu", "Citibanamex"] as const
 
 const STEPS = [
   {
-    step: "1",
+    step: "01",
+    icon: QrCodeIcon,
     title: "Crea tu link",
     description:
-      "Escribe el monto y genera tu link o QR desde la app; compártelo por WhatsApp o muéstralo en tu mostrador.",
+      "Escribe el monto y el concepto de pago, genera tu link o QR desde la app y compártelo por WhatsApp o muéstralo en tu mostrador.",
   },
   {
-    step: "2",
+    step: "02",
+    icon: ArrowLeftRightIcon,
     title: "Tu cliente transfiere",
     description:
-      "El cliente paga por SPEI directo a tu cuenta bancaria desde cualquier banco, sin descargar apps.",
+      "El cliente paga por SPEI directo a tu cuenta desde cualquier banco en México, sin descargar apps.",
   },
   {
-    step: "3",
+    step: "03",
+    icon: CircleCheckIcon,
     title: <><BrandInline /> valida todo</>,
     description:
-      "El cliente envía su comprobante por el chat y el sistema valida el código de concepto y el depósito real en tu cuenta.",
+      "El cliente envía su comprobante por el chat y el sistema valida el concepto de pago y el depósito real en tu cuenta.",
+  },
+]
+
+const CAROUSEL_SLIDES = [
+  {
+    src: "/carrusel/abarrotes.webp",
+    alt: "Cajera cobrando en una tienda de abarrotes con un cartel que dice «Se aceptan transferencias con WhatsApp, usamos SPEILink»",
+    badge: "Abarrotes y tienditas",
+    title: "Cobra directo en tu mostrador",
+    benefit:
+      "Tus clientes transfieren desde su celular y el pago se confirma al instante, sin terminal ni comisiones.",
+  },
+  {
+    src: "/carrusel/taller.webp",
+    alt: "Mecánico sonriente mostrando en su celular un link de pago SPEILink con código QR por $2,300.00 MXN dentro de su taller",
+    badge: "Talleres y servicios",
+    title: "Link con QR listo para compartir",
+    benefit:
+      "Envía el cobro por WhatsApp o muestra el QR al entregar el trabajo y recibe el 100% en tu cuenta.",
+  },
+  {
+    src: "/carrusel/artesanias.webp",
+    alt: "Artesana sonriente en su tienda de artesanías mexicanas con un cartel que dice «Se aceptan transferencias con WhatsApp»",
+    badge: "Artesanías y más",
+    title: "Acepta transferencias sin comisión",
+    benefit:
+      "Vende en ferias, locales o por mensaje conservando íntegro el margen de cada pieza.",
   },
 ]
 
@@ -101,33 +119,44 @@ const TRUST_POINTS = [
     title: "Tu dinero, directo a tu cuenta",
     description: (
       <>
-        Conectas tu cuenta de Mercado Pago con un clic —la única cuenta digital
-        en México capaz de notificar y monitorear movimientos SPEI en tiempo real
-        y sin costo de consulta—. <BrandInline /> solo lee la confirmación del
-        depósito; tu dinero nunca pasa por intermediarios.
+        Conectas tu cuenta de Mercado Pago con un clic —la única cuenta digital en
+        México capaz de notificar y monitorear movimientos SPEI en tiempo real y sin
+        costo de consulta—. <BrandInline /> solo lee la confirmación del depósito; tu
+        dinero nunca pasa por intermediarios.
       </>
     ),
+    showBanks: false,
   },
   {
     icon: ShieldCheckIcon,
-    title: "Validación real del saldo",
+    title: "Validación real del saldo y concepto",
     description: (
       <>
-        Una venta solo se confirma cuando el pago lleva el código de concepto
-        y el depósito está realmente en tu cuenta. Si el dinero no cayó, no
-        se confirma.
+        Una venta solo se confirma cuando el pago incluye el concepto de pago y el
+        depósito está realmente en tu cuenta. Si el dinero no cayó, no se confirma.
       </>
     ),
+    showBanks: false,
   },
   {
     icon: WalletIcon,
     title: "Compatible con toda la banca mexicana",
+    description:
+      "Tus clientes pagan desde BBVA, Banorte, Santander, Nu, Citibanamex o cualquier banco en México vía SPEI.",
+    showBanks: true,
+  },
+  {
+    icon: MessageSquareHeartIcon,
+    title: "Convierte cada cobro en un cliente frecuente",
     description: (
       <>
-        Tus clientes pagan desde BBVA, Banorte, Santander, Nu, Citibanamex o
-        cualquier banco en México vía SPEI.
+        A diferencia del efectivo o las terminales tradicionales —donde el cliente
+        paga y se va sin dejar rastro—, con <BrandInline /> es tu cliente quien
+        inicia el chat por WhatsApp. Obtienes su contacto real de forma natural y
+        consensuada para enviarle su recibo, dar seguimiento o invitarlo a volver.
       </>
     ),
+    showBanks: false,
   },
 ]
 
@@ -149,35 +178,14 @@ const MP_BENEFITS = [
   },
 ]
 
-const CAROUSEL_SLIDES = [
-  {
-    src: "/carrusel/abarrotes.webp",
-    alt: "Cajera cobrando en una tienda de abarrotes con un cartel que dice «Se aceptan transferencias con WhatsApp, usamos SPEILink»",
-    title: "Abarrotes y tienditas",
-    benefit: "Cobra directo en tu mostrador",
-  },
-  {
-    src: "/carrusel/taller.webp",
-    alt: "Mecánico sonriente mostrando en su celular un link de pago SPEILink con código QR por $2,300.00 MXN dentro de su taller",
-    title: "Talleres y servicios",
-    benefit: "Link con QR listo para compartir",
-  },
-  {
-    src: "/carrusel/artesanias.webp",
-    alt: "Artesana sonriente en su tienda de artesanías mexicanas con un cartel que dice «Se aceptan transferencias con WhatsApp»",
-    title: "Artesanías y más",
-    benefit: "Acepta transferencias sin comisión",
-  },
-]
-
-const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
+const FAQ_ITEMS: FaqAccordionItem[] = [
   {
     id: "que-necesito",
     question: "¿Qué necesito para empezar?",
     answer: (
       <>
-        Solo registrarte gratis en <BrandInline /> y conectar tu cuenta de
-        Mercado Pago (persona física o empresa). Si todavía no tienes una,{" "}
+        Solo registrarte gratis en <BrandInline /> y conectar tu cuenta de Mercado
+        Pago (persona física o empresa). Si todavía no tienes una,{" "}
         <ReferralInlineText>
           puedes abrirla gratis en 3 minutos desde este enlace
         </ReferralInlineText>{" "}
@@ -187,7 +195,8 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
   },
   {
     id: "porque-mercado-pago",
-    question: "¿Por qué necesito usar una cuenta de Mercado Pago para recibir los pagos?",
+    question:
+      "¿Por qué necesito usar una cuenta de Mercado Pago para recibir los pagos?",
     answer:
       "Porque actualmente es la única plataforma financiera en México que permite conectar y validar transferencias SPEI entrantes en tiempo real y sin costo por consulta. Otros bancos tradicionales cobran altas comisiones por acceso a sus sistemas de monitoreo, lo que nos obligaría a cobrarte por cada venta. Gracias a esto, tus clientes pueden pagarte desde cualquier banco (BBVA, Banorte, Nu, etc.) y tú recibes la confirmación al instante sin pagar comisiones.",
   },
@@ -198,12 +207,6 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
       "Ofrecemos un plan gratuito para empezar y planes mensuales fijos para negocios con alto volumen.",
   },
   {
-    id: "sin-concepto",
-    question: "¿Qué pasa si mi cliente olvida poner el concepto de pago?",
-    answer:
-      "El pago no se puede identificar solo y queda pendiente de revisión. Por eso el chat siempre recuerda escribir el concepto de pago: con él, la confirmación es automática.",
-  },
-  {
     id: "mercado-pago-cliente",
     question: "¿Mis clientes necesitan tener Mercado Pago?",
     answer:
@@ -211,59 +214,9 @@ const FAQ_ITEMS: { id: string; question: ReactNode; answer: ReactNode }[] = [
   },
 ]
 
-/**
- * Marca verbal: «SPEIL» en bold e «ink» en light, de la sans del panel
- * (`font-sans` → Geist de Google Fonts, cargada por el root layout con
- * `next/font/google` y ya heredada por la landing). Sin espacio: la marca es
- * una sola palabra. El `ink` lleva margen negativo porque al cambiar de peso
- * en la junta (la «L» en bold y la «i» en light) las bearings de cada glifo
- * dejan un hueco que se lee como un espacio — sin este ajuste la marca
- * aparece como «SPEIL ink». El envoltorio `<span>` agrupa ambas piezas en
- * UN solo ítem: los padres flex con `gap-*` (micro-texto del hero, pregunta
- * FAQ) separarían «SPEIL» e «ink» con el gap del contenedor.
- */
-function BrandInline() {
-  return (
-    <span>
-      <span className="font-bold">SPEIL</span>
-      <span className="-ml-[0.13em] font-light">ink</span>
-    </span>
-  )
-}
-
-function Wordmark({ className }: { className?: string }) {
-  return (
-    <span className={cn("font-sans tracking-tight", className)}>
-      <BrandInline />
-    </span>
-  )
-}
-
-function SectionTitle({ children }: { children: string }) {
-  return (
-    <h2 className="text-center text-xl font-extrabold tracking-tight text-[#003366] lg:text-2xl">
-      {children}
-    </h2>
-  )
-}
-
-/** Botón CTA ancho con degradado azul marino → azul de marca (48 px). */
-function GradientCta() {
-  return (
-    <button
-      type="button"
-      disabled
-      className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#003366] to-[#1872cc] text-base font-semibold text-white opacity-60 shadow-lg shadow-[#003366]/25 focus-visible:outline-none lg:w-auto lg:min-w-[240px]"
-    >
-      Crear mi cuenta gratis
-      <ArrowRightIcon className="size-4" aria-hidden="true" />
-    </button>
-  )
-}
-
-/** El acceso al enlace de referido dentro de la respuesta del FAQ. */
 function ReferralInlineText({ children }: { children: ReactNode }) {
-  const className = "font-semibold text-[#1872cc] underline underline-offset-2"
+  const className =
+    "font-semibold text-[#059669] underline underline-offset-3 hover:text-[#047857]"
   return MP_REFERRAL_URL ? (
     <a
       href={MP_REFERRAL_URL}
@@ -274,58 +227,18 @@ function ReferralInlineText({ children }: { children: ReactNode }) {
       {children}
     </a>
   ) : (
-    <span className={cn(className, "cursor-not-allowed opacity-70")}>
-      {children}
-    </span>
-  )
-}
-
-/** Burbuja del chat: lado, tono y cola según remitente. */
-function ChatBubble({
-  side,
-  variant = "client",
-  time,
-  children,
-}: {
-  side: "left" | "right"
-  variant?: "client" | "assistant" | "verified"
-  time: string
-  children: ReactNode
-}) {
-  return (
-    <div
-      className={cn(
-        "flex w-full",
-        side === "right" ? "justify-end" : "justify-start"
-      )}
-    >
-      <div
-        className={cn(
-          "max-w-[85%] rounded-2xl px-3 py-2 text-sm leading-relaxed text-[#111b21] shadow-sm",
-          side === "right" ? "rounded-br-md" : "rounded-bl-md",
-          variant === "client" && "bg-[#dcf8c6]",
-          variant === "assistant" && "bg-white",
-          variant === "verified" &&
-            "border border-emerald-500 bg-white"
-        )}
-      >
-        {children}
-        <span className="mt-0.5 block text-right text-[10px] leading-none text-black/45">
-          {time} ✓✓
-        </span>
-      </div>
-    </div>
+    <span className={cn(className, "cursor-not-allowed opacity-70")}>{children}</span>
   )
 }
 
 export default function ShortLandingPage() {
   return (
-    <div className="min-h-svh bg-[#f8fafc] font-sans text-[#0f172a]">
-      <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex h-16 w-full max-w-[480px] items-center justify-between px-4 lg:max-w-6xl lg:px-8">
+    <div className="min-h-svh bg-white text-[#0F172A]">
+      <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/85 backdrop-blur-md">
+        <div className="mx-auto flex h-16 w-full max-w-6xl items-center justify-between gap-2 px-4 sm:px-6 lg:px-8">
           <Link
             href="/"
-            className="flex items-center gap-2"
+            className="flex min-h-11 shrink-0 items-center gap-2 rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669]"
             aria-label="SPEILink, inicio"
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -333,317 +246,359 @@ export default function ShortLandingPage() {
               src="/spei-link-logo.svg"
               alt=""
               aria-hidden="true"
-              className="h-8 w-auto lg:h-9"
+              className="h-7 w-auto sm:h-8"
             />
-            <Wordmark className="text-base lg:text-lg" />
+            <Wordmark className="text-base text-[#0F172A] sm:text-lg" />
           </Link>
-          <button
-            type="button"
-            disabled
-            className="inline-flex h-9 cursor-not-allowed items-center rounded-lg border border-[#003366] px-4 text-sm font-semibold text-[#003366] opacity-60 focus-visible:outline-none lg:h-10 lg:px-5"
-          >
-            Iniciar sesión
-          </button>
+          <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+            <NavbarLoginButton />
+            <PrimarySignupCta variant="navbar" />
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[480px] px-4 lg:max-w-6xl lg:px-8">
-        <div className="flex flex-col gap-10 py-8 lg:gap-16 lg:py-12">
-          {/* Hero + fórmula: en escritorio comparten renglón (texto a la
-              izquierda, ecuación del producto a la derecha). En móvil se
-              apilan en este mismo orden. */}
-          <div className="flex flex-col gap-10 lg:grid lg:grid-cols-2 lg:items-center lg:gap-12">
-            {/* Hero: primera pantalla completa sin scroll en un celular. */}
-            <section className="flex flex-col items-center gap-4 pt-4 text-center lg:items-start lg:pt-0 lg:text-left">
-              <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-[#d1fae5] px-3 text-xs font-semibold text-[#065f46]">
-                <CheckIcon className="size-3.5" aria-hidden="true" />
-                0% de comisión al cobrar con WhatsApp
+      <main className="overflow-x-clip">
+        <section className="relative bg-white py-10 sm:py-14 lg:py-20">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute inset-x-0 top-0 h-[420px] bg-[radial-gradient(ellipse_at_top,_rgba(5,150,105,0.08),_transparent_65%)]"
+          />
+          <div className="relative mx-auto grid w-full max-w-6xl grid-cols-1 items-center gap-10 px-4 sm:px-6 lg:grid-cols-12 lg:gap-12 lg:px-8">
+            <div className="flex flex-col items-center text-center lg:col-span-7 lg:items-start lg:text-left">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3.5 py-1.5 text-xs font-semibold text-[#065F46] sm:text-sm">
+                <CheckIcon className="size-4 text-[#059669]" aria-hidden="true" />
+                0% de comisión al cobrar por WhatsApp
               </span>
-              <h1 className="text-3xl leading-tight font-extrabold tracking-tight text-balance text-[#003366] lg:text-5xl">
-                Empieza a cobrar hoy y quédate con el 100% de tus ventas.
+              <h1 className="mt-5 text-3xl leading-[1.1] font-extrabold tracking-[-0.02em] text-balance text-[#0F172A] sm:text-4xl lg:text-5xl">
+                Empieza a cobrar hoy y quédate con el{" "}
+                <span className="text-[#059669] tabular-nums">100%</span> de tus ventas.
               </h1>
-              <p className="text-pretty text-base text-slate-600 lg:text-lg">
+              <p className="mt-4 max-w-xl text-base leading-relaxed text-pretty text-slate-600 sm:text-lg">
                 Links de pago por WhatsApp con depósito directo a tu cuenta. Sin
                 intermediarios y con verificación bancaria automática.
               </p>
-              <GradientCta />
-              <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs text-slate-500 lg:justify-start">
-                <LockIcon className="size-3.5" aria-hidden="true" />
-                Sin intermediarios
-                <span
-                  aria-hidden="true"
-                  className="size-1 shrink-0 rounded-full bg-slate-400"
-                />
-                <BrandInline /> nunca retiene tu dinero
-              </p>
-            </section>
-
-            {/* Fórmula visual: la ecuación del producto en una tarjeta. */}
-            <section aria-label="Cómo funciona el cobro" className="lg:w-full">
-              <div className="flex flex-col items-center gap-4 rounded-2xl border border-[#1872cc]/30 bg-white p-6 text-center shadow-sm lg:p-8">
-                <div className="flex items-center gap-3" aria-hidden="true">
-                  <span className="rounded-xl bg-[#e8f1fb] px-4 py-2 text-lg font-extrabold text-[#003366] lg:px-6 lg:py-3 lg:text-xl">
-                    CLABE
-                  </span>
-                  <span className="text-2xl font-extrabold text-[#1872cc]">
-                    +
-                  </span>
-                  <span className="rounded-xl bg-[#e8f1fb] px-4 py-2 text-lg font-extrabold text-[#003366] lg:px-6 lg:py-3 lg:text-xl">
-                    WhatsApp
-                  </span>
-                </div>
-                <p className="text-sm leading-relaxed text-slate-600 lg:text-base">
-                  <strong className="font-semibold text-[#003366]">
-                    CLABE + WhatsApp:
-                  </strong>{" "}
-                  recibe transferencias SPEI verificadas al instante y quédate
-                  con el 100% de tus ventas.
+              <div className="mt-7 w-full sm:w-auto">
+                <PrimarySignupCta variant="hero" />
+              </div>
+              <div className="mt-3.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs font-medium text-slate-500 lg:justify-start">
+                <span>Gratis</span>
+                <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
+                <span>Sin tarjetas</span>
+                <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
+                <span>Actívalo en 3 minutos</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs text-slate-500 lg:justify-start">
+                <LockIcon className="size-3.5 text-[#059669]" aria-hidden="true" />
+                <span>Sin intermediarios</span>
+                <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
+                <span>
+                  <BrandInline /> nunca retiene tu dinero
+                </span>
+              </div>
+              <div className="mt-6 w-full border-t border-slate-200/80 pt-5">
+                <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                  Tus clientes pagan vía SPEI desde cualquier banco
                 </p>
-              </div>
-            </section>
-          </div>
-
-          {/* Demostración: la experiencia real del comprador, burbuja a burbuja. */}
-          <section
-            aria-label="Ejemplo de una venta por WhatsApp"
-            className="lg:mx-auto lg:w-full lg:max-w-2xl"
-          >
-            <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
-              <div className="flex items-center gap-3 bg-[#003366] px-4 py-3 text-white">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src="/spei-link-logo.svg"
-                  alt=""
-                  aria-hidden="true"
-                  className="h-9 w-9 rounded-full bg-white p-1"
-                />
-                <div className="flex min-w-0 flex-col">
-                  <span className="text-sm font-semibold">
-                    <BrandInline /> Asistente
-                  </span>
-                  <span className="text-xs text-white/70">
-                    Validación en tiempo real
+                <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2 lg:justify-start">
+                  {COMPATIBLE_BANKS.map((bank) => (
+                    <span
+                      key={bank}
+                      className="rounded-lg border border-slate-200 bg-[#F8FAFC] px-3 py-1 text-xs font-semibold text-[#1E293B]"
+                    >
+                      {bank}
+                    </span>
+                  ))}
+                  <span className="rounded-lg border border-slate-200 bg-[#F8FAFC] px-3 py-1 text-xs font-semibold text-[#1E293B]">
+                    y más bancos
                   </span>
                 </div>
-              </div>
-              <div className="flex flex-col gap-2 bg-[#e5ddd5] p-3 lg:p-5">
-                <ChatBubble side="right" time="10:30">
-                  Solicito un link de pago por{" "}
-                  <span className="font-semibold tabular-nums">$500.00 MXN</span>
-                </ChatBubble>
-                <ChatBubble side="left" variant="assistant" time="10:30">
-                  <p className="mb-1.5">Transfiere{" "}
-                    <span className="font-semibold tabular-nums">$500.00 MXN</span>{" "}
-                    directo a:
-                  </p>
-                  <p className="mb-1 flex items-center gap-1.5">
-                    CLABE:
-                    <span className="rounded border border-dashed border-[#1872cc] bg-[#f0f7ff] px-1.5 font-mono text-xs font-semibold text-[#003366]">
-                      646180…
-                    </span>
-                  </p>
-                  <p className="flex items-center gap-1.5">
-                    Concepto:
-                    <span className="rounded border border-dashed border-[#1872cc] bg-[#f0f7ff] px-1.5 font-mono text-xs font-semibold text-[#003366]">
-                      XQK9
-                    </span>
-                  </p>
-                </ChatBubble>
-                <ChatBubble side="right" time="10:34">
-                  Listo, ya hice la transferencia
-                </ChatBubble>
-                <ChatBubble side="left" variant="assistant" time="10:34">
-                  Envíame la foto del comprobante de tu transferencia para
-                  confirmar el pago.
-                </ChatBubble>
-                <ChatBubble side="right" time="10:35">
-                  Va, ya la envié 📎
-                </ChatBubble>
-                <ChatBubble side="left" variant="verified" time="10:36">
-                  ✅{" "}
-                  <span className="font-semibold">
-                    ¡Pago verificado en cuenta!
-                  </span>{" "}
-                  Depósito de{" "}
-                  <span className="font-semibold tabular-nums">$500.00 MXN</span>{" "}
-                  confirmado con folio{" "}
-                  <span className="font-mono font-semibold">XQK9</span>.
-                </ChatBubble>
               </div>
             </div>
-          </section>
 
-          <section className="flex flex-col gap-4">
-            <SectionTitle>Cobra en 3 pasos simples</SectionTitle>
-            <div className="flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:gap-5">
+            <div className="lg:col-span-5">
+              <WhatsAppPhoneDemo />
+            </div>
+          </div>
+        </section>
+
+        <section className="border-y border-slate-200/80 bg-[#F8FAFC] py-8 sm:py-10">
+          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col items-center gap-4 rounded-2xl border border-slate-200 bg-white px-6 py-6 text-center shadow-sm sm:flex-row sm:justify-between sm:px-8 sm:text-left">
+              <div className="flex shrink-0 items-center gap-2.5" aria-hidden="true">
+                <span className="rounded-xl border border-slate-200 bg-[#F8FAFC] px-4 py-2 text-base font-extrabold tracking-tight text-[#0F172A] sm:text-lg">
+                  CLABE
+                </span>
+                <span className="text-xl font-extrabold text-[#059669]">+</span>
+                <span className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-base font-extrabold tracking-tight text-[#065F46] sm:text-lg">
+                  <MessageCircleIcon className="size-4 text-[#059669]" />
+                  WhatsApp
+                </span>
+              </div>
+              <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
+                <strong className="font-semibold text-[#0F172A]">CLABE + WhatsApp:</strong>{" "}
+                recibe transferencias SPEI verificadas al instante y quédate con el{" "}
+                <span className="font-semibold text-[#059669] tabular-nums">100%</span>{" "}
+                de tus ventas.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="bg-white py-14 sm:py-20">
+          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8">
+            <div className="mb-8 flex flex-col items-center gap-2.5 text-center">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-[#065F46]">
+                <CalculatorIcon className="size-3.5 text-[#059669]" aria-hidden="true" />
+                Calculadora de ahorro
+              </span>
+              <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-balance text-[#0F172A] sm:text-3xl">
+                Mira cuánto dejas de regalar en comisiones
+              </h2>
+              <p className="max-w-xl text-sm text-slate-600 sm:text-base">
+                Compara el 4% promedio de las terminales tradicionales contra el 0% de
+                comisión con <BrandInline />.
+              </p>
+            </div>
+            <SavingsCalculator />
+          </div>
+        </section>
+
+        <section className="border-y border-slate-200/80 bg-[#F8FAFC] py-14 sm:py-20">
+          <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+            <div className="mb-10 flex flex-col items-center gap-2 text-center">
+              <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-[#0F172A] sm:text-3xl">
+                Cobra en 3 pasos simples
+              </h2>
+              <p className="max-w-xl text-sm text-slate-600 sm:text-base">
+                Sin hardware, sin apps para tus clientes y con confirmación automática.
+              </p>
+            </div>
+            <div className="relative grid grid-cols-1 gap-5 lg:grid-cols-3 lg:gap-6">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none hidden lg:block absolute top-11 left-[16.67%] right-[16.67%] border-t-2 border-dashed border-emerald-200"
+              />
               {STEPS.map((step) => (
                 <div
                   key={step.step}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm lg:p-6"
+                  className="relative z-10 flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-[transform,box-shadow,border-color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1 hover:border-slate-300 hover:shadow-md motion-reduce:transition-none motion-reduce:hover:translate-y-0"
                 >
-                  <span
-                    aria-hidden="true"
-                    className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-[#e8f1fb] text-lg font-extrabold text-[#003366]"
-                  >
-                    {step.step}
-                  </span>
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <p className="font-semibold text-[#0f172a]">
+                  <div className="flex items-center justify-between">
+                    <span className="inline-flex h-10 min-w-10 items-center justify-center rounded-xl bg-emerald-50 px-3 text-sm font-extrabold text-[#059669] tabular-nums">
+                      {step.step}
+                    </span>
+                    <span
+                      aria-hidden="true"
+                      className="flex size-10 items-center justify-center rounded-xl border border-slate-200 bg-[#F8FAFC] text-[#1E293B]"
+                    >
+                      <step.icon className="size-5" />
+                    </span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <h3 className="text-lg font-bold tracking-[-0.01em] text-[#0F172A]">
                       {step.title}
-                    </p>
-                    <p className="text-sm text-slate-600">
+                    </h3>
+                    <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
                       {step.description}
                     </p>
                   </div>
                 </div>
               ))}
             </div>
-          </section>
+          </div>
+        </section>
 
-          {/* Carrusel: en móvil es deslizable con snap (1 tarjeta + borde de la
-              siguiente); en escritorio se despliega como cuadrícula de 3. */}
-          <section className="flex flex-col gap-4">
-            <SectionTitle>Pensado para negocios como el tuyo</SectionTitle>
+        <section className="bg-white py-14 sm:py-20">
+          <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+            <div className="mb-8 flex flex-col items-center gap-2 text-center">
+              <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-[#0F172A] sm:text-3xl">
+                Pensado para negocios como el tuyo
+              </h2>
+              <p className="max-w-xl text-sm text-slate-600 sm:text-base">
+                Negocios en todo México que ya cobran transferencias sin perder margen.
+              </p>
+            </div>
             <div
               tabIndex={0}
               aria-label="Fotos de negocios que cobran con SPEILink"
-              className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 focus-visible:outline-2 focus-visible:outline-[#1872cc] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:mx-0 lg:grid lg:grid-cols-3 lg:gap-5 lg:overflow-visible lg:px-0"
+              className="-mx-4 flex snap-x snap-mandatory gap-4 overflow-x-auto px-4 pb-2 no-scrollbar focus-visible:outline-2 focus-visible:outline-[#059669] lg:mx-0 lg:grid lg:grid-cols-3 lg:gap-6 lg:overflow-visible lg:px-0 lg:pb-0"
             >
               {CAROUSEL_SLIDES.map((slide) => (
                 <figure
                   key={slide.src}
-                  className="w-[82%] shrink-0 snap-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:w-auto"
+                  className="w-[82%] shrink-0 snap-center overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-[transform,box-shadow,border-color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1 hover:border-slate-300 hover:shadow-md motion-reduce:transition-none motion-reduce:hover:translate-y-0 lg:w-auto"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={slide.src}
-                    alt={slide.alt}
-                    width={600}
-                    height={600}
-                    loading="lazy"
-                    decoding="async"
-                    className="aspect-square w-full object-cover"
-                  />
-                  <figcaption className="border-t border-slate-100 px-3 py-2.5">
-                    <p className="text-sm font-semibold text-[#0f172a]">
-                      {slide.title}
-                    </p>
-                    <p className="text-sm text-slate-600">{slide.benefit}</p>
+                  <div className="relative aspect-square w-full overflow-hidden bg-slate-100">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={slide.src}
+                      alt={slide.alt}
+                      width={600}
+                      height={600}
+                      loading="lazy"
+                      decoding="async"
+                      className="h-full w-full object-cover"
+                    />
+                    <span className="absolute top-3 left-3 inline-flex items-center rounded-full border border-slate-200/80 bg-white/95 px-3 py-1 text-xs font-semibold text-[#0F172A] shadow-sm backdrop-blur-sm">
+                      {slide.badge}
+                    </span>
+                  </div>
+                  <figcaption className="flex flex-col gap-1 border-t border-slate-100 p-4 sm:p-5">
+                    <p className="text-base font-bold text-[#0F172A]">{slide.title}</p>
+                    <p className="text-sm leading-relaxed text-slate-600">{slide.benefit}</p>
                   </figcaption>
                 </figure>
               ))}
             </div>
-          </section>
+          </div>
+        </section>
 
-          <section className="flex flex-col gap-4">
-            <SectionTitle>Seguridad bancaria, control total</SectionTitle>
-            <div className="flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:gap-5">
+        <section className="bg-[#0F172A] py-16 text-white sm:py-20">
+          <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+            <div className="mb-10 flex flex-col items-center gap-2.5 text-center">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-400/25 bg-emerald-500/10 px-3 py-1 text-xs font-semibold text-emerald-300">
+                <ShieldCheckIcon className="size-3.5" aria-hidden="true" />
+                Respaldo y control directo
+              </span>
+              <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-white sm:text-3xl">
+                Seguridad bancaria, control total
+              </h2>
+              <p className="max-w-xl text-sm text-slate-300 sm:text-base">
+                Tu dinero entra directo a tu cuenta y cada cobro se respalda con
+                verificación real.
+              </p>
+            </div>
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
               {TRUST_POINTS.map((point) => (
                 <div
                   key={point.title}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm lg:p-6"
+                  className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-white/[0.04] p-6 backdrop-blur-sm transition-[transform,border-color,background-color] duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] hover:-translate-y-1 hover:border-emerald-400/30 hover:bg-white/[0.06] motion-reduce:transition-none motion-reduce:hover:translate-y-0"
                 >
                   <span
                     aria-hidden="true"
-                    className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#e8f1fb] text-[#1872cc]"
+                    className="flex size-11 items-center justify-center rounded-xl border border-emerald-400/20 bg-emerald-500/15 text-emerald-400"
                   >
                     <point.icon className="size-5" />
                   </span>
-                  <div className="flex min-w-0 flex-col gap-0.5">
-                    <p className="font-semibold text-[#0f172a]">
-                      {point.title}
-                    </p>
-                    <p className="text-sm text-slate-600">
-                      {point.description}
-                    </p>
-                  </div>
+                  <h3 className="text-lg font-bold tracking-[-0.01em] text-white">
+                    {point.title}
+                  </h3>
+                  <p className="text-sm leading-relaxed text-slate-300 sm:text-base">
+                    {point.description}
+                  </p>
+                  {point.showBanks && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {COMPATIBLE_BANKS.map((bank) => (
+                        <span
+                          key={bank}
+                          className="rounded-full border border-white/15 bg-white/[0.06] px-2.5 py-1 text-xs font-medium text-slate-200"
+                        >
+                          {bank}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
-          </section>
+          </div>
+        </section>
 
-          {/* Puente: el dinero ya cae en Mercado Pago; aquí ves qué ganas al
-              tenerlo ahí. Sin botón de salida: la landing tiene un solo
-              objetivo («Crear mi cuenta gratis»). El enlace de Invita y Gana
-              vive solo como texto discreto en la FAQ. */}
-          <section className="flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-[#ecfdf5] p-5 shadow-sm lg:p-8">
-            <h2 className="text-lg font-extrabold leading-snug tracking-tight text-balance text-[#003366] lg:text-2xl">
-              ¿Aún no tienes cuenta de Mercado Pago? Abrirla tiene grandes
-              ventajas para tu negocio
-            </h2>
-            <p className="text-sm leading-relaxed text-slate-600 lg:text-base">
-              Para que <BrandInline /> valide tus ventas al instante con 0% de
-              comisión, solo necesitas conectar una cuenta gratuita de Mercado
-              Pago. Además de ahorrarte las comisiones de las terminales
-              tradicionales, tu negocio obtiene beneficios financieros
-              inmediatos:
-            </p>
-            <ul className="flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:gap-5">
-              {MP_BENEFITS.map((benefit) => (
-                <li key={benefit.title} className="flex items-start gap-2.5">
-                  <span
-                    aria-hidden="true"
-                    className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[#d1fae5] text-[#065f46]"
+        <section className="border-b border-slate-200/80 bg-[#F8FAFC] py-14 sm:py-20">
+          <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
+            <div className="flex flex-col gap-6 rounded-2xl border border-emerald-200/90 bg-gradient-to-br from-emerald-50/80 via-white to-slate-50 p-6 shadow-sm sm:p-8 lg:p-10">
+              <div className="flex max-w-3xl flex-col gap-3">
+                <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-200 bg-white px-3 py-1 text-xs font-semibold text-[#065F46]">
+                  <TrendingUpIcon className="size-3.5 text-[#059669]" aria-hidden="true" />
+                  Ventaja financiera incluida
+                </span>
+                <h2 className="text-xl font-extrabold leading-snug tracking-[-0.02em] text-balance text-[#0F172A] sm:text-2xl lg:text-3xl">
+                  ¿Aún no tienes cuenta de Mercado Pago? Abrirla tiene grandes ventajas
+                  para tu negocio
+                </h2>
+                <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
+                  Para que <BrandInline /> valide tus ventas al instante con 0% de
+                  comisión, solo necesitas conectar una cuenta gratuita de Mercado Pago.
+                  Además de ahorrarte las comisiones de las terminales tradicionales, tu
+                  negocio obtiene beneficios financieros inmediatos:
+                </p>
+              </div>
+              <ul className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-5">
+                {MP_BENEFITS.map((benefit) => (
+                  <li
+                    key={benefit.title}
+                    className="flex items-start gap-3 rounded-xl border border-emerald-200/70 bg-white/90 p-4 shadow-xs"
                   >
-                    <CheckIcon className="size-3.5" />
-                  </span>
-                  <p className="text-sm leading-relaxed text-slate-600">
-                    <strong className="font-semibold text-[#0f172a]">
-                      {benefit.title}:
-                    </strong>{" "}
-                    {benefit.description}
-                  </p>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="flex flex-col gap-3 lg:mx-auto lg:w-full lg:max-w-3xl">
-            <SectionTitle>Preguntas frecuentes</SectionTitle>
-            <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white shadow-sm">
-              {FAQ_ITEMS.map((item) => (
-                <details key={item.id} className="group px-4">
-                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 py-3.5 text-sm font-semibold text-[#0f172a] transition-colors hover:text-[#003366] focus-visible:ring-2 focus-visible:ring-[#1872cc] focus-visible:ring-offset-2 focus-visible:outline-none [&::-webkit-details-marker]:hidden">
-                    {/* Un solo ítem flex: sin el envoltorio, el `gap-2` parte
-                        la pregunta en segmentos con espacios de más. */}
-                    <span>{item.question}</span>
-                    <ChevronDownIcon
-                      className="size-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
+                    <span
                       aria-hidden="true"
-                    />
-                  </summary>
-                  <div className="pb-3.5 text-sm leading-relaxed text-slate-600">
-                    {item.answer}
-                  </div>
-                </details>
-              ))}
+                      className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-[#059669]"
+                    >
+                      <CheckIcon className="size-3.5" />
+                    </span>
+                    <p className="text-sm leading-relaxed text-slate-600">
+                      <strong className="mb-1 block font-semibold text-[#0F172A]">
+                        {benefit.title}
+                      </strong>
+                      {benefit.description}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-col items-start gap-2 pt-2 sm:flex-row sm:items-center sm:gap-4">
+                <PrimarySignupCta variant="section" />
+                <p className="text-xs text-slate-500">
+                  Crea primero tu cuenta en <BrandInline /> y te guiamos para conectar
+                  Mercado Pago.
+                </p>
+              </div>
             </div>
-          </section>
+          </div>
+        </section>
 
-          {/* Cierre: tarjeta de alto contraste con el golpe final. */}
-          <section className="flex flex-col items-center gap-4 rounded-2xl bg-[#003366] p-6 text-center text-white shadow-xl shadow-[#003366]/30 lg:p-10">
-            <h2 className="text-xl font-extrabold tracking-tight text-balance lg:text-3xl">
-              Deja de regalar el 4% en cada venta.
-            </h2>
-            <p className="text-sm leading-relaxed text-white/80 lg:text-base">
-              Empieza a cobrar hoy y quédate con el 100% de tus ventas con 0%
-              de comisión al cobrar con WhatsApp.
-            </p>
-            <button
-              type="button"
-              disabled
-              className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-white text-base font-bold text-[#003366] opacity-60 shadow-lg focus-visible:outline-none lg:w-auto lg:min-w-[280px]"
-            >
-              Crear mi cuenta gratis
-              <ArrowRightIcon className="size-4" aria-hidden="true" />
-            </button>
-          </section>
-        </div>
+        <section className="bg-white py-14 sm:py-20">
+          <div className="mx-auto w-full max-w-3xl px-4 sm:px-6 lg:px-8">
+            <div className="mb-8 flex flex-col items-center gap-2 text-center">
+              <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-[#0F172A] sm:text-3xl">
+                Preguntas frecuentes
+              </h2>
+              <p className="text-sm text-slate-600 sm:text-base">
+                Todo lo que necesitas saber antes de recibir tu primer pago sin comisión.
+              </p>
+            </div>
+            <FaqAccordion items={FAQ_ITEMS} />
+          </div>
+        </section>
+
+        <section className="bg-[#F8FAFC] py-14 sm:py-20">
+          <div className="mx-auto w-full max-w-5xl px-4 sm:px-6 lg:px-8">
+            <div className="relative overflow-hidden rounded-3xl bg-[#0F172A] px-6 py-10 text-center text-white shadow-2xl shadow-slate-900/20 sm:px-10 sm:py-14">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -top-24 left-1/2 h-64 w-96 -translate-x-1/2 rounded-full bg-[#059669]/25 blur-3xl"
+              />
+              <div className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-4">
+                <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-balance sm:text-4xl">
+                  Deja de regalar el 4% en cada venta.
+                </h2>
+                <p className="text-sm leading-relaxed text-slate-300 sm:text-base">
+                  Empieza a cobrar hoy y quédate con el 100% de tus ventas con 0% de
+                  comisión al cobrar por WhatsApp.
+                </p>
+                <div className="mt-2 w-full sm:w-auto">
+                  <PrimarySignupCta variant="banner" />
+                </div>
+                <p className="text-xs text-slate-400">
+                  Gratis • Sin tarjetas • Depósito directo a tu cuenta
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
       </main>
 
-      <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex w-full max-w-[480px] flex-col gap-3 px-4 py-8 lg:max-w-6xl lg:px-8">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <footer id="landing-footer" className="border-t border-slate-200 bg-white">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 px-4 py-10 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -652,37 +607,27 @@ export default function ShortLandingPage() {
                 aria-hidden="true"
                 className="h-6 w-auto"
               />
-              <Wordmark className="text-sm" />
+              <Wordmark className="text-base text-[#0F172A]" />
             </div>
-            <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500">
-              <button
-                type="button"
-                disabled
-                className="cursor-not-allowed underline underline-offset-3 opacity-60 focus-visible:outline-none"
-              >
-                Soporte por WhatsApp
-              </button>
-              <span
-                aria-hidden="true"
-                className="size-1 shrink-0 rounded-full bg-slate-400"
-              />
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500">
+              <FooterSupportButton />
+              <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
               <span>Aviso de Privacidad</span>
-              <span
-                aria-hidden="true"
-                className="size-1 shrink-0 rounded-full bg-slate-400"
-              />
+              <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
               <span>Términos de Uso</span>
-            </p>
+            </div>
           </div>
-          <p className="text-xs leading-relaxed text-slate-500">
-            <BrandInline /> es una plataforma tecnológica de gestión y
-            conciliación de cobros. No es una institución financiera ni capta
-            recursos del público. SPEI® es una marca registrada del Banco de
-            México. <BrandInline /> es un servicio independiente y no está
-            afiliado ni patrocinado por Banxico ni por Mercado Pago.
+          <p className="border-t border-slate-100 pt-5 text-xs leading-relaxed text-slate-500">
+            <BrandInline /> es una plataforma tecnológica de gestión y conciliación de
+            cobros. No es una institución financiera ni capta recursos del público.
+            SPEI® es una marca registrada del Banco de México. <BrandInline /> es un
+            servicio independiente y no está afiliado ni patrocinado por Banxico ni por
+            Mercado Pago.
           </p>
         </div>
       </footer>
+
+      <FloatingCommissionBadge />
     </div>
   )
 }

@@ -60,12 +60,6 @@ async function main() {
   console.log(`chunks: ${chunks.length - bad}/${chunks.length} OK`)
 }
 
-function headers_of(res) {
-  const out = {}
-  for (const [key, value] of res.headers) out[key] = value
-  return out
-}
-
 main().catch((error) => {
   console.error(error)
   process.exit(1)
