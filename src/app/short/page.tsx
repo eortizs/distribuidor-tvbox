@@ -23,6 +23,11 @@ import { shortLinkBaseUrl } from "@/server/site-url"
  * (assets/landing_page.md): paleta azul marino #003366 + azul de marca
  * #1872cc, tarjetas blancas sobre fondo #F8FAFC y demostración de chat —
  * deliberadamente FUERA del sistema de componentes del panel.
+ *
+ * Responsive: el layout móvil (max-w-[480px], una columna) queda intacto y se
+ * enriquece en `lg` con un contenedor ancho, hero a dos columnas y cuadrículas
+ * de tres columnas en pasos / casos de uso / seguridad / beneficios MP. El
+ * orden del DOM no cambia entre móvil y escritorio.
  */
 
 const TITLE = "SPEILink — Links de pago por WhatsApp con 0% de comisión"
@@ -58,12 +63,14 @@ export const metadata: Metadata = {
  * servicio aún no abre al público. Al lanzar, restaurar los `<a href>` con
  * `${publicSiteUrl()}/register`, `${publicSiteUrl()}/login` y el enlace
  * `https://wa.me/<WHATSAPP_AGENT_NUMBER>` del footer.
-  */
+ */
 
 /*
- * Enlace personal de Mercado Pago «Invita y Gana» del dueño. Los dos accesos
- * que apuntan a él (bloque de beneficios y FAQ) se habilitan con esta URL;
- * si se deja en null, se muestran deshabilitados como el resto de CTAs.
+ * Enlace personal de Mercado Pago «Invita y Gana» del dueño. Vive ÚNICAMENTE
+ * como texto discreto en la FAQ (fuera del embudo de registro): la landing
+ * tiene un solo objetivo — «Crear mi cuenta gratis» en SPEILink — y sacar al
+ * visitante hacia Mercado Pago antes de capturarlo rompería el embudo.
+ * Con null, el texto de la FAQ se muestra deshabilitado.
  */
 const MP_REFERRAL_URL: string | null = "https://mpago.li/2KDRFs9"
 
@@ -234,7 +241,7 @@ function Wordmark({ className }: { className?: string }) {
 
 function SectionTitle({ children }: { children: string }) {
   return (
-    <h2 className="text-center text-xl font-extrabold tracking-tight text-[#003366]">
+    <h2 className="text-center text-xl font-extrabold tracking-tight text-[#003366] lg:text-2xl">
       {children}
     </h2>
   )
@@ -246,38 +253,9 @@ function GradientCta() {
     <button
       type="button"
       disabled
-      className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#003366] to-[#1872cc] text-base font-semibold text-white opacity-60 shadow-lg shadow-[#003366]/25 focus-visible:outline-none"
+      className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#003366] to-[#1872cc] text-base font-semibold text-white opacity-60 shadow-lg shadow-[#003366]/25 focus-visible:outline-none lg:w-auto lg:min-w-[240px]"
     >
       Crear mi cuenta gratis
-      <ArrowRightIcon className="size-4" aria-hidden="true" />
-    </button>
-  )
-}
-
-/**
- * Acceso al enlace de referido de Mercado Pago. Con URL es un enlace real; sin
- * ella, un botón deshabilitado con el mismo aspecto que el resto de CTAs.
- */
-function MercadoPagoReferralCta() {
-  const className =
-    "inline-flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#003366] to-[#1872cc] text-base font-semibold text-white shadow-lg shadow-[#003366]/25 focus-visible:outline-none"
-  return MP_REFERRAL_URL ? (
-    <a
-      href={MP_REFERRAL_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={className}
-    >
-      Abre tu cuenta gratis de Mercado Pago
-      <ArrowRightIcon className="size-4" aria-hidden="true" />
-    </a>
-  ) : (
-    <button
-      type="button"
-      disabled
-      className={cn(className, "cursor-not-allowed opacity-60")}
-    >
-      Abre tu cuenta gratis de Mercado Pago
       <ArrowRightIcon className="size-4" aria-hidden="true" />
     </button>
   )
@@ -344,7 +322,7 @@ export default function ShortLandingPage() {
   return (
     <div className="min-h-svh bg-[#f8fafc] font-sans text-[#0f172a]">
       <header className="sticky top-0 z-40 border-b border-slate-200 bg-white">
-        <div className="mx-auto flex h-16 w-full max-w-[480px] items-center justify-between px-4">
+        <div className="mx-auto flex h-16 w-full max-w-[480px] items-center justify-between px-4 lg:max-w-6xl lg:px-8">
           <Link
             href="/"
             className="flex items-center gap-2"
@@ -355,73 +333,81 @@ export default function ShortLandingPage() {
               src="/spei-link-logo.svg"
               alt=""
               aria-hidden="true"
-              className="h-8 w-auto"
+              className="h-8 w-auto lg:h-9"
             />
-            <Wordmark className="text-base" />
+            <Wordmark className="text-base lg:text-lg" />
           </Link>
           <button
             type="button"
             disabled
-            className="inline-flex h-9 cursor-not-allowed items-center rounded-lg border border-[#003366] px-4 text-sm font-semibold text-[#003366] opacity-60 focus-visible:outline-none"
+            className="inline-flex h-9 cursor-not-allowed items-center rounded-lg border border-[#003366] px-4 text-sm font-semibold text-[#003366] opacity-60 focus-visible:outline-none lg:h-10 lg:px-5"
           >
             Iniciar sesión
           </button>
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[480px] px-4">
-        <div className="flex flex-col gap-10 py-8">
-          {/* Hero: primera pantalla completa sin scroll en un celular. */}
-          <section className="flex flex-col items-center gap-4 pt-4 text-center">
-            <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-[#d1fae5] px-3 text-xs font-semibold text-[#065f46]">
-              <CheckIcon className="size-3.5" aria-hidden="true" />
-              0% de comisión al cobrar con WhatsApp
-            </span>
-            <h1 className="text-3xl leading-tight font-extrabold tracking-tight text-balance text-[#003366]">
-              Empieza a cobrar hoy y quédate con el 100% de tus ventas.
-            </h1>
-            <p className="text-pretty text-base text-slate-600">
-              Links de pago por WhatsApp con depósito directo a tu cuenta. Sin
-              intermediarios y con verificación bancaria automática.
-            </p>
-            <GradientCta />
-            <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs text-slate-500">
-              <LockIcon className="size-3.5" aria-hidden="true" />
-              Sin intermediarios
-              <span
-                aria-hidden="true"
-                className="size-1 shrink-0 rounded-full bg-slate-400"
-              />
-              <BrandInline /> nunca retiene tu dinero
-            </p>
-          </section>
-
-          {/* Fórmula visual: la ecuación del producto en una tarjeta. */}
-          <section aria-label="Cómo funciona el cobro">
-            <div className="flex flex-col items-center gap-4 rounded-2xl border border-[#1872cc]/30 bg-white p-6 text-center shadow-sm">
-              <div className="flex items-center gap-3" aria-hidden="true">
-                <span className="rounded-xl bg-[#e8f1fb] px-4 py-2 text-lg font-extrabold text-[#003366]">
-                  CLABE
-                </span>
-                <span className="text-2xl font-extrabold text-[#1872cc]">
-                  +
-                </span>
-                <span className="rounded-xl bg-[#e8f1fb] px-4 py-2 text-lg font-extrabold text-[#003366]">
-                  WhatsApp
-                </span>
-              </div>
-              <p className="text-sm leading-relaxed text-slate-600">
-                <strong className="font-semibold text-[#003366]">
-                  CLABE + WhatsApp:
-                </strong>{" "}
-                recibe transferencias SPEI verificadas al instante y quédate
-                con el 100% de tus ventas.
+      <main className="mx-auto w-full max-w-[480px] px-4 lg:max-w-6xl lg:px-8">
+        <div className="flex flex-col gap-10 py-8 lg:gap-16 lg:py-12">
+          {/* Hero + fórmula: en escritorio comparten renglón (texto a la
+              izquierda, ecuación del producto a la derecha). En móvil se
+              apilan en este mismo orden. */}
+          <div className="flex flex-col gap-10 lg:grid lg:grid-cols-2 lg:items-center lg:gap-12">
+            {/* Hero: primera pantalla completa sin scroll en un celular. */}
+            <section className="flex flex-col items-center gap-4 pt-4 text-center lg:items-start lg:pt-0 lg:text-left">
+              <span className="inline-flex h-7 items-center gap-1.5 rounded-full bg-[#d1fae5] px-3 text-xs font-semibold text-[#065f46]">
+                <CheckIcon className="size-3.5" aria-hidden="true" />
+                0% de comisión al cobrar con WhatsApp
+              </span>
+              <h1 className="text-3xl leading-tight font-extrabold tracking-tight text-balance text-[#003366] lg:text-5xl">
+                Empieza a cobrar hoy y quédate con el 100% de tus ventas.
+              </h1>
+              <p className="text-pretty text-base text-slate-600 lg:text-lg">
+                Links de pago por WhatsApp con depósito directo a tu cuenta. Sin
+                intermediarios y con verificación bancaria automática.
               </p>
-            </div>
-          </section>
+              <GradientCta />
+              <p className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1 text-xs text-slate-500 lg:justify-start">
+                <LockIcon className="size-3.5" aria-hidden="true" />
+                Sin intermediarios
+                <span
+                  aria-hidden="true"
+                  className="size-1 shrink-0 rounded-full bg-slate-400"
+                />
+                <BrandInline /> nunca retiene tu dinero
+              </p>
+            </section>
+
+            {/* Fórmula visual: la ecuación del producto en una tarjeta. */}
+            <section aria-label="Cómo funciona el cobro" className="lg:w-full">
+              <div className="flex flex-col items-center gap-4 rounded-2xl border border-[#1872cc]/30 bg-white p-6 text-center shadow-sm lg:p-8">
+                <div className="flex items-center gap-3" aria-hidden="true">
+                  <span className="rounded-xl bg-[#e8f1fb] px-4 py-2 text-lg font-extrabold text-[#003366] lg:px-6 lg:py-3 lg:text-xl">
+                    CLABE
+                  </span>
+                  <span className="text-2xl font-extrabold text-[#1872cc]">
+                    +
+                  </span>
+                  <span className="rounded-xl bg-[#e8f1fb] px-4 py-2 text-lg font-extrabold text-[#003366] lg:px-6 lg:py-3 lg:text-xl">
+                    WhatsApp
+                  </span>
+                </div>
+                <p className="text-sm leading-relaxed text-slate-600 lg:text-base">
+                  <strong className="font-semibold text-[#003366]">
+                    CLABE + WhatsApp:
+                  </strong>{" "}
+                  recibe transferencias SPEI verificadas al instante y quédate
+                  con el 100% de tus ventas.
+                </p>
+              </div>
+            </section>
+          </div>
 
           {/* Demostración: la experiencia real del comprador, burbuja a burbuja. */}
-          <section aria-label="Ejemplo de una venta por WhatsApp">
+          <section
+            aria-label="Ejemplo de una venta por WhatsApp"
+            className="lg:mx-auto lg:w-full lg:max-w-2xl"
+          >
             <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-900/5">
               <div className="flex items-center gap-3 bg-[#003366] px-4 py-3 text-white">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -440,7 +426,7 @@ export default function ShortLandingPage() {
                   </span>
                 </div>
               </div>
-              <div className="flex flex-col gap-2 bg-[#e5ddd5] p-3">
+              <div className="flex flex-col gap-2 bg-[#e5ddd5] p-3 lg:p-5">
                 <ChatBubble side="right" time="10:30">
                   Solicito un link de pago por{" "}
                   <span className="font-semibold tabular-nums">$500.00 MXN</span>
@@ -489,11 +475,11 @@ export default function ShortLandingPage() {
 
           <section className="flex flex-col gap-4">
             <SectionTitle>Cobra en 3 pasos simples</SectionTitle>
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:gap-5">
               {STEPS.map((step) => (
                 <div
                   key={step.step}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm lg:p-6"
                 >
                   <span
                     aria-hidden="true"
@@ -514,19 +500,19 @@ export default function ShortLandingPage() {
             </div>
           </section>
 
-          {/* Carrusel: descanso visual con casos de uso reales (WebP 600px,
-              lazy y snap horizontal — 1 tarjeta visible + borde de la siguiente). */}
+          {/* Carrusel: en móvil es deslizable con snap (1 tarjeta + borde de la
+              siguiente); en escritorio se despliega como cuadrícula de 3. */}
           <section className="flex flex-col gap-4">
             <SectionTitle>Pensado para negocios como el tuyo</SectionTitle>
             <div
               tabIndex={0}
               aria-label="Fotos de negocios que cobran con SPEILink"
-              className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 focus-visible:outline-2 focus-visible:outline-[#1872cc] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              className="-mx-4 flex snap-x snap-mandatory gap-3 overflow-x-auto px-4 pb-1 focus-visible:outline-2 focus-visible:outline-[#1872cc] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden lg:mx-0 lg:grid lg:grid-cols-3 lg:gap-5 lg:overflow-visible lg:px-0"
             >
               {CAROUSEL_SLIDES.map((slide) => (
                 <figure
                   key={slide.src}
-                  className="w-[82%] shrink-0 snap-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm"
+                  className="w-[82%] shrink-0 snap-center overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm lg:w-auto"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
@@ -551,11 +537,11 @@ export default function ShortLandingPage() {
 
           <section className="flex flex-col gap-4">
             <SectionTitle>Seguridad bancaria, control total</SectionTitle>
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:gap-5">
               {TRUST_POINTS.map((point) => (
                 <div
                   key={point.title}
-                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm"
+                  className="flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm lg:p-6"
                 >
                   <span
                     aria-hidden="true"
@@ -577,20 +563,22 @@ export default function ShortLandingPage() {
           </section>
 
           {/* Puente: el dinero ya cae en Mercado Pago; aquí ves qué ganas al
-              tenerlo ahí. Va justo antes del FAQ, sin CTA de alta general. */}
-          <section className="flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-[#ecfdf5] p-5 shadow-sm">
-            <h2 className="text-lg font-extrabold leading-snug tracking-tight text-balance text-[#003366]">
+              tenerlo ahí. Sin botón de salida: la landing tiene un solo
+              objetivo («Crear mi cuenta gratis»). El enlace de Invita y Gana
+              vive solo como texto discreto en la FAQ. */}
+          <section className="flex flex-col gap-4 rounded-2xl border border-emerald-200 bg-[#ecfdf5] p-5 shadow-sm lg:p-8">
+            <h2 className="text-lg font-extrabold leading-snug tracking-tight text-balance text-[#003366] lg:text-2xl">
               ¿Aún no tienes cuenta de Mercado Pago? Abrirla tiene grandes
               ventajas para tu negocio
             </h2>
-            <p className="text-sm leading-relaxed text-slate-600">
+            <p className="text-sm leading-relaxed text-slate-600 lg:text-base">
               Para que <BrandInline /> valide tus ventas al instante con 0% de
               comisión, solo necesitas conectar una cuenta gratuita de Mercado
               Pago. Además de ahorrarte las comisiones de las terminales
               tradicionales, tu negocio obtiene beneficios financieros
               inmediatos:
             </p>
-            <ul className="flex flex-col gap-3">
+            <ul className="flex flex-col gap-3 lg:grid lg:grid-cols-3 lg:gap-5">
               {MP_BENEFITS.map((benefit) => (
                 <li key={benefit.title} className="flex items-start gap-2.5">
                   <span
@@ -608,14 +596,9 @@ export default function ShortLandingPage() {
                 </li>
               ))}
             </ul>
-            <MercadoPagoReferralCta />
-            <p className="text-center text-xs leading-relaxed text-slate-500">
-              Al registrarte desde este enlace, activas tu cuenta lista para
-              conectarse con <BrandInline />.
-            </p>
           </section>
 
-          <section className="flex flex-col gap-3">
+          <section className="flex flex-col gap-3 lg:mx-auto lg:w-full lg:max-w-3xl">
             <SectionTitle>Preguntas frecuentes</SectionTitle>
             <div className="divide-y divide-slate-200 rounded-xl border border-slate-200 bg-white shadow-sm">
               {FAQ_ITEMS.map((item) => (
@@ -638,18 +621,18 @@ export default function ShortLandingPage() {
           </section>
 
           {/* Cierre: tarjeta de alto contraste con el golpe final. */}
-          <section className="flex flex-col items-center gap-4 rounded-2xl bg-[#003366] p-6 text-center text-white shadow-xl shadow-[#003366]/30">
-            <h2 className="text-xl font-extrabold tracking-tight text-balance">
+          <section className="flex flex-col items-center gap-4 rounded-2xl bg-[#003366] p-6 text-center text-white shadow-xl shadow-[#003366]/30 lg:p-10">
+            <h2 className="text-xl font-extrabold tracking-tight text-balance lg:text-3xl">
               Deja de regalar el 4% en cada venta.
             </h2>
-            <p className="text-sm leading-relaxed text-white/80">
+            <p className="text-sm leading-relaxed text-white/80 lg:text-base">
               Empieza a cobrar hoy y quédate con el 100% de tus ventas con 0%
               de comisión al cobrar con WhatsApp.
             </p>
             <button
               type="button"
               disabled
-              className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-white text-base font-bold text-[#003366] opacity-60 shadow-lg focus-visible:outline-none"
+              className="inline-flex h-12 w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-white text-base font-bold text-[#003366] opacity-60 shadow-lg focus-visible:outline-none lg:w-auto lg:min-w-[280px]"
             >
               Crear mi cuenta gratis
               <ArrowRightIcon className="size-4" aria-hidden="true" />
@@ -659,36 +642,38 @@ export default function ShortLandingPage() {
       </main>
 
       <footer className="border-t border-slate-200 bg-white">
-        <div className="mx-auto flex w-full max-w-[480px] flex-col gap-3 px-4 py-8">
-          <div className="flex items-center gap-2">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src="/spei-link-logo.svg"
-              alt=""
-              aria-hidden="true"
-              className="h-6 w-auto"
-            />
-            <Wordmark className="text-sm" />
+        <div className="mx-auto flex w-full max-w-[480px] flex-col gap-3 px-4 py-8 lg:max-w-6xl lg:px-8">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/spei-link-logo.svg"
+                alt=""
+                aria-hidden="true"
+                className="h-6 w-auto"
+              />
+              <Wordmark className="text-sm" />
+            </div>
+            <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500">
+              <button
+                type="button"
+                disabled
+                className="cursor-not-allowed underline underline-offset-3 opacity-60 focus-visible:outline-none"
+              >
+                Soporte por WhatsApp
+              </button>
+              <span
+                aria-hidden="true"
+                className="size-1 shrink-0 rounded-full bg-slate-400"
+              />
+              <span>Aviso de Privacidad</span>
+              <span
+                aria-hidden="true"
+                className="size-1 shrink-0 rounded-full bg-slate-400"
+              />
+              <span>Términos de Uso</span>
+            </p>
           </div>
-          <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-500">
-            <button
-              type="button"
-              disabled
-              className="cursor-not-allowed underline underline-offset-3 opacity-60 focus-visible:outline-none"
-            >
-              Soporte por WhatsApp
-            </button>
-            <span
-              aria-hidden="true"
-              className="size-1 shrink-0 rounded-full bg-slate-400"
-            />
-            <span>Aviso de Privacidad</span>
-            <span
-              aria-hidden="true"
-              className="size-1 shrink-0 rounded-full bg-slate-400"
-            />
-            <span>Términos de Uso</span>
-          </p>
           <p className="text-xs leading-relaxed text-slate-500">
             <BrandInline /> es una plataforma tecnológica de gestión y
             conciliación de cobros. No es una institución financiera ni capta
