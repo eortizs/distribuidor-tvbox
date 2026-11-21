@@ -3867,20 +3867,22 @@ export function ClientesAccordion({
 
             {/*
              * Saldo en cupones del comprador: la billetera exclusiva para
-             * licencias de FlujoTV (el pago con cupón la debita). Renglón
-             * fijo del resumen: visible en TODO el checkout — desde la
-             * elección del método — para decidir con el saldo a la vista.
+             * licencias de FlujoTV (el pago con cupón la debita). Visible en
+             * la elección del método y en las pantallas de Mercado Pago y
+             * Cupón; se omite en Transferencia: ese pago no toca el saldo.
              */}
-            <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
-              <span className="text-muted-foreground text-xs">
-                Saldo en cupones
-              </span>
-              <span className="text-sm font-medium tabular-nums">
-                {saldoCuponesVigente !== null
-                  ? formatMxn(saldoCuponesVigente)
-                  : "—"}
-              </span>
-            </div>
+            {payMethod !== "transferencia" ? (
+              <div className="flex items-center justify-between gap-2 rounded-lg border p-2.5">
+                <span className="text-muted-foreground text-xs">
+                  Saldo en cupones
+                </span>
+                <span className="text-sm font-medium tabular-nums">
+                  {saldoCuponesVigente !== null
+                    ? formatMxn(saldoCuponesVigente)
+                    : "—"}
+                </span>
+              </div>
+            ) : null}
 
             {/*
              * Mercado Pago: pantalla propia — la lista desaparece y solo
