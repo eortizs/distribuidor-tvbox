@@ -19,6 +19,8 @@ import {
 import { cn } from "cn"
 
 import { BrandInline, Wordmark } from "@/components/short/brand"
+import { CustomerDataValue } from "@/components/short/CustomerDataValue"
+import { DirectTransferFlow } from "@/components/short/DirectTransferFlow"
 import { FloatingCommissionBadge } from "@/components/short/FloatingCommissionBadge"
 import { FaqAccordion, type FaqAccordionItem } from "@/components/short/faq-accordion"
 import {
@@ -453,6 +455,8 @@ export default function ShortLandingPage() {
           </div>
         </section>
 
+        <CustomerDataValue />
+
         <section className="bg-[#0F172A] py-16 text-white sm:py-20">
           <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
             <div className="mb-10 flex flex-col items-center gap-2.5 text-center">
@@ -468,6 +472,7 @@ export default function ShortLandingPage() {
                 verificación real.
               </p>
             </div>
+            <DirectTransferFlow />
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
               {TRUST_POINTS.map((point) => (
                 <div
