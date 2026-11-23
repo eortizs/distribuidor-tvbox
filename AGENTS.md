@@ -131,6 +131,7 @@ El panel es multitenant con **Row-Level Security como mecanismo primario de aisl
 - **Primera cuenta de plataforma**: `node scripts/create-platform-admin.mjs <correo> [contraseña]` (sin contraseña genera una temporal y la imprime una vez). SIN entidad Cuenta espejo (entities exige tenant).
 - **Branding**: el nombre del tenant va en el título (`generateMetadata` del layout del panel) y como sufijo apagado en la cabecera (`DashboardShell tenantName`); el layout raíz sigue ESTÁTICO (la landing /short no puede volverse dinámica).
 - **Google OAuth**: oculto en hosts de tenant/plataforma (Google no admite wildcards de redirección); `GOOGLE_ALLOWED_HOSTS` (coma-separado) habilita hosts con URI propia registrada.
+- **Login por host (2026-11-23)**: `AuthShell` resuelve el host por request y muestra la marca correspondiente — TVBOX Network en el legado, isotipo **SPEILink** (`src/components/speilink-logo.tsx`, inline desde `assets/logo-SPEILink-page_ok.svg`; copia pública `public/speilink-logo.svg`) en hosts de tenant y plataforma. El enlace «¿No tienes una cuenta? Crear cuenta» se muestra SOLO en el host legado (`registerEnabled`): fuera de él `/register` está bloqueado en el proxy y el prefetch RSC del enlace producía un 404 ruidoso en `platform.spei.link`.
 
 ### Cuenta del negocio y clientes locales (Fase 3, 2026-11-23)
 
