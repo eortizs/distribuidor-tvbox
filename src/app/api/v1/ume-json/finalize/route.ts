@@ -16,7 +16,7 @@ import { ENTITY_NAME_TICKET } from "@/lib/tickets"
 
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const parsed = await readJsonBody(request)

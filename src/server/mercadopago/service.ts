@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import { pool, type PoolClientLike } from "@/server/db"
+import { pool, type PoolClientLike, setTenantContextInTx } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import {
   createClientRenewalNotice,
@@ -2216,6 +2216,7 @@ async function approveClientTransferOrder(
   const tx = await pool.connect()
   try {
     await tx.query("BEGIN")
+    await setTenantContextInTx(tx)
     // Claim de depósito atómico y CRUZADO (ver comentario en
     // `confirmPaymentOrderDeposit` de links-pago): advisory lock por ID de
     // pago + re-verificación de reservas dentro del candado.
@@ -2380,6 +2381,7 @@ export async function approveTransferOrder(
     const tx = await pool.connect()
     try {
       await tx.query("BEGIN")
+      await setTenantContextInTx(tx)
       await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
         String(deposit.mpPaymentId),
       ])
@@ -2817,6 +2819,7 @@ export async function createCouponOrder(params: {
   let insertedId: string | null = null
   try {
     await tx.query("BEGIN")
+    await setTenantContextInTx(tx)
     // Llave de 32 bits derivada del uuid del comprador; solo serializa el
     // canje de cupones de un mismo comprador.
     await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [

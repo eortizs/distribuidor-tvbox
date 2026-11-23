@@ -1,14 +1,20 @@
 import { HerramientasAccordion } from "@/components/herramientas/herramientas-accordion"
+import { modulosForTenantModules } from "@/lib/modulos"
 import { requireUser } from "@/server/auth/guards"
 import { getModulePrefs } from "@/server/modulos/preferences"
 import { getHiddenModules } from "@/server/modulos/visibility"
+import { effectiveTenantModules } from "@/server/tenant/modules"
 
 export const metadata = {
   title: "Módulos",
 }
 
 export default async function HerramientasPage() {
-  const user = await requireUser()
+  const user = await requireUser("general")
+  // El catálogo se filtra por los módulos del TENANT (§4.5): el legado ve
+  // los tres módulos; un negocio solo núcleo. La visibilidad por usuario
+  // (hiddenModules) se aplica encima.
+  const tenantModules = await effectiveTenantModules()
   const [prefs, hiddenModules] = await Promise.all([
     getModulePrefs(user.id),
     // Las cuentas admin siempre ven el catálogo completo: la visibilidad por
@@ -22,6 +28,7 @@ export default async function HerramientasPage() {
         initialPrefs={prefs}
         isAdmin={user.role === "admin"}
         hiddenModules={hiddenModules}
+        modulos={modulosForTenantModules(tenantModules)}
       />
     </div>
   )

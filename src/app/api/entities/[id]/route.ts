@@ -22,7 +22,7 @@ function scopeFor(
 
 export async function GET(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params
@@ -45,7 +45,7 @@ interface PatchBody {
 
 export async function PATCH(request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params

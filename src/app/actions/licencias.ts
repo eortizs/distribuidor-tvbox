@@ -35,7 +35,7 @@ function readApiKey(formData: FormData): string {
 
 /** Solo un admin puede cambiar la clave que usa todo el panel. */
 async function requireAdmin() {
-  const user = await requireUser()
+  const user = await requireUser("flujo")
   if (user.role !== "admin") {
     throw new Error("Solo un administrador puede cambiar la clave de la API.")
   }

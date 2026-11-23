@@ -22,7 +22,7 @@ import { AppError } from "@/server/umejson/types"
  */
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
 
     let accessToken: string | undefined

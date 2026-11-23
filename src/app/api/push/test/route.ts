@@ -27,7 +27,7 @@ function checkRateLimit(userId: string): boolean {
 /** «Probar aviso»: envía una notificación de prueba a este usuario. */
 export async function POST() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     if (!pushConfigured()) {

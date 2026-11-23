@@ -1,4 +1,6 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
+import { runAsPlatform } from "@/server/tenant/context"
+import { runTickPerTenant } from "@/server/tenant/scheduler"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import {
   resolvePaymentOrderDepositToken,
@@ -347,9 +349,14 @@ async function tick(): Promise<void> {
     // son el fallback (backoff) para lo que la ventana corta no cubre. El
     // recordatorio al pagador cierra el ciclo de los que pagan sin enviar
     // comprobante.
-    await sweepTick()
-    await verifyTick()
-    await nudgeTick()
+    // El barrido es CROSS-TENANT (la cuenta MP receptora es de plataforma y
+    // sus listas de trabajo corren sobre systemPool): plataforma. Los
+    // carriles por orden y el recordatorio son trabajo por tenant (§4.6).
+    await runAsPlatform(() => sweepTick())
+    await runTickPerTenant("core", async () => {
+      await verifyTick()
+      await nudgeTick()
+    }, "orden-pago: deposit-verifier")
   } catch (error) {
     console.error(
       JSON.stringify({

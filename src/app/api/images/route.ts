@@ -25,7 +25,7 @@ function sanitizeDeleteIds(input: unknown): string[] {
 
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { searchParams } = new URL(request.url)
@@ -49,7 +49,7 @@ export async function GET(request: Request) {
  */
 export async function DELETE(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)
@@ -80,7 +80,7 @@ export async function DELETE(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     if (!checkImageRateLimit(user.id)) {

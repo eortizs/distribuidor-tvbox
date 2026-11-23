@@ -10,7 +10,7 @@ import { MAX_REFERENCE_FILES } from "@/lib/attachments"
 
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     if (!checkEnhanceRateLimit(user.id)) {

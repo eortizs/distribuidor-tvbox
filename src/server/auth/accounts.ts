@@ -71,6 +71,8 @@ export interface CreateAccountInput {
   fullName?: string
   /** Defaults to "distribuidor"; only the admin flow overrides it. */
   role?: UserRole
+  /** Tenant de la cuenta (alta desde plataforma/host); si falta, el trigger lo toma del contexto. */
+  tenantId?: string
   actor?: string
   source?: string
 }
@@ -106,6 +108,7 @@ export async function createAccount(
           role,
           googleSub: input.googleSub ?? null,
           googlePicture: input.googlePicture ?? null,
+          tenantId: input.tenantId ?? null,
         },
         tx
       )

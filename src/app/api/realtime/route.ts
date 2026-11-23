@@ -9,7 +9,15 @@ import {
   subscribeRealtime,
   type RealtimeEvent,
 } from "@/server/realtime/bus"
-import { pool } from "@/server/db"
+import { systemPool } from "@/server/db"
+
+function requestHostOf(request: NextRequest): string {
+  const raw =
+    request.headers.get("x-forwarded-host")?.split(",")[0] ??
+    request.headers.get("host") ??
+    ""
+  return raw.split(":")[0]?.trim().toLowerCase() ?? ""
+}
 
 /**
  * Stream de invalidación en tiempo real (Server-Sent Events).
@@ -31,9 +39,15 @@ interface SessionScope {
   isAdmin: boolean
   /** Reseller FlujoTV ligado a la cuenta del distribuidor; null si no hay. */
   distribuidorName: string | null
+  /** Tenant de la sesión (null = plataforma/legado sin columna). */
+  tenantId: string | null
 }
 
 function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
+  // Tenancy: un evento de otro tenant jamás sale por este stream.
+  if (event.tenantId !== undefined && event.tenantId !== scope.tenantId) {
+    return false
+  }
   // Preferencias, notificaciones, alertas y conversación del asistente: solo
   // las del propio usuario, sea cual sea el rol — ni siquiera un admin recibe
   // las de otras cuentas.
@@ -75,8 +89,18 @@ function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
 
 export async function GET(request: NextRequest) {
   const token = readSessionCookie(request.headers.get("cookie"))
-  const session = token ? await findSessionUser(pool, token) : null
+  const session = token ? await findSessionUser(systemPool, token) : null
   if (!session) {
+    return new Response("Unauthorized", { status: 401 })
+  }
+  // Tenant suspendido o cookie de otro host: sin stream (misma regla que
+  // getSessionUser; aquí se valida en línea porque el stream es long-lived
+  // y el guard ALS no aplica al loop del ReadableStream).
+  if (session.tenantStatus === "suspended") {
+    return new Response("Unauthorized", { status: 401 })
+  }
+  const { validateSessionHost } = await import("@/server/tenant/identity")
+  if (!validateSessionHost(session.tenantId, requestHostOf(request))) {
     return new Response("Unauthorized", { status: 401 })
   }
 
@@ -88,6 +112,7 @@ export async function GET(request: NextRequest) {
     userId: session.id,
     isAdmin: session.role === "admin",
     distribuidorName,
+    tenantId: session.tenantId,
   }
 
   const encoder = new TextEncoder()

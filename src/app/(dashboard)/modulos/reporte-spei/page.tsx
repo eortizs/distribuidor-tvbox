@@ -47,7 +47,7 @@ function Degradada({ titulo, texto }: { titulo: string; texto: string }) {
 }
 
 export default async function ReporteSpeiPage() {
-  const user = await requireUser()
+  const user = await requireUser("core")
   const today = cdmxToday()
 
   // Fuente de los depósitos: la credencial PROPIA del distribuidor consulta

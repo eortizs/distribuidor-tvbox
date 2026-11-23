@@ -1,4 +1,5 @@
 import { NextResponse, connection, type NextRequest } from "next/server"
+import { runWithTenant } from "@/server/tenant/context"
 
 import { paymentOrderMoney } from "@/lib/links-pago"
 import { buildPaymentOrderOgHtml, isPreviewCrawler } from "@/lib/links-pago-og"
@@ -258,7 +259,11 @@ export async function GET(
     // Primera apertura del link (trazabilidad del embudo; escribe UNA
     // vez y no interviene en decisiones de dinero). Best-effort detached:
     // el redirect no espera por la bitácora.
-    void markPaymentOrderLinkOpened(order.id).catch(() => {})
+    // Escritura bajo el tenant de la orden (§4.2 ruta pública). La
+    // resolución ya trae tenant_id (lista blanca); el resto corre aislado.
+    void runWithTenant(order.tenantId, () =>
+      markPaymentOrderLinkOpened(order.id)
+    ).catch(() => {})
     return withNoCache(NextResponse.redirect(target, 302))
   }
 

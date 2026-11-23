@@ -28,7 +28,7 @@ export async function GET(_request: NextRequest, ctx: RouteContext) {
   const { connectorId } = await ctx.params
   const origin = publicSiteUrl()
 
-  const user = await requireApiUser()
+  const user = await requireApiUser("general")
   if (!user) {
     return NextResponse.redirect(new URL("/login", origin))
   }

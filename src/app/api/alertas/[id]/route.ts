@@ -12,7 +12,7 @@ type RouteContext = { params: Promise<{ id: string }> }
 /** Detalle de la alerta con su historial de revisiones. */
 export async function GET(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params
@@ -34,7 +34,7 @@ export async function GET(_request: Request, ctx: RouteContext) {
  */
 export async function PATCH(request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)
@@ -55,7 +55,7 @@ export async function PATCH(request: Request, ctx: RouteContext) {
 
 export async function DELETE(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params

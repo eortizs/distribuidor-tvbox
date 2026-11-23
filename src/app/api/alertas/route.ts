@@ -15,7 +15,7 @@ import { AppError } from "@/server/umejson/types"
 
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const alerts = await listAlertsSummary(user.id)
@@ -31,7 +31,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     if (!alertsConfigured()) {

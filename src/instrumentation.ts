@@ -23,6 +23,24 @@
  */
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return
+  // Aserción de tenancy (§4.3): RLS efectivo o log de error ruidoso. Nunca
+  // impide el arranque.
+  try {
+    const { assertTenantRlsEffective, seedLegacyWhatsAppNumber } = await import(
+      "@/server/tenant/bootstrap"
+    )
+    await assertTenantRlsEffective()
+    await seedLegacyWhatsAppNumber()
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `tenant: bootstrap_failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      })
+    )
+  }
   const { startRenewalRetryScheduler } = await import(
     "@/server/mercadopago/renewal-scheduler"
   )

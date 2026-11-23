@@ -20,7 +20,7 @@ export default async function ActualizacionFlujoTvPage({
 }: {
   searchParams: Promise<SearchParams>
 }) {
-  const user = await requireUser()
+  const user = await requireUser("flujo")
   // Valores vigentes (fila guardada o defaults). Un fallo de DB no tumba
   // la página: getFlujoApp devuelve los valores por defecto.
   const app = await getFlujoApp()

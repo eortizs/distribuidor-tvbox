@@ -17,7 +17,7 @@ function assertId(id: string): string {
 
 export async function PATCH(request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params
@@ -45,7 +45,7 @@ export async function PATCH(request: Request, ctx: RouteContext) {
 
 export async function DELETE(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params

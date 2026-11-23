@@ -13,7 +13,7 @@ import { AppError } from "@/server/umejson/types"
  */
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const q = new URL(request.url).searchParams.get("q") ?? undefined
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
 /** POST /api/notas { title?, body?, pinned? } → nota creada. */
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)

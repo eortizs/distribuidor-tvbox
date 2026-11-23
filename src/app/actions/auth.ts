@@ -19,6 +19,14 @@ import {
 } from "@/server/auth/types"
 import { verifyPassword } from "@/server/auth/password"
 import { AppError } from "@/server/umejson/types"
+import {
+  hostTenantIdForRequest,
+  validateSessionHost,
+} from "@/server/tenant/identity"
+import { findTenantBySlug, setRequestContext } from "@/server/tenant/context"
+import { resolveTenantHost } from "@/server/tenant/hosts"
+import { requestHost } from "@/server/tenant/request-host"
+import { systemPool } from "@/server/db"
 
 export interface LoginState {
   error: string | null
@@ -26,6 +34,49 @@ export interface LoginState {
 
 export interface RegisterState {
   error: string | null
+}
+
+/**
+ * Contexto de entrada para login/registro (§4.2, caso anónimo): el tenant
+ * del HOST acota la búsqueda por correo. En el host de plataforma corre como
+ * plataforma (ve todas las cuentas; solo las sin tenant pueden entrar).
+ * Devuelve el host resuelto para los mensajes de error.
+ */
+async function establishEntryContext(): Promise<{
+  hostKind: ReturnType<typeof resolveTenantHost>["kind"]
+  tenantId: string | null
+  suspended: boolean
+}> {
+  const host = await requestHost()
+  const resolved = resolveTenantHost(host)
+
+  if (resolved.kind === "platform") {
+    setRequestContext({ tenantId: null, platform: true, source: "host" })
+    return { hostKind: "platform", tenantId: null, suspended: false }
+  }
+
+  if (resolved.kind === "tenant") {
+    const tenant = await findTenantBySlug(resolved.slug)
+    if (!tenant) {
+      // Slug inexistente: contexto imposible (todo falla cerrado).
+      return { hostKind: "unknown", tenantId: null, suspended: false }
+    }
+    if (tenant.status !== "active") {
+      return { hostKind: "tenant", tenantId: null, suspended: true }
+    }
+    setRequestContext({ tenantId: tenant.id, platform: false, source: "host" })
+    return { hostKind: "tenant", tenantId: tenant.id, suspended: false }
+  }
+
+  if (resolved.kind === "legacy") {
+    const tenantId = await hostTenantIdForRequest(host)
+    if (tenantId) {
+      setRequestContext({ tenantId, platform: false, source: "host" })
+    }
+    return { hostKind: "legacy", tenantId, suspended: false }
+  }
+
+  return { hostKind: resolved.kind, tenantId: null, suspended: false }
 }
 
 export async function loginAction(
@@ -42,6 +93,14 @@ export async function loginAction(
     return { error: "Ingresa un correo electrónico válido" }
   }
 
+  const entry = await establishEntryContext()
+  if (entry.hostKind === "unknown") {
+    return { error: "Este dominio no corresponde a ningún panel." }
+  }
+  if (entry.suspended) {
+    return { error: "Esta cuenta de negocio está suspendida. Contacta a soporte." }
+  }
+
   const user = await findUserByUsername(email)
   if (
     !user ||
@@ -49,6 +108,14 @@ export async function loginAction(
     !(await verifyPassword(password, user.passwordHash))
   ) {
     return { error: "Credenciales incorrectas" }
+  }
+
+  // Host ↔ cuenta: en el host de plataforma solo entran cuentas de
+  // plataforma; en un host de tenant, solo cuentas de ese tenant (la
+  // búsqueda ya llegó filtrada por RLS; esto cubre el host de plataforma).
+  const tenantIdOfUser = await resolveUserTenantId(user.id)
+  if (!validateSessionHost(tenantIdOfUser, await requestHost())) {
+    return { error: "Esta cuenta pertenece a otro panel." }
   }
 
   // Vínculo pendiente de Google: la contraseña acaba de probar que el que
@@ -86,6 +153,15 @@ export async function loginAction(
   redirect("/clientes")
 }
 
+/** Tenant del usuario por id (systemPool: no depende del contexto actual). */
+async function resolveUserTenantId(userId: string): Promise<string | null> {
+  const result = await systemPool.query(
+    "SELECT tenant_id FROM users WHERE id = $1",
+    [userId]
+  )
+  return (result.rows[0]?.tenant_id as string | null) ?? null
+}
+
 export async function registerAction(
   _prev: RegisterState,
   formData: FormData
@@ -104,9 +180,23 @@ export async function registerAction(
     return { error: "Passwords do not match" }
   }
 
+  // El registro local SOLO existe en el host legado (§4.5): en hosts de
+  // tenant/plataforma la página ya está bloqueada; la acción se defiende.
+  const entry = await establishEntryContext()
+  if (entry.hostKind !== "legacy") {
+    return { error: "El registro no está disponible en este dominio." }
+  }
+  if (!entry.tenantId) {
+    return { error: "No fue posible resolver el dominio de registro." }
+  }
+
   let user: AuthUser
   try {
-    user = await createAccount({ email, password })
+    user = await createAccount({
+      email,
+      password,
+      tenantId: entry.tenantId,
+    })
   } catch (error) {
     if (error instanceof AppError && error.code === "email_taken") {
       return { error: "An account with this email already exists" }

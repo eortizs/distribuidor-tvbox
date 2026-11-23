@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 }
 
 export default async function AsistentePage() {
-  await requireUser()
+  await requireUser("general")
 
   return (
     <div className="flex h-[calc(var(--shell-viewport-height)-var(--shell-header-height)-var(--shell-bottom-nav-space)-var(--shell-section-tabs-height))] flex-col p-4 md:p-6">

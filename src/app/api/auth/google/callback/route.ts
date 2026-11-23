@@ -109,6 +109,16 @@ async function resolveGoogleUser(
  */
 export async function GET(request: NextRequest) {
   await connection()
+  const { requestHost } = await import("@/server/tenant/request-host")
+  const { hostTenantIdForRequest } = await import("@/server/tenant/identity")
+  const { setRequestContext } = await import("@/server/tenant/context")
+  const host = await requestHost()
+  const entryTenantId = await hostTenantIdForRequest(host)
+  if (entryTenantId) {
+    // Contexto = tenant del host (§4.2 caso anónimo): la resolución de la
+    // identidad queda acotada a las cuentas del panel de este host.
+    setRequestContext({ tenantId: entryTenantId, platform: false, source: "host" })
+  }
   const stateCookie = request.cookies.get(GOOGLE_STATE_COOKIE)?.value
   const origin = publicOrigin()
 
@@ -209,6 +219,20 @@ export async function GET(request: NextRequest) {
       resolution.user.username
     )
   }
+  // Host ↔ cuenta: la cuenta resuelta debe pertenecer al host actual
+  // (misma regla que loginAction; la cookie jamás vale en otro host).
+  const { validateSessionHost: validateHost } = await import(
+    "@/server/tenant/identity"
+  )
+  const { tenantIdOfUser } = await import("@/server/tenant/context")
+  const resolvedTenantId = await tenantIdOfUser(resolution.user.id)
+  if (!validateHost(resolvedTenantId, await requestHost())) {
+    const url = request.nextUrl.clone()
+    url.pathname = "/login"
+    url.searchParams.set("error", "google_host_mismatch")
+    return NextResponse.redirect(url)
+  }
+
   await createSession(resolution.user)
   return response
 }

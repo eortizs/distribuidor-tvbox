@@ -48,7 +48,7 @@ function parseEntradaMutacion(body: unknown) {
 
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const snapshot = await obtenerLista(user.id)
@@ -63,7 +63,7 @@ export async function GET() {
 
 export async function PATCH(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)

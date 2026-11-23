@@ -95,7 +95,7 @@ async function variantResponse(
 
 export async function GET(request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params
@@ -140,7 +140,7 @@ export async function GET(request: Request, ctx: RouteContext) {
 
 export async function DELETE(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params

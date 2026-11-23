@@ -11,7 +11,7 @@ export const metadata = {
 }
 
 export default async function ConfiguracionPage() {
-  const user = await requireUser()
+  const user = await requireUser("general")
   const levels = await getImageLevelConfigs(user.id)
 
   return (

@@ -12,7 +12,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  const user = await requireUser()
+  const user = await requireUser("general")
   const [visibleSections, saldos] = await Promise.all([
     getVisibleSectionKeys(user),
     getSaldosActual(user.id),

@@ -5,7 +5,7 @@ import { errorResponse } from "@/server/http"
 /** Costo en vivo del tarificador para una conversación del agente. */
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { searchParams } = new URL(request.url)

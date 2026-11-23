@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 
-import { pool } from "@/server/db"
+import { pool, setTenantContextInTx } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { MercadoPagoError } from "./errors"
 import { mercadoPagoRequest } from "./client"
@@ -296,6 +296,7 @@ export async function createSaldoCouponOrder(params: {
   let insertedId: string | null = null
   try {
     await tx.query("BEGIN")
+    await setTenantContextInTx(tx)
     await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
       params.buyerUserId,
     ])

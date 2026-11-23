@@ -13,6 +13,7 @@ import {
   type MpOrderRow,
 } from "./service"
 import { resolveRenewalDepositToken, tryConfirmRenewalDeposit } from "./transfer-deposit"
+import { runTickPerTenant } from "@/server/tenant/scheduler"
 
 /*
  * Verificador en background de depósitos de RENOVACIONES por transferencia:
@@ -174,7 +175,9 @@ async function tick(): Promise<void> {
   if (ticking) return
   ticking = true
   try {
-    await verifyTick()
+    await runTickPerTenant("flujo", async () => {
+      await verifyTick()
+    }, "mercadopago: renewal-deposit-verifier")
   } catch (error) {
     console.error(
       JSON.stringify({

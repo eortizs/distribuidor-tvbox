@@ -14,7 +14,7 @@ import {
  */
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)

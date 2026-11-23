@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 }
 
 export default async function AltaTicketsPage() {
-  const user = await requireUser()
+  const user = await requireUser("general")
 
   // Primer pintado con el historial real, sin parpadeo de carga. Un fallo de
   // base de datos no tumba la página: el cliente muestra su estado de error

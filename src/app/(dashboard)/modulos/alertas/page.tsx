@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 }
 
 export default async function AlertasPage() {
-  await requireUser()
+  await requireUser("general")
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">

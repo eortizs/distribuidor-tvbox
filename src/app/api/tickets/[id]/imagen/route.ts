@@ -29,7 +29,7 @@ const UUID_RE =
  */
 export async function GET(request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params

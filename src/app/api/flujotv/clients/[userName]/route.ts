@@ -10,7 +10,7 @@ type RouteContext = { params: Promise<{ userName: string }> }
 
 export async function GET(request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const { userName } = await ctx.params

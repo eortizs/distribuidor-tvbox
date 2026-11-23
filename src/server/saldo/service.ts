@@ -1,4 +1,4 @@
-import { pool } from "@/server/db"
+import { pool, setTenantContextInTx } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { MercadoPagoError } from "@/server/mercadopago/errors"
 import { createRenewalNotification } from "@/server/notifications/service"
@@ -103,6 +103,7 @@ export async function applySaldoCredit(
     let claimApplied = false
     try {
       await client.query("BEGIN")
+      await setTenantContextInTx(client)
       // Serializa solo los abonos de un mismo comprador: el claim y la
       // actualización del saldo son atómicos frente a créditos concurrentes.
       await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
@@ -294,6 +295,7 @@ export async function ajustarSaldoAdmin(params: {
   const client = await pool.connect()
   try {
     await client.query("BEGIN")
+    await setTenantContextInTx(client)
     // Serializa los ajustes y créditos de la misma cuenta: la lectura del
     // balance_after siempre es la vigente.
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [

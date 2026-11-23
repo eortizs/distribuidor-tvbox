@@ -48,9 +48,9 @@ function pairingError(error: unknown): Response {
 export async function POST() {
   try {
     await connection()
-    const admin = await requireAdminApiUser()
+    const admin = await requireAdminApiUser("core")
     if (!admin) {
-      const user = await requireApiUser()
+      const user = await requireApiUser("core")
       if (!user) return unauthorizedResponse()
       return forbiddenResponse()
     }

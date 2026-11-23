@@ -30,7 +30,7 @@ export async function updateProfileAction(
   _prev: UpdateProfileState,
   formData: FormData
 ): Promise<UpdateProfileState> {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   const fullName = String(formData.get("fullName") ?? "")
     .trim()
@@ -85,7 +85,7 @@ export async function updateBankingAction(
   _prev: UpdateProfileState,
   formData: FormData
 ): Promise<UpdateProfileState> {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   const bankName = String(formData.get("bankName") ?? "").trim()
   const bankHolder = String(formData.get("bankHolder") ?? "").trim()
@@ -160,7 +160,7 @@ export async function updateBankingAction(
  * anidado es HTML inválido.
  */
 export async function clearMpToken(): Promise<UpdateProfileState> {
-  const user = await requireUser()
+  const user = await requireUser("core")
   try {
     await clearUserMpToken(user.id)
     return {
@@ -179,7 +179,7 @@ export async function changePasswordAction(
   _prev: ChangePasswordState,
   formData: FormData
 ): Promise<ChangePasswordState> {
-  const sessionUser = await requireUser()
+  const sessionUser = await requireUser("core")
 
   const currentPassword = String(formData.get("currentPassword") ?? "")
   const newPassword = String(formData.get("newPassword") ?? "")

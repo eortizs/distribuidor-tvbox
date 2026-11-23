@@ -141,6 +141,7 @@ export function HerramientasAccordion({
   initialPrefs,
   isAdmin = false,
   hiddenModules = [],
+  modulos = MODULOS,
 }: {
   /** Preferencias ya guardadas en el servidor; null si el usuario aún no tiene. */
   initialPrefs: ModulePrefs | null
@@ -154,6 +155,11 @@ export function HerramientasAccordion({
    * del listado como si no existieran; las rutas siguen servidas.
    */
   hiddenModules?: string[]
+  /**
+   * Catálogo YA filtrado por los módulos del tenant (§4.5): el hub sirve
+   * solo los módulos habilitados (legado = todos; negocio = núcleo).
+   */
+  modulos?: Modulo[]
 }) {
   const [favorites, setFavorites] = useState<string[]>(
     initialPrefs?.favorites ?? []
@@ -308,11 +314,11 @@ export function HerramientasAccordion({
    */
   const catalog = useMemo(
     () =>
-      MODULOS.filter(
+      modulos.filter(
         (tool) =>
           (!tool.adminOnly || isAdmin) && !hiddenModules.includes(tool.href)
       ),
-    [isAdmin, hiddenModules]
+    [modulos, isAdmin, hiddenModules]
   )
 
   const visible = useMemo(() => {

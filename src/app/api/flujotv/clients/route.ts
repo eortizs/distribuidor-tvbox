@@ -18,7 +18,7 @@ function readNumber(value: string | null, fallback: number, max: number): number
 
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const params = new URL(request.url).searchParams

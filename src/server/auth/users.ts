@@ -130,12 +130,14 @@ export async function insertUser(
     googleSub?: string | null
     /** URL de la foto de perfil de Google, si el id_token la trae. */
     googlePicture?: string | null
+    /** Tenant de la cuenta; null/omitido = lo decide el trigger desde el contexto. */
+    tenantId?: string | null
   },
   executor: PoolClientLike = pool
 ): Promise<UserRow> {
   const result = await executor.query(
-    `INSERT INTO users (id, username, password_hash, role, google_sub, google_picture)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO users (id, username, password_hash, role, google_sub, google_picture, tenant_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id, username, password_hash, google_sub, google_picture, role, whatsapp_phone, created_at`,
     [
       crypto.randomUUID(),
@@ -144,6 +146,7 @@ export async function insertUser(
       input.role,
       input.googleSub ?? null,
       input.googlePicture ?? null,
+      input.tenantId ?? null,
     ]
   )
   const user = mapUserRow(result.rows[0])

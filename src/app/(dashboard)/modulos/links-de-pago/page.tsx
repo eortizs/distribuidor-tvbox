@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 }
 
 export default async function LinksPagoPage() {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   // Distribuidor: solo sus órdenes; admin: todas (con quién las creó).
   const orders = await listPaymentOrders({

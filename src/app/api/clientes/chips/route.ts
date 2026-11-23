@@ -10,7 +10,7 @@ import { AppError } from "@/server/umejson/types"
  */
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const order = await getChipLayout(user.id)
@@ -25,7 +25,7 @@ export async function GET() {
 
 export async function PUT(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)

@@ -1,3 +1,5 @@
+import type { TenantModule } from "@/lib/tenant-modules"
+import { tenantAllows } from "@/lib/tenant-modules"
 import {
   BellRingIcon,
   CalculatorIcon,
@@ -42,6 +44,8 @@ export interface Modulo {
   title: string
   description: string
   href: string
+  /** Módulo de tenant al que pertenece (§4.5): filtra el catálogo por tenant. */
+  modulo: TenantModule
   icon: LucideIcon
   /**
    * Solo visible para cuentas admin: el hub oculta la tarjeta y la ruta
@@ -62,6 +66,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Describe en lenguaje natural qué vigilar y la IA busca en internet para avisarte; también crea recordatorios.",
     href: "/modulos/alertas",
+    modulo: "general",
     icon: BellRingIcon,
   },
   {
@@ -69,6 +74,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Genera y edita imágenes con IA desde texto, referencias o bocetos a mano.",
     href: "/modulos/imagenes",
+    modulo: "general",
     icon: ImageIcon,
   },
   {
@@ -76,6 +82,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Del idea al render con el agente EVE: guiones, storyboards y entregables con costo y tiempo.",
     href: "/modulos/animacion",
+    modulo: "general",
     icon: ClapperboardIcon,
   },
   {
@@ -83,6 +90,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Conecta tus cuentas de Google Calendar y otros servicios para usarlos desde el panel.",
     href: "/modulos/conectores",
+    modulo: "general",
     icon: PlugZapIcon,
   },
   {
@@ -90,6 +98,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Cálculos rápidos con porcentaje, cinta de historial y cobro con link de pago.",
     href: "/modulos/calculadora",
+    modulo: "core",
     icon: CalculatorIcon,
   },
   {
@@ -97,6 +106,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Mide el tiempo con cronómetro de vueltas o cuenta regresiva con aviso sonoro.",
     href: "/modulos/cronometro",
+    modulo: "general",
     icon: TimerIcon,
   },
   {
@@ -104,6 +114,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Dicta o escribe tu lista con IA: productos por categoría, cantidades y casillas de comprado.",
     href: "/modulos/lista-de-compras",
+    modulo: "general",
     icon: ShoppingBasketIcon,
   },
   {
@@ -111,6 +122,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Notas rápidas con título, dictado por voz, búsqueda y notas fijadas, guardadas en tu cuenta.",
     href: "/modulos/notas",
+    modulo: "general",
     icon: StickyNoteIcon,
   },
   {
@@ -118,6 +130,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Renueva licencias en paquetes de 3, 6 y 12 meses con meses de regalo y los mismos métodos de pago.",
     href: "/modulos/paquetes-flujotv",
+    modulo: "flujo",
     icon: PackageIcon,
   },
   {
@@ -125,6 +138,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Versión de la app, código de downloader y enlaces de descarga para TV, tablet, PC y celular, listos para copiar.",
     href: "/modulos/actualizacion-flujotv",
+    modulo: "flujo",
     icon: MonitorDownIcon,
     configurable: true,
   },
@@ -133,6 +147,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Toma una foto del ticket o elige un archivo y la IA extrae sus datos para revisarlos y confirmarlos.",
     href: "/modulos/alta-de-tickets",
+    modulo: "general",
     icon: ReceiptTextIcon,
   },
   {
@@ -140,6 +155,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Elige tokens (herramientas con APIs) o cupones (licencias FlujoTV), define el monto y paga con Mercado Pago, transferencia o cupón.",
     href: "/modulos/abonar-saldo",
+    modulo: "flujo",
     icon: PiggyBankIcon,
   },
   {
@@ -147,6 +163,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Emite un cobro de monto libre con concepto de pago: link corto spei.link con QR; el pagador solicita el pago por WhatsApp, recibe su concepto y paga por SPEI.",
     href: "/modulos/links-de-pago",
+    modulo: "core",
     icon: QrCodeIcon,
   },
   {
@@ -154,6 +171,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Depósitos por transferencia SPEI acreditados en Mercado Pago, del día actual o de un día específico: el admin consulta la cuenta del servidor y cada distribuidor la suya con su token del Perfil.",
     href: "/modulos/reporte-spei",
+    modulo: "core",
     icon: LandmarkIcon,
   },
   {
@@ -161,6 +179,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Gestiona las cuentas de distribuidores: saldo, permisos, edición y baja, con el mismo menú de Usuarios.",
     href: "/modulos/distribuidores",
+    modulo: "flujo",
     icon: UserCogIcon,
     adminOnly: true,
   },
@@ -169,6 +188,7 @@ export const MODULOS: Modulo[] = [
     description:
       "Vincula el número del agente IA, espeja las notificaciones del panel y atiende consultas de las cuentas registradas.",
     href: "/modulos/whatsapp",
+    modulo: "core",
     icon: MessageCircleIcon,
     adminOnly: true,
   },
@@ -280,4 +300,20 @@ export function modulePrefsEqual(
   b: ModulePrefs | null
 ): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null)
+}
+
+
+/**
+ * Catálogo filtrado por los módulos habilitados del tenant (§4.5): el hub
+ * de Módulos y las APIs de visibilidad sirven SOLO los módulos del tenant
+ * (legado = los tres; negocio = núcleo). `allowed` null = sin restricción
+ * (plataforma/legado sin contexto).
+ */
+export function modulosForTenantModules(
+  allowed: string[] | null | undefined
+): Modulo[] {
+  if (allowed === null || allowed === undefined) return [...MODULOS]
+  return MODULOS.filter((modulo) =>
+    tenantAllows(allowed, modulo.modulo)
+  )
 }

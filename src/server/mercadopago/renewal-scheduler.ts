@@ -1,4 +1,5 @@
 import { renewalSchedulerTick } from "./service"
+import { runTickPerTenant } from "@/server/tenant/scheduler"
 
 /**
  * Timer en proceso que cumple renovaciones agendadas: reintentos automáticos
@@ -22,7 +23,9 @@ async function tick(): Promise<void> {
   if (ticking) return
   ticking = true
   try {
-    await renewalSchedulerTick()
+    await runTickPerTenant("flujo", async () => {
+      await renewalSchedulerTick()
+    }, "mercadopago: renewal scheduler")
   } catch (error) {
     console.error(
       JSON.stringify({

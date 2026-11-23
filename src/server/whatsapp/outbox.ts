@@ -7,6 +7,8 @@ import {
   logWhatsAppMessageDetached,
 } from "./service"
 import { getWhatsAppStatus, sendWhatsAppText } from "./socket"
+import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
+import { runWithTenant } from "@/server/tenant/context"
 
 /*
  * Dispatcher de la cola de salida de WhatsApp: cada notificación de campana
@@ -182,10 +184,14 @@ async function tick(): Promise<void> {
 
   if (getWhatsAppStatus().status !== "open") return
 
-  const batch = await claimBatch()
-  for (const row of batch) {
-    await sendOne(row)
-  }
+  // Tenancy (§4.2, caso explícito): el dispatcher legado corre bajo el
+  // tenant tvbox (una sola sesión en Fase 1; Fase 4 agrupa por tenant).
+  await runWithTenant(LEGACY_TENANT_ID, async () => {
+    const batch = await claimBatch()
+    for (const row of batch) {
+      await sendOne(row)
+    }
+  })
 }
 
 /** Arranca el dispatcher una sola vez por proceso (idempotente). */

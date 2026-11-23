@@ -4,7 +4,7 @@ import { getFlujoStatus } from "@/server/flujotv/service"
 
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const status = await getFlujoStatus()

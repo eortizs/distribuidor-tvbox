@@ -21,7 +21,7 @@ export async function guardarFlujoAppCampoAction(
   campo: string,
   valor: string
 ): Promise<FlujoAppInfo> {
-  const user = await requireUser()
+  const user = await requireUser("flujo")
   if (user.role !== "admin") {
     throw new Error("Solo un administrador puede editar esta información.")
   }

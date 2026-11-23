@@ -27,7 +27,7 @@ export default async function ConectoresPage({
 }: {
   searchParams: Promise<SearchParams>
 }) {
-  const user = await requireUser()
+  const user = await requireUser("general")
   const params = await searchParams
 
   // Resultado del flujo OAuth, llegado por query. El id de conector solo

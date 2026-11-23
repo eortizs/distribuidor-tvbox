@@ -59,7 +59,7 @@ export async function createPaymentOrderAction(input: {
   /** Concepto de pago: UNA palabra alfanumérica (obligatorio). */
   note: string
 }): Promise<CreatePaymentOrderResult> {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   const amount = Number(input.amountMxn)
   if (!Number.isFinite(amount) || amount < PAYMENT_ORDER_MIN_MXN) {
@@ -155,7 +155,7 @@ export interface PaymentOrderLinkResult {
 export async function getPaymentOrderLinkAction(input: {
   orderId: string
 }): Promise<PaymentOrderLinkResult> {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
   if (!order) return { error: "El link de pago no existe.", order: null }
@@ -228,7 +228,7 @@ export async function resolvePaymentOrderAction(input: {
   decision: "approve" | "reject"
   reason?: string
 }): Promise<ResolvePaymentOrderResult> {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
   if (!order) return { error: "El link de pago no existe." }
@@ -304,7 +304,7 @@ export async function resolvePaymentOrderAction(input: {
 export async function cancelPaymentOrderAction(input: {
   orderId: string
 }): Promise<ResolvePaymentOrderResult> {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
   if (!order) return { error: "El link de pago no existe." }

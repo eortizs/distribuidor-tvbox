@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 }
 
 export default async function CalculadoraPage() {
-  const user = await requireUser()
+  const user = await requireUser("core")
 
   // Cobrar comparte la capacidad del módulo SPEILink: si el admin la
   // ocultó para esta cuenta, la calculadora tampoco ofrece cobros (admins

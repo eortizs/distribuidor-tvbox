@@ -1,4 +1,5 @@
 import { validateMercadoPagoSignature } from "@/server/mercadopago/signature"
+import { runAsPlatform } from "@/server/tenant/context"
 import { processPaymentNotification } from "@/server/mercadopago/service"
 
 interface WebhookPayload {
@@ -25,6 +26,12 @@ interface WebhookPayload {
  * que no nos competen).
  */
 export async function POST(request: Request) {
+  // Webhook de MP (lista blanca §4.2): cross-tenant por diseño — la
+  // plataforma resuelve el pago y cada orden vive en su tenant.
+  return runAsPlatform(() => handleWebhook(request))
+}
+
+async function handleWebhook(request: Request) {
   let payload: WebhookPayload = {}
 
   try {

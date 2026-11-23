@@ -4,7 +4,7 @@ import { errorResponse } from "@/server/http"
 
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { searchParams } = new URL(request.url)

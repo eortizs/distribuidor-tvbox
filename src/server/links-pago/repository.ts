@@ -1,6 +1,11 @@
 import { randomInt } from "node:crypto"
 
-import { pool, type PoolClientLike } from "@/server/db"
+import {
+  pool,
+  systemPool,
+  type PoolClientLike,
+  setTenantContextInTx,
+} from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
 import { paymentOrderConceptAnchor } from "@/lib/links-pago"
@@ -60,6 +65,8 @@ export type PaymentOrderStatus =
 export interface PaymentOrder {
   id: string
   code: string
+  /** Tenant de la orden (RLS); lo trae la resolución pública del link corto. */
+  tenantId: string
   creatorUserId: string
   creatorUsername: string | null
   amountMxn: number
@@ -179,6 +186,7 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
   return {
     id: String(row.id),
     code: String(row.code),
+    tenantId: String(row.tenant_id),
     creatorUserId: String(row.creator_user_id),
     creatorUsername:
       row.creator_username === null || row.creator_username === undefined
@@ -335,7 +343,10 @@ export async function findPendingPaymentOrderByAnyCode(
     ),
   ]
   if (normalized.length === 0) return null
-  const result = await pool.query<Record<string, unknown>>(
+  // Lista blanca (§4.2): la ruta pública spei.link/<código> resuelve la
+  // orden SIN contexto de tenant (el pagador externo no tiene sesión);
+  // el resto de la petición corre bajo runWithTenant(order.tenant_id).
+  const result = await systemPool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
       WHERE o.code = ANY($1) AND o.status IN ('pending','verifying')
       ORDER BY o.created_at ASC LIMIT 1`,
@@ -359,7 +370,8 @@ export async function findResolvedPaymentOrderByAnyCode(
     ),
   ]
   if (normalized.length === 0) return null
-  const result = await pool.query<Record<string, unknown>>(
+  // Lista blanca (§4.2): replay honesto de la ruta pública (sin contexto).
+  const result = await systemPool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
       WHERE o.code = ANY($1) AND o.status IN ('paid','rejected','cancelled')
       ORDER BY o.resolved_at DESC NULLS LAST LIMIT 1`,
@@ -593,13 +605,16 @@ export async function findReservedMpPaymentIds(
   const ids = [...new Set(mpPaymentIds.filter((id) => id.length > 0))]
   const reserved = new Set<string>()
   if (ids.length === 0) return reserved
+  // Lista de trabajo cross-tenant (§4.2): la reserva de depósitos es GLOBAL
+  // (payment_orders + mp_orders comparten la cuenta MP de plataforma); el
+  // check corre sobre systemPool para ver reservas de todos los tenants.
   const [orders, renewals] = await Promise.all([
-    pool.query<{ mp_payment_id: string }>(
+    systemPool.query<{ mp_payment_id: string }>(
       `SELECT mp_payment_id FROM payment_orders
         WHERE mp_payment_id = ANY($1) AND mp_payment_id IS NOT NULL`,
       [ids]
     ),
-    pool.query<{ mp_payment_id: string }>(
+    systemPool.query<{ mp_payment_id: string }>(
       `SELECT mp_payment_id FROM mp_orders
         WHERE mp_payment_id = ANY($1) AND mp_payment_id IS NOT NULL`,
       [ids]
@@ -802,7 +817,9 @@ export interface DepositSweeperAccount {
 export async function listDepositSweeperAccounts(): Promise<
   DepositSweeperAccount[]
 > {
-  const result = await pool.query<{
+  // Lista de trabajo cross-tenant del barrido (§4.2): el verificador barre
+  // depósitos de TODAS las cuentas receptoras; systemPool, no RLS.
+  const result = await systemPool.query<{
     seller_user_id: string | null
     n: number
   }>(
@@ -857,7 +874,8 @@ export async function listDepositClaimantPaymentOrders(
              )
          )`
       : `o.creator_user_id = $3::uuid`
-  const result = await pool.query<Record<string, unknown>>(
+  // Lista de trabajo cross-tenant del match deposit-side (§4.2).
+  const result = await systemPool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
       WHERE o.status = 'verifying' AND o.amount_mxn = $1::numeric
         AND ${sellerFilter}
@@ -925,6 +943,7 @@ export async function confirmPaymentOrderDeposit(input: {
   const tx = await pool.connect()
   try {
     await tx.query("BEGIN")
+    await setTenantContextInTx(tx)
     // Clave del candado = el ID del pago de MP en texto (la MISMA que usa el
     // claim de renovaciones en mercadopago/service.ts).
     await tx.query("SELECT pg_advisory_xact_lock(hashtext($1))", [

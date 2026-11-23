@@ -47,7 +47,7 @@ function isTicketMime(mimeType: string): boolean {
 export async function POST(request: Request) {
   let savedFileId: string | null = null
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     if (licensePriceMxnOrNull() === null) {
@@ -174,7 +174,7 @@ export async function POST(request: Request) {
   } catch (error) {
     // Sin orden no hay ticket que guardar: se elimina el archivo huérfano.
     if (savedFileId) {
-      const userId = (await requireApiUser())?.id
+      const userId = (await requireApiUser("flujo"))?.id
       if (userId) await deleteUserFile(userId, savedFileId).catch(() => {})
     }
     if (error instanceof AppError) return errorResponse(error)

@@ -23,7 +23,7 @@ import {
  */
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
 
     const body = (await request.json().catch(() => null)) as {

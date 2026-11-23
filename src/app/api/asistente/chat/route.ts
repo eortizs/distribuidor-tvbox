@@ -59,7 +59,7 @@ interface ChatBody {
 
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const rows = await loadConversation(user.id, HISTORY_RENDER_TURNS)
@@ -88,7 +88,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     if (!checkRateLimit(user.id)) {

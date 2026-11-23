@@ -60,7 +60,7 @@ async function assertInScope(userName: string, user: AuthUser) {
  */
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const params = new URL(request.url).searchParams
@@ -99,7 +99,7 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)

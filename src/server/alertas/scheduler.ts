@@ -1,4 +1,5 @@
 import { alertasSchedulerTick } from "./service"
+import { runTickPerTenant } from "@/server/tenant/scheduler"
 
 /**
  * Timer en proceso del módulo Alertas: revisa cada minuto las alertas
@@ -20,7 +21,9 @@ async function tick(): Promise<void> {
   if (ticking) return
   ticking = true
   try {
-    await alertasSchedulerTick()
+    await runTickPerTenant("general", async () => {
+      await alertasSchedulerTick()
+    }, "alertas: scheduler")
   } catch (error) {
     console.error(
       JSON.stringify({

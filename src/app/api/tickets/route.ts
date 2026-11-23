@@ -8,7 +8,7 @@ const ESTADOS_VALIDOS = new Set(["borrador", "revision", "confirmado"])
 
 export async function GET(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { searchParams } = new URL(request.url)
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
  */
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const maxBytes = maxUploadBytes()

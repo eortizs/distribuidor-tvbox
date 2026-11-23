@@ -32,7 +32,7 @@ interface PaqueteOrderBody {
  */
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const parsed = await readJsonBody(request)

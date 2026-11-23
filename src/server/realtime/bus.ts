@@ -29,6 +29,12 @@ export type RealtimeKind =
 
 export interface RealtimeEvent {
   kind: RealtimeKind
+  /**
+   * Tenant del evento (§4.6): lo sella publishRealtime desde el contexto ALS
+   * del escritor; el SSE descarta eventos de otros tenants. undefined =
+   * publicado sin contexto (jobs de plataforma).
+   */
+  tenantId?: string | null
   /** Id del recurso tocado (entidad, orden de MP o usuario destino). */
   entityId?: string
   /**
@@ -173,7 +179,14 @@ export async function publishRealtime(
   executor: PoolClientLike,
   event: Omit<RealtimeEvent, "at">
 ): Promise<void> {
-  const payload = JSON.stringify({ ...event, at: new Date().toISOString() })
+  // Sello de tenancy automático: el evento hereda el tenant del contexto del
+  // escritor (ALS); nunca se envía a sesiones de otro tenant.
+  const { currentTenantContext } = await import("@/server/tenant/context")
+  const context = currentTenantContext()
+  const stamped = context && context.source !== "fallback"
+    ? { ...event, tenantId: context.platform ? null : context.tenantId }
+    : event
+  const payload = JSON.stringify({ ...stamped, at: new Date().toISOString() })
   try {
     await executor.query("SELECT pg_notify($1, $2)", [CHANNEL, payload])
   } catch (error) {

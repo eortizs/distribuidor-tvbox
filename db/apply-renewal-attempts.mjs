@@ -10,20 +10,20 @@ import { Client } from "pg";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-if (!process.env.DATABASE_URL) {
+if (!process.env.DATABASE_URL_ADMIN && !process.env.DATABASE_URL) {
   const envPath = path.join(root, ".env");
   try {
     const env = readFileSync(envPath, "utf8");
     const line = env
       .split("\n")
-      .find((row) => row.startsWith("DATABASE_URL="));
-    if (line) process.env.DATABASE_URL = line.slice("DATABASE_URL=".length).trim();
+      .find((row) => row.startsWith("DATABASE_URL_ADMIN="));
+    if (line) process.env.DATABASE_URL_ADMIN ??= line.slice("DATABASE_URL_ADMIN=".length).trim();
   } catch {
     // Sin .env legible: se valida abajo.
   }
 }
 
-if (!process.env.DATABASE_URL) {
+if (!process.env.DATABASE_URL_ADMIN && !process.env.DATABASE_URL) {
   console.error("DATABASE_URL is required (in .env or environment)");
   process.exit(1);
 }
@@ -31,7 +31,10 @@ if (!process.env.DATABASE_URL) {
 const sqlPath = path.join(root, "db", "mp-renewal-attempts-schema.sql");
 const sql = readFileSync(sqlPath, "utf8");
 
-const client = new Client({ connectionString: process.env.DATABASE_URL });
+const client = new Client({
+  connectionString:
+    process.env.DATABASE_URL_ADMIN || process.env.DATABASE_URL,
+});
 await client.connect();
 try {
   await client.query(sql);

@@ -10,7 +10,7 @@ export const metadata = {
 }
 
 export default async function ApiLicenciasPage() {
-  const user = await requireUser()
+  const user = await requireUser("general")
   const status = await getFlujoStatus()
 
   return (

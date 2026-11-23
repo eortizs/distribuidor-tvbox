@@ -49,6 +49,8 @@ import {
 } from "./service"
 import { enqueueAgentTurn, runWhatsAppTurn } from "./agent"
 import { canonicalWhatsAppDigits, whatsappAgentNumber } from "./config"
+import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
+import { runWithTenant } from "@/server/tenant/context"
 
 /*
  * Gateway WhatsApp con Baileys: el número del agente IA se vincula como
@@ -1122,9 +1124,12 @@ async function ensureWhatsAppSocket(): Promise<void> {
     socket.ev.on("messages.upsert", (event) => {
       if (event.type !== "notify") return
       for (const message of event.messages) {
-        void handleIncomingMessage(message).catch((error: unknown) =>
-          log("incoming", error)
-        )
+        // Tenancy (§4.2, caso explícito): el socket legado corre SIEMPRE
+        // bajo el tenant tvbox — sus lecturas/escrituras pasan RLS. Fase 4
+        // parametriza por sesión de tenant.
+        void runWithTenant(LEGACY_TENANT_ID, () =>
+          handleIncomingMessage(message)
+        ).catch((error: unknown) => log("incoming", error))
       }
     })
 

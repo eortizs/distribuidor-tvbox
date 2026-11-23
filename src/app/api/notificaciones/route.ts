@@ -12,7 +12,7 @@ import {
  */
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const feed = await listNotifications(user.id)
@@ -34,7 +34,7 @@ export async function GET() {
  */
 export async function DELETE(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)

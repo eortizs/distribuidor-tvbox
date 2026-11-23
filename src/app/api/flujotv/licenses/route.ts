@@ -8,7 +8,7 @@ import {
 
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const scope = await resolveClientScope(user)

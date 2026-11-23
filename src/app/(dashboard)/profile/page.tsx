@@ -54,7 +54,7 @@ function Fact({
 }
 
 export default async function ProfilePage() {
-  const sessionUser = await requireUser()
+  const sessionUser = await requireUser("core")
   const [profile, userRow, mpToken] = await Promise.all([
     getProfile(sessionUser.id),
     findUserById(sessionUser.id),

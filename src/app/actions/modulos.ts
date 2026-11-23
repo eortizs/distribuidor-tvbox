@@ -24,7 +24,7 @@ export interface SaveModulePrefsResult {
 export async function saveModulePrefsAction(
   input: unknown
 ): Promise<SaveModulePrefsResult> {
-  const user = await requireUser()
+  const user = await requireUser("general")
   const prefs = await saveModulePrefs(user.id, input)
   return { ok: true, prefs, error: null }
 }

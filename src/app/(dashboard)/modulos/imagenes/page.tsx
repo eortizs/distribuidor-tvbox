@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 }
 
 export default async function ImagenesPage() {
-  const user = await requireUser()
+  const user = await requireUser("general")
   const levels = await getImageLevels(user.id)
 
   return (

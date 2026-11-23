@@ -34,7 +34,7 @@ export default async function EntitiesPage({
 }: {
   searchParams: Promise<{ orden?: string; estado?: string }>
 }) {
-  const [user, params] = await Promise.all([requireUser(), searchParams])
+  const [user, params] = await Promise.all([requireUser("flujo"), searchParams])
   const [scope, saldos] = await Promise.all([
     resolveClientScope(user),
     getSaldosActual(user.id),

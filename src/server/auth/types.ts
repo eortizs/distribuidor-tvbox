@@ -19,6 +19,11 @@ export interface AuthUser {
   role: UserRole
   /** URL de la foto de perfil de Google; undefined/null = usar iniciales. */
   googlePicture?: string | null
+  /**
+   * Tenant de la cuenta (users.tenant_id); null = cuenta de plataforma o
+   * legado sin contexto resuelto. Lo fija el guard al validar la sesión.
+   */
+  tenantId?: string | null
 }
 
 export function isValidRole(role: string): role is UserRole {

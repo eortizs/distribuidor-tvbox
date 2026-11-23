@@ -26,7 +26,7 @@ export default async function AbonarSaldoPage({
 }: {
   searchParams: Promise<{ orden?: string; estado?: string }>
 }) {
-  const [user, params] = await Promise.all([requireUser(), searchParams])
+  const [user, params] = await Promise.all([requireUser("flujo"), searchParams])
   const snapshot = await getSaldoSnapshot(user.id)
 
   return (

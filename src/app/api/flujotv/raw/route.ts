@@ -12,7 +12,7 @@ interface RawBody {
 
 export async function POST(request: Request) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
     // Solo admin: la consola cruda permite operar la API de licencias
     // (p. ej. renovaciones) sin pasar por el cobro de Mercado Pago.

@@ -17,7 +17,7 @@ type RouteContext = { params: Promise<{ id: string }> }
  */
 export async function GET(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
     if (user.role !== "admin") {
       throw new AppError(

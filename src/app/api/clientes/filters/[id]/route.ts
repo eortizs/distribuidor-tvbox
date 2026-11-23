@@ -11,7 +11,7 @@ type RouteContext = { params: Promise<{ id: string }> }
 /** Borra uno de los filtros guardados del propio usuario. */
 export async function DELETE(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params
@@ -29,7 +29,7 @@ export async function DELETE(_request: Request, ctx: RouteContext) {
 /** Edita uno de los filtros guardados del propio usuario (nombre, reglas y agrupación). */
 export async function PATCH(request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
 
     const body = await readJsonBody(request)

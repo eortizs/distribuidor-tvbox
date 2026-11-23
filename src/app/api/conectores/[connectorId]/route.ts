@@ -16,7 +16,7 @@ export async function DELETE(
   ctx: RouteContext
 ) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { connectorId } = await ctx.params

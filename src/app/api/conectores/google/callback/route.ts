@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
     return response
   }
 
-  const user = await requireApiUser()
+  const user = await requireApiUser("general")
   if (!user) {
     return back({ error: "sesion_requerida" })
   }

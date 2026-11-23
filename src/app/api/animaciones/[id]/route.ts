@@ -7,7 +7,7 @@ type RouteContext = { params: Promise<{ id: string }> }
 
 export async function DELETE(_request: Request, ctx: RouteContext) {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("general")
     if (!user) return unauthorizedResponse()
 
     const { id } = await ctx.params

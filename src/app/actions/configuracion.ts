@@ -51,7 +51,7 @@ export async function saveImageModelsAction(
   _prev: SaveImageModelsState,
   formData: FormData
 ): Promise<SaveImageModelsState> {
-  const user = await requireUser()
+  const user = await requireUser("general")
 
   const configs = {} as ImageLevelConfigs
   for (const step of QUALITY_STEPS) {

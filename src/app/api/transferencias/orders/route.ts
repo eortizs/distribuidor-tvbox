@@ -61,7 +61,7 @@ function isTicketMime(mimeType: string): boolean {
 export async function POST(request: Request) {
   let savedFileId: string | null = null
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
 
     if (licensePriceMxnOrNull() === null) {
@@ -301,7 +301,7 @@ export async function POST(request: Request) {
   } catch (error) {
     // Sin orden no hay ticket que guardar: se elimina el archivo huérfano.
     if (savedFileId) {
-      const userId = (await requireApiUser())?.id
+      const userId = (await requireApiUser("core"))?.id
       if (userId) await deleteUserFile(userId, savedFileId).catch(() => {})
     }
     if (error instanceof AppError) return errorResponse(error)
@@ -315,7 +315,7 @@ export async function POST(request: Request) {
 /** Transferencias pendientes de revisión (solo admin). */
 export async function GET() {
   try {
-    const user = await requireApiUser()
+    const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
     if (user.role !== "admin") {
       return Response.json(
