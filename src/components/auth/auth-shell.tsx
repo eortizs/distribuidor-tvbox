@@ -1,12 +1,26 @@
 import type { ReactNode } from "react"
 
 import { TvboxWordmark } from "@/components/tvbox-wordmark"
+import { SpeilinkLogo } from "@/components/speilink-logo"
 
-export function AuthShell({ children }: { children: ReactNode }) {
+/**
+ * Marco de login/registro. La marca depende del HOST (multitenant §2.5): el
+ * legado `tvbox` conserva TVBOX Network; los hosts de tenant y plataforma
+ * muestran SPEILink (la marca del producto).
+ */
+export async function AuthShell({ children }: { children: ReactNode }) {
+  const { requestHost } = await import("@/server/tenant/request-host")
+  const { resolveTenantHost } = await import("@/server/tenant/hosts")
+  const hostKind = resolveTenantHost(await requestHost()).kind
+
   return (
     <div className="bg-background flex min-h-svh flex-col items-center justify-center p-4">
       <div className="mb-6 flex items-center">
-        <TvboxWordmark className="h-12" />
+        {hostKind === "legacy" ? (
+          <TvboxWordmark className="h-12" />
+        ) : (
+          <SpeilinkLogo className="h-14" />
+        )}
       </div>
       {children}
     </div>
