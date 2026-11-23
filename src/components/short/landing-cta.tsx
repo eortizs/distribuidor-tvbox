@@ -53,7 +53,7 @@ export function PrimarySignupCta({
         </>
       ) : (
         <>
-          Crear mi cuenta gratis
+          {variant === "banner" ? "Crear mi cuenta" : "Crear mi cuenta gratis"}
           <ArrowRightIcon className="size-4 shrink-0" aria-hidden="true" />
         </>
       )}

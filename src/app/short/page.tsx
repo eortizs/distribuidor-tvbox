@@ -283,8 +283,6 @@ export default function ShortLandingPage() {
                 <PrimarySignupCta variant="hero" />
               </div>
               <div className="mt-3.5 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-xs font-medium text-slate-500 lg:justify-start">
-                <span>Gratis</span>
-                <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
                 <span>Sin tarjetas</span>
                 <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
                 <span>Actívalo en 3 minutos</span>
@@ -573,7 +571,7 @@ export default function ShortLandingPage() {
                   <PrimarySignupCta variant="banner" />
                 </div>
                 <p className="text-xs text-slate-400">
-                  Gratis • Sin tarjetas • Depósito directo a tu cuenta
+                  Sin tarjetas • Depósito directo a tu cuenta
                 </p>
               </div>
             </div>
