@@ -1,7 +1,6 @@
 "use client"
 
 import { useCallback, useEffect, useRef, useState } from "react"
-import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/reui/badge"
@@ -64,16 +63,13 @@ function waHref(phone: string | null): string | null {
 }
 
 export function ClientesRegistry() {
-  const router = useRouter()
   const [clients, setClients] = useState<RegistryClient[]>([])
   const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
-  const [loadSeq, setLoadSeq] = useState(0)
   const loadSeqRef = useRef(0)
 
   const load = useCallback(async (query: string) => {
     const seq = ++loadSeqRef.current
-    setLoadSeq(seq)
     setLoading(true)
     try {
       const response = await fetch(
@@ -94,13 +90,11 @@ export function ClientesRegistry() {
     }
   }, [])
 
-  useEffect(() => {
-    void load("")
-  }, [load])
-
+  // Carga inicial + búsqueda con debounce (el timer mantiene el setState
+  // fuera del cuerpo sincrónico del efecto: regla react-hooks/
+  // set-state-in-effect).
   useEffect(() => {
     const trimmed = search.trim()
-    if (trimmed.length > 0 && trimmed.length < SEARCH_MIN_CHARS) return
     const timer = setTimeout(() => void load(trimmed), SEARCH_DEBOUNCE_MS)
     return () => clearTimeout(timer)
   }, [search, load])

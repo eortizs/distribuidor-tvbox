@@ -31,10 +31,13 @@ const initialState: LoginState = { error: null }
 
 export function LoginForm({
   googleEnabled = false,
+  registerEnabled = true,
   oauthError,
   oauthNotice,
 }: {
   googleEnabled?: boolean
+  /** El registro local SOLO existe en el host legado (§4.5). */
+  registerEnabled?: boolean
   oauthError?: string | null
   oauthNotice?: string | null
 }) {
@@ -112,15 +115,17 @@ export function LoginForm({
           </Button>
           {googleEnabled ? <GoogleAuthButton /> : null}
         </form>
-        <p className="text-muted-foreground mt-4 text-center text-sm">
-          ¿No tienes una cuenta?{" "}
-          <Link
-            href="/register"
-            className="text-primary font-medium underline-offset-4 hover:underline"
-          >
-            Crear cuenta
-          </Link>
-        </p>
+        {registerEnabled ? (
+          <p className="text-muted-foreground mt-4 text-center text-sm">
+            ¿No tienes una cuenta?{" "}
+            <Link
+              href="/register"
+              className="text-primary font-medium underline-offset-4 hover:underline"
+            >
+              Crear cuenta
+            </Link>
+          </p>
+        ) : null}
       </CardContent>
     </Card>
   )

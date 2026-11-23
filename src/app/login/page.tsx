@@ -58,6 +58,7 @@ export default async function LoginPage({
     <AuthShell>
       <LoginForm
         googleEnabled={isGoogleAuthEnabled() && googleOnThisHost}
+        registerEnabled={hostKind === "legacy"}
         oauthError={
           oauthCode && !isNotice
             ? (OAUTH_ERRORS[oauthCode] ?? OAUTH_ERRORS.google_failed)
