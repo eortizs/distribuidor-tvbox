@@ -131,6 +131,19 @@ El panel es multitenant con **Row-Level Security como mecanismo primario de aisl
 - **Branding**: el nombre del tenant va en el título (`generateMetadata` del layout del panel) y como sufijo apagado en la cabecera (`DashboardShell tenantName`); el layout raíz sigue ESTÁTICO (la landing /short no puede volverse dinámica).
 - **Google OAuth**: oculto en hosts de tenant/plataforma (Google no admite wildcards de redirección); `GOOGLE_ALLOWED_HOSTS` (coma-separado) habilita hosts con URI propia registrada.
 
+### Cuenta del negocio y clientes locales (Fase 3, 2026-11-23)
+
+- **Cuenta del negocio a nivel tenant**: las columnas bancarias viven en `tenants` (`bank_name/bank_holder/bank_clabe`, Fase 1) y el token de Mercado Pago del negocio en `tenant_mp_tokens` (migración `db/apply-tenant-business.mjs`; espejo de `user_mp_tokens` con PK tenant_id, mismo cifrado AES-256-GCM de los conectores, trigger + RLS + grants). Repo: `src/server/tenants/business.ts` (validación contra `GET /users/me`, write-only).
+- **Resolución por niveles** (cuenta receptora de dinero): (1) perfil propio completo del usuario; (2) datos/token del NEGOCIO de su tenant; (3) cuenta de plataforma del `.env` SOLO si `tenants.use_platform_mp_account` es true (el legado lo tiene) y quien cobra es propietario. Implementada en `links-pago/bank.ts` (`resolveCreatorBankData`) y `mercadopago/tokens.ts` (`resolveSellerMpAccessToken` + `resolvePaymentOrderDepositToken`); el verificador de depósitos la considera en `depositCredentialExistsSql`, `listDepositSweeperAccounts` y el filtro del claimant (`links-pago/repository.ts`). El legado conserva su comportamiento exacto (perfil propio o env).
+- **Perfil (§3.4)**: tarjeta nueva «Datos del negocio» (propietario edita banco/destinatario/CLABE + token MP del negocio; sucursal solo lectura); la tarjeta personal pasa a «Cuenta propia (opcional)» con la explicación de que vacía = cobrar a la cuenta del negocio. Acciones `updateBusinessBankingAction`/`clearBusinessMpToken` en `src/app/actions/profile.ts`.
+- **Clientes locales (§3.5)**: tabla `clients` (nombre ≤100, WhatsApp 8–15 dígitos, notas ≤2000, archivado suave) + `payment_orders.client_id` (migración `db/apply-clients.mjs`, trigger + RLS). Repo `src/server/clientes/registry.ts`; API `/api/clientes-registry` (GET ?q / POST / PATCH / DELETE-archivar, módulo core, RLS por tenant). Vista `ClientesRegistry` (patrón Notas: buscador con debounce + guardia de secuencia, alta/edición, archivado con confirmación, refresco en vivo por el evento `clients` del bus — nueva kind en `realtime-provider`). **`/clientes` ramifica por tipo de tenant**: business → registro local; legado → acordeón FlujoTV intacto (por eso `/clientes` y `/profile` son CORE en `tenant-modules.ts`).
+- **Links de pago**: selector opcional «Cliente» al crear (aparece solo si el negocio tiene clientes), validado contra el tenant al crear (`createPaymentOrder clientId`), chip del cliente en la lista.
+
+### WhatsApp multisession (Fase 4 — alcance de esta entrega)
+
+- El socket LEGADO conserva su singleton actual y su carpeta `storage/whatsapp-session/` corriendo bajo `runWithTenant(LEGACY_TENANT_ID)` (Fase 1). Las convenciones multisession quedan preparadas: `tenants.whatsapp_number/whatsapp_linked_at/whatsapp_last_seen_at` (Fase 1), carpeta futura por tenant `storage/whatsapp-sessions/<slug>/` y el número sembrado desde `WHATSAPP_AGENT_NUMBER` al arranque (no pisa valores ya fijados). **La activación de la segunda sesión Baileys se hace en la Fase 5, cuando el primer tenant de negocio vincule su número** (nunca dos procesos con las mismas llaves; el socket legado jamás se toca mientras sirve tráfico real).
+- **Sin migraciones ni variables nuevas** en esta entrega de Fase 4.
+
 ### Variables nuevas (`.env`)
 
 - `DATABASE_URL_ADMIN`: credenciales del DUEÑO (`admin`) para migraciones; sin ella los `apply-*.mjs` caen a `DATABASE_URL`.
