@@ -12,3 +12,14 @@ export async function requestHost(): Promise<string> {
     store.get("x-forwarded-host")?.split(",")[0] ?? store.get("host") ?? ""
   return raw.split(":")[0]?.trim().toLowerCase() ?? ""
 }
+
+/**
+ * Origen público de la petición actual (esquema + host del borde), para
+ * redirigir dentro del MISMO host en paneles que no tienen URL propia en el
+ * entorno (cada tenant `*.spei.link`). En producción todo el tráfico público
+ * es https y el esquema no se toma de cabeceras del cliente.
+ */
+export async function requestOrigin(): Promise<string> {
+  const scheme = process.env.NODE_ENV === "production" ? "https" : "http"
+  return `${scheme}://${await requestHost()}`
+}

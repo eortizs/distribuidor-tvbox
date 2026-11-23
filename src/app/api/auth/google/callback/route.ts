@@ -4,123 +4,89 @@ import { createSession } from "@/server/auth/session"
 import {
   GOOGLE_LINK_COOKIE,
   GOOGLE_STATE_COOKIE,
-  buildGoogleRedirectUri,
   createGoogleLinkToken,
   exchangeGoogleCode,
   googleLinkCookieOptions,
   googleStateCookieOptions,
-  isGoogleAuthEnabled,
-  publicOrigin,
+  googleTenantSignupMode,
+  speilinkGoogleRelayHost,
   verifyGoogleState,
 } from "@/server/auth/google"
+import { googleKitForFlow, resolveGoogleEntry } from "@/server/auth/google-host"
 import {
-  findUserByGoogleSub,
-  findUserByUsername,
-  updateUser,
-} from "@/server/auth/users"
-import { createAccount } from "@/server/auth/accounts"
+  buildRelayTargetUrl,
+  isTenantOAuthState,
+  parseOAuthState,
+} from "@/server/auth/google-relay"
+import { resolveGoogleUser } from "@/server/auth/google-users"
+import { updateUser } from "@/server/auth/users"
 import { populateFullNameFromGoogle } from "@/server/auth/profile"
-import { normalizeEmail, type AuthUser } from "@/server/auth/types"
-import { AppError } from "@/server/umejson/types"
+import { normalizeEmail } from "@/server/auth/types"
+import { tenantIdOfUser } from "@/server/tenant/context"
+import {
+  isValidTenantSlug,
+  resolveTenantHost,
+  tenantHostForSlug,
+} from "@/server/tenant/hosts"
+import { hostTenantIdForRequest, validateSessionHost } from "@/server/tenant/identity"
+import { requestHost } from "@/server/tenant/request-host"
 
-type Resolution =
-  | { kind: "session"; user: AuthUser; storedPicture: string | null }
-  | { kind: "link" }
-  | { kind: "conflict" }
-
-function toSessionUser(user: {
-  id: string
-  username: string
-  role: AuthUser["role"]
-  googlePicture: string | null
-}): { user: AuthUser; storedPicture: string | null } {
-  return {
-    user: {
-      id: user.id,
-      username: user.username,
-      role: user.role,
-      googlePicture: user.googlePicture,
-    },
-    storedPicture: user.googlePicture,
-  }
+function neutralNotFound(): NextResponse {
+  return new NextResponse("Not Found", { status: 404 })
 }
 
 /**
- * Resuelve la cuenta para una identidad Google verificada: por google_sub,
- * luego por correo (vínculo pendiente de prueba por contraseña) o creándola
- * como distribuidor. Si la creación pierde una carrera (23505, otra petición
- * creó la cuenta primero), reintenta la resolución con la fila ya existente.
+ * Relevo (host de la URI fija del cliente SPEILink): Google vuelve aquí desde
+ * cualquier tenant, el `state` dice a cuál y la petición se reenvía a SU
+ * callback, que es quien valida la cookie de estado y canjea el código. El
+ * host de destino sale del slug validado y de que el tenant exista y esté
+ * activo; sin `state` de tenant no hay a dónde volver (landing del apex).
  */
-async function resolveGoogleUser(
-  profile: { sub: string; email: string; picture: string | null; name: string | null },
-  email: string
-): Promise<Resolution> {
-  // 1) Cuenta ya ligada por google_sub.
-  const bySub = await findUserByGoogleSub(profile.sub)
-  if (bySub) {
-    return { kind: "session", ...toSessionUser(bySub) }
-  }
+async function relayToTenant(request: NextRequest): Promise<NextResponse | null> {
+  const host = await requestHost()
+  if (host !== speilinkGoogleRelayHost()) return null
+  // El host del panel legado tiene su propio callback: ahí nunca se relea.
+  if (resolveTenantHost(host).kind === "legacy") return null
 
-  // 2) Cuenta local con el mismo correo: el dueño debe probar posesión
-  //    iniciando sesión con su contraseña; el vínculo automático por correo
-  //    no verificado permitiría adelantarse a la cuenta real.
-  const local = await findUserByUsername(email)
-  if (local) {
-    if (local.googleSub && local.googleSub !== profile.sub) {
-      return { kind: "conflict" }
-    }
-    if (!local.googleSub) {
-      return { kind: "link" }
-    }
-    return { kind: "session", ...toSessionUser(local) }
-  }
+  const landing = () => NextResponse.redirect(new URL("/", `https://${host}`))
+  const state = request.nextUrl.searchParams.get("state")
+  const parsed = parseOAuthState(state, isValidTenantSlug)
+  if (parsed?.kind !== "tenant") return landing()
 
-  // 3) Cuenta nueva de Google (distribuidor, sin contraseña local).
-  try {
-    const created = await createAccount({
-      email,
-      googleSub: profile.sub,
-      googlePicture: profile.picture,
-      fullName: profile.name ?? undefined,
-      source: "google-oauth",
-    })
-    return {
-      kind: "session",
-      user: created,
-      storedPicture: profile.picture,
-    }
-  } catch (error) {
-    if (error instanceof AppError && error.code === "email_taken") {
-      // Carrera: otra petición registró el correo entre la consulta y el
-      // INSERT; la resolución sobre la fila existente siempre termina.
-      return resolveGoogleUser(profile, email)
-    }
-    throw error
-  }
+  const tenantHost = tenantHostForSlug(parsed.slug)
+  if (!(await hostTenantIdForRequest(tenantHost))) return neutralNotFound()
+  const target = buildRelayTargetUrl(
+    `https://${tenantHost}`,
+    {
+      code: request.nextUrl.searchParams.get("code"),
+      state,
+      error: request.nextUrl.searchParams.get("error"),
+    },
+    isValidTenantSlug
+  )
+  if (!target) return landing()
+  return NextResponse.redirect(target)
 }
 
 /**
  * Callback de Google OAuth. Valida el estado anti-CSRF, canjea el código y
- * resuelve la cuenta. Cualquier fallo vuelve a /login con un error genérico
- * para el comprador; el detalle queda en logs.
+ * resuelve la cuenta — todo en el MISMO host donde vivirá la sesión, con el
+ * cliente de ese host. Cualquier fallo vuelve al /login de este panel con un
+ * error para el comprador; el detalle queda en logs.
  *
  * `connection()` detiene el prerender del build: el estado y el código son
  * de una sola petición y nunca deben congelarse en salida estática.
  */
 export async function GET(request: NextRequest) {
   await connection()
-  const { requestHost } = await import("@/server/tenant/request-host")
-  const { hostTenantIdForRequest } = await import("@/server/tenant/identity")
-  const { setRequestContext } = await import("@/server/tenant/context")
-  const host = await requestHost()
-  const entryTenantId = await hostTenantIdForRequest(host)
-  if (entryTenantId) {
-    // Contexto = tenant del host (§4.2 caso anónimo): la resolución de la
-    // identidad queda acotada a las cuentas del panel de este host.
-    setRequestContext({ tenantId: entryTenantId, platform: false, source: "host" })
-  }
+  const relayed = await relayToTenant(request)
+  if (relayed) return relayed
+
+  const entry = await resolveGoogleEntry()
+  if (entry.status === "not-found") return neutralNotFound()
+  const origin = entry.origin
+
   const stateCookie = request.cookies.get(GOOGLE_STATE_COOKIE)?.value
-  const origin = publicOrigin()
 
   const fail = (reason: string, log?: unknown) => {
     if (log) {
@@ -142,7 +108,11 @@ export async function GET(request: NextRequest) {
     return response
   }
 
-  if (!isGoogleAuthEnabled()) {
+  if (entry.status === "disabled") {
+    return fail("google_disabled")
+  }
+  const kit = googleKitForFlow(entry.flow)
+  if (!kit) {
     return fail("google_disabled")
   }
 
@@ -154,6 +124,13 @@ export async function GET(request: NextRequest) {
     return fail("google_cancelled")
   }
   if (!state || !verifyGoogleState(stateCookie, state)) {
+    return fail("google_state")
+  }
+  // El callback de un tenant solo acepta el `state` nacido en ESE tenant.
+  if (
+    entry.tenantSlug &&
+    !isTenantOAuthState(state, entry.tenantSlug, isValidTenantSlug)
+  ) {
     return fail("google_state")
   }
 
@@ -170,22 +147,34 @@ export async function GET(request: NextRequest) {
 
   let profile: Awaited<ReturnType<typeof exchangeGoogleCode>>
   try {
-    profile = await exchangeGoogleCode(code, buildGoogleRedirectUri())
+    profile = await exchangeGoogleCode(code, kit.redirectUri, kit.client)
   } catch (error) {
     return fail("google_failed", error)
   }
 
-  const email = normalizeEmail(profile.email)
-
-  let resolution: Resolution
+  let resolution: Awaited<ReturnType<typeof resolveGoogleUser>>
   try {
-    resolution = await resolveGoogleUser(profile, email)
+    resolution = await resolveGoogleUser(
+      profile,
+      normalizeEmail(profile.email),
+      {
+        tenantId: entry.tenantId,
+        allowSignup:
+          entry.tenantSlug === null || googleTenantSignupMode() === "open",
+      }
+    )
   } catch (error) {
     return fail("google_failed", error)
   }
 
   if (resolution.kind === "conflict") {
     return fail("google_linked_other")
+  }
+  if (resolution.kind === "elsewhere") {
+    return fail("google_other_panel")
+  }
+  if (resolution.kind === "not_registered") {
+    return fail("google_not_registered")
   }
 
   if (resolution.kind === "link") {
@@ -198,7 +187,7 @@ export async function GET(request: NextRequest) {
     })
     linkResponse.cookies.set(
       GOOGLE_LINK_COOKIE,
-      createGoogleLinkToken(profile),
+      createGoogleLinkToken(profile, kit.client),
       googleLinkCookieOptions()
     )
     return linkResponse
@@ -219,20 +208,20 @@ export async function GET(request: NextRequest) {
       resolution.user.username
     )
   }
-  // Host ↔ cuenta: la cuenta resuelta debe pertenecer al host actual
-  // (misma regla que loginAction; la cookie jamás vale en otro host).
-  const { validateSessionHost: validateHost } = await import(
-    "@/server/tenant/identity"
-  )
-  const { tenantIdOfUser } = await import("@/server/tenant/context")
+  // Host ↔ cuenta: la cuenta resuelta debe pertenecer al panel del host
+  // actual (misma regla que loginAction; la cookie jamás vale en otro host).
+  // En un tenant la comprobación es por tenant exacto, no por tipo de host.
   const resolvedTenantId = await tenantIdOfUser(resolution.user.id)
-  if (!validateHost(resolvedTenantId, await requestHost())) {
-    const url = request.nextUrl.clone()
-    url.pathname = "/login"
-    url.searchParams.set("error", "google_host_mismatch")
-    return NextResponse.redirect(url)
+  const inThisPanel =
+    entry.tenantSlug !== null
+      ? resolvedTenantId === entry.tenantId
+      : validateSessionHost(resolvedTenantId, entry.host)
+  if (!inThisPanel) {
+    return fail("google_host_mismatch")
   }
 
-  await createSession(resolution.user)
+  // El tenant de la sesión va explícito: el INSERT corre por systemPool, sin
+  // el GUC del contexto, y el trigger no tendría de dónde tomarlo.
+  await createSession({ ...resolution.user, tenantId: resolvedTenantId })
   return response
 }

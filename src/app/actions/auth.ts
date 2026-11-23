@@ -12,6 +12,7 @@ import {
   googleLinkCookieOptions,
   verifyGoogleLinkToken,
 } from "@/server/auth/google"
+import { googleFlowForRequest, googleKitForFlow } from "@/server/auth/google-host"
 import {
   isValidEmail,
   normalizeEmail,
@@ -120,21 +121,35 @@ export async function loginAction(
 
   // Vínculo pendiente de Google: la contraseña acaba de probar que el que
   // inicia sesión es el dueño de la cuenta, así que el sub (con su foto y
-  // nombre) puede enlazarse.
+  // nombre) puede enlazarse. La cookie la firmó el cliente del flujo de ESTE
+  // host (legado o SPEILink): se verifica con ese mismo secreto.
   const cookieStore = await cookies()
-  const linkToken = verifyGoogleLinkToken(
-    cookieStore.get(GOOGLE_LINK_COOKIE)?.value,
-    user.username
-  )
+  const flow = await googleFlowForRequest()
+  const kit = flow ? googleKitForFlow(flow) : null
+  const linkToken = kit
+    ? verifyGoogleLinkToken(
+        cookieStore.get(GOOGLE_LINK_COOKIE)?.value,
+        user.username,
+        kit.client
+      )
+    : null
   if (linkToken && !user.googleSub) {
-    await updateUser(user.id, {
-      googleSub: linkToken.sub,
-      // undefined = sin cambio: la foto solo se escribe si el token la trae.
-      googlePicture: linkToken.picture ?? undefined,
-    })
-    if (linkToken.name) {
-      // Solo rellena fullName si está vacío; nunca pisa ediciones manuales.
-      await populateFullNameFromGoogle(user.id, linkToken.name, user.username)
+    try {
+      await updateUser(user.id, {
+        googleSub: linkToken.sub,
+        // undefined = sin cambio: la foto solo se escribe si el token la trae.
+        googlePicture: linkToken.picture ?? undefined,
+      })
+      if (linkToken.name) {
+        // Solo rellena fullName si está vacío; nunca pisa ediciones manuales.
+        await populateFullNameFromGoogle(user.id, linkToken.name, user.username)
+      }
+    } catch (error) {
+      // La identidad Google ya vive en OTRO panel (índice único GLOBAL
+      // users_by_google_sub, invisible bajo RLS): el vínculo es imposible
+      // y se omite — el login por contraseña sigue; el flujo Google de ese
+      // sub ya responde google_other_panel en el callback.
+      if ((error as { code?: string }).code !== "23505") throw error
     }
   }
   if (cookieStore.get(GOOGLE_LINK_COOKIE)) {

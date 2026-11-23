@@ -4,14 +4,13 @@
  *   node assets/generate-icons.mjs
  *
  * Salidas:
- *   src/app/icon.svg                      favicon (cuadrado, alterna con prefers-color-scheme)
  *   src/app/apple-icon.png                180x180 (iOS, cuadrado sin radio)
  *   public/icons/icon-192.png             192x192 (cualquier propósito)
  *   public/icons/icon-512.png             512x512 (cualquier propósito)
  *   public/icons/icon-maskable-512.png   512x512 (con máscara, zona segura)
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
@@ -79,33 +78,6 @@ function layout(bbox, height) {
   }
 }
 
-/** SVG del favicon: la misma composición, con clases para poder invertir el tema. */
-function iconSvg(box) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CANVAS} ${CANVAS}" width="${CANVAS}" height="${CANVAS}" role="img" aria-label="TVBOX">
-  <title>TVBOX</title>
-  <style>
-    .tile { fill: ${TILE}; }
-    .body { fill: ${INK}; }
-    .face { fill: ${TILE}; }
-    .eye { fill: ${INK}; }
-    @media (prefers-color-scheme: dark) {
-      .tile { fill: ${INK}; }
-      .body { fill: ${TILE}; }
-      .face { fill: ${INK}; }
-      .eye { fill: ${TILE}; }
-    }
-  </style>
-  <rect class="tile" width="${CANVAS}" height="${CANVAS}" rx="${CORNER}"/>
-  <g transform="translate(${box.x.toFixed(3)} ${box.y.toFixed(3)}) scale(${box.scale.toFixed(5)})">
-    <path class="body" d="${body.d}"/>
-    <path class="face" d="${face.d}"/>
-    <path class="eye" d="${eyeLeft.d}"/>
-    <path class="eye" d="${eyeRight.d}"/>
-  </g>
-</svg>
-`
-}
-
 /** SVG plano (colores fijos) para rasterizar con sharp. */
 function flatIconSvg(box, { radius, tile }) {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CANVAS} ${CANVAS}" width="${CANVAS}" height="${CANVAS}">
@@ -128,9 +100,6 @@ async function png(svg, size, file) {
 const bbox = await measureMascot()
 const standard = layout(bbox, MASCOT_HEIGHT)
 const maskable = layout(bbox, MASKABLE_HEIGHT)
-
-await writeFile(path.join(root, "src/app/icon.svg"), iconSvg(standard))
-console.log("✓ src/app/icon.svg")
 
 await png(
   flatIconSvg(standard, { radius: 0, tile: TILE }),

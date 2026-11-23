@@ -2,7 +2,7 @@ import { redirect } from "next/navigation"
 
 import { AuthShell } from "@/components/auth/auth-shell"
 import { LoginForm } from "@/components/auth/login-form"
-import { isGoogleAuthEnabled } from "@/server/auth/google"
+import { googleFlowForRequest } from "@/server/auth/google-host"
 import { getSessionUser } from "@/server/auth/session"
 
 export const instant = false
@@ -19,6 +19,12 @@ const OAUTH_ERRORS: Record<string, string> = {
   google_failed: "No se pudo iniciar sesión con Google.",
   google_linked_other:
     "Ese correo ya está ligado a otra cuenta de Google.",
+  google_host_mismatch:
+    "Esta cuenta pertenece a otro panel. Inicia sesión desde el dominio de tu panel.",
+  google_other_panel:
+    "Esa cuenta de Google ya está registrada en otro panel. Inicia sesión desde el dominio de tu panel.",
+  google_not_registered:
+    "No hay una cuenta con ese correo en este panel. Pide al propietario que te dé de alta.",
   google_link_required:
     "Para usar Google con tu cuenta, inicia sesión con tu contraseña: quedará vinculada para las próximas veces.",
 }
@@ -40,24 +46,19 @@ export default async function LoginPage({
   const oauthCode = params.error
   const isNotice = oauthCode != null && oauthCode in OAUTH_NOTICES
 
-  // Google OAuth solo en el host legado (Google no admite wildcards de
-  // redirección); GOOGLE_ALLOWED_HOSTS (separado por comas) habilita hosts
-  // con URI propia registrada en Google Cloud Console.
+  // Google OAuth por host: el panel legado usa su cliente y cada tenant
+  // `*.spei.link` el cliente SPEILink (relevo por la URI fija); sin el
+  // cliente del host configurado el botón se oculta.
   const { requestHost } = await import("@/server/tenant/request-host")
   const { resolveTenantHost } = await import("@/server/tenant/hosts")
   const currentHost = await requestHost()
   const hostKind = resolveTenantHost(currentHost).kind
-  const allowedHosts = (process.env.GOOGLE_ALLOWED_HOSTS || "")
-    .split(",")
-    .map((h) => h.trim().toLowerCase())
-    .filter(Boolean)
-  const googleOnThisHost =
-    hostKind === "legacy" || allowedHosts.includes(currentHost)
+  const googleEnabled = (await googleFlowForRequest()) !== null
 
   return (
     <AuthShell>
       <LoginForm
-        googleEnabled={isGoogleAuthEnabled() && googleOnThisHost}
+        googleEnabled={googleEnabled}
         registerEnabled={hostKind === "legacy"}
         oauthError={
           oauthCode && !isNotice

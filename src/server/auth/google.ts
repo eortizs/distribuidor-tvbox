@@ -1,8 +1,14 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
-import { publicSiteUrl } from "@/server/site-url"
-import { normalizeEmail } from "./types"
+import { publicSiteUrl, shortLinkBaseUrl } from "@/server/site-url"
 import { AppError } from "@/server/umejson/types"
+import {
+  OAUTH_CALLBACK_PATH,
+  type GoogleFlow,
+  type TenantSignupMode,
+  tenantSignupMode,
+} from "./google-relay"
+import { normalizeEmail } from "./types"
 
 /**
  * Google OAuth 2.0 (authorization code flow) para el panel.
@@ -14,6 +20,10 @@ import { AppError } from "@/server/umejson/types"
  * del código ligado a nuestro client secret, así que la validación de claims
  * (iss/aud/exp/email_verified) es suficiente sin verificar la firma JWT,
  * que solo es obligatoria para tokens recibidos por otros canales.
+ *
+ * Hay DOS clientes de Google (ver `GoogleFlow` en ./google-relay): el del
+ * panel legado y el de SPEILink, que sirve a todos los tenants `*.spei.link`
+ * con una sola URI de redirección fija que actúa de relevo.
  */
 
 const GOOGLE_AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -28,6 +38,103 @@ const STATE_TTL_SECONDS = 600
 
 export function isGoogleAuthEnabled(): boolean {
   return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
+}
+
+/** Cliente de Google con el que corre un flujo (id + secret del entorno). */
+export interface GoogleClient {
+  id: string
+  secret: string
+}
+
+/** Cliente + URI de redirección registrada en Google para ese cliente. */
+export interface GoogleClientKit {
+  client: GoogleClient
+  redirectUri: string
+}
+
+function clientFromEnv(
+  id: string | undefined,
+  secret: string | undefined
+): GoogleClient | null {
+  const clientId = id?.trim()
+  const clientSecret = secret?.trim()
+  if (!clientId || !clientSecret) return null
+  return { id: clientId, secret: clientSecret }
+}
+
+/** Cliente del panel legado (TVBOX): `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`. */
+export function legacyGoogleClient(): GoogleClient | null {
+  return clientFromEnv(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  )
+}
+
+/**
+ * URI de redirección del cliente SPEILink: la ÚNICA que se registra en
+ * Google para todos los tenants (`GOOGLE_REDIRECT_URI_SPEILINK`; por defecto
+ * el callback en el apex). El host de esta URI hace de relevo.
+ */
+export function speilinkGoogleRedirectUri(): string {
+  return (
+    process.env.GOOGLE_REDIRECT_URI_SPEILINK?.trim() ||
+    new URL(OAUTH_CALLBACK_PATH, shortLinkBaseUrl()).toString()
+  )
+}
+
+function isValidSpeilinkRedirectUri(uri: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(uri)
+  } catch {
+    return false
+  }
+  const schemeOk =
+    parsed.protocol === "https:" ||
+    (parsed.protocol === "http:" && process.env.NODE_ENV !== "production")
+  return (
+    schemeOk &&
+    parsed.pathname === OAUTH_CALLBACK_PATH &&
+    !parsed.search &&
+    !parsed.hash
+  )
+}
+
+/**
+ * Cliente SPEILink para los tenants `*.spei.link`:
+ * `GOOGLE_CLIENT_ID_SPEILINK` / `GOOGLE_CLIENT_SECRET_SPEILINK`. Falla
+ * cerrado (null) si la URI de redirección configurada no tiene la forma del
+ * callback: un valor a medias rompería el canje en Google.
+ */
+export function speilinkGoogleClient(): GoogleClient | null {
+  if (!isValidSpeilinkRedirectUri(speilinkGoogleRedirectUri())) return null
+  return clientFromEnv(
+    process.env.GOOGLE_CLIENT_ID_SPEILINK,
+    process.env.GOOGLE_CLIENT_SECRET_SPEILINK
+  )
+}
+
+/** Host de la URI fija: la petición que llega ahí hace de RELEVO. */
+export function speilinkGoogleRelayHost(): string | null {
+  try {
+    return new URL(speilinkGoogleRedirectUri()).hostname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+export function googleClientKit(flow: GoogleFlow): GoogleClientKit | null {
+  if (flow === "speilink") {
+    const client = speilinkGoogleClient()
+    return client ? { client, redirectUri: speilinkGoogleRedirectUri() } : null
+  }
+  const client = legacyGoogleClient()
+  return client ? { client, redirectUri: buildGoogleRedirectUri() } : null
+}
+
+/** Alta por Google en tenants de negocio: abierta o solo por invitación. */
+export function googleTenantSignupMode(): TenantSignupMode {
+  return tenantSignupMode(process.env.GOOGLE_TENANT_SIGNUP)
 }
 
 export function createGoogleState(): string {
@@ -60,13 +167,21 @@ export function publicOrigin(): string {
   return publicSiteUrl()
 }
 
+/**
+ * URI registrada en Google para el cliente del panel legado: vive en el
+ * propio host legado (no hay relevo).
+ */
 export function buildGoogleRedirectUri(): string {
-  return new URL("/api/auth/google/callback", publicOrigin()).toString()
+  return new URL(OAUTH_CALLBACK_PATH, publicOrigin()).toString()
 }
 
-export function buildGoogleAuthorizationUrl(redirectUri: string, state: string): string {
+export function buildGoogleAuthorizationUrl(
+  client: GoogleClient,
+  redirectUri: string,
+  state: string
+): string {
   const params = new URLSearchParams({
-    client_id: process.env.GOOGLE_CLIENT_ID ?? "",
+    client_id: client.id,
     redirect_uri: redirectUri,
     response_type: "code",
     scope: "openid email profile",
@@ -156,12 +271,13 @@ function sanitizeGoogleName(value: string | undefined): string | null {
 const LINK_TTL_SECONDS = 600
 
 /**
- * Clave HMAC de los tokens de vínculo. Sin `GOOGLE_CLIENT_SECRET` el flujo
- * de vínculo queda deshabilitado: la verificación falla cerrado (null) en
- * vez de aceptar firmas con clave vacía, que cualquiera podría forjar.
+ * Clave HMAC de los tokens de vínculo: el client secret del cliente que
+ * corrió el flujo (el del host donde se emite Y se canjea la cookie). Sin
+ * secreto el flujo de vínculo queda deshabilitado: la verificación falla
+ * cerrado (null) en vez de aceptar firmas con clave vacía.
  */
-function googleLinkKey(): string | null {
-  const secret = process.env.GOOGLE_CLIENT_SECRET?.trim()
+function googleLinkKey(client: GoogleClient): string | null {
+  const secret = client.secret.trim()
   return secret ? secret : null
 }
 
@@ -176,8 +292,11 @@ function linkHmac(payload: string, key: string): string {
  * contraseña la canjea para enlazar google_sub (y su foto y nombre) a la
  * cuenta local probando su dueño.
  */
-export function createGoogleLinkToken(profile: GoogleProfile): string {
-  const key = googleLinkKey()
+export function createGoogleLinkToken(
+  profile: GoogleProfile,
+  client: GoogleClient
+): string {
+  const key = googleLinkKey(client)
   if (!key) {
     throw new AppError(
       500,
@@ -202,9 +321,10 @@ export interface VerifiedGoogleLink {
 /** Valida un token de vínculo (firma + expiración + correo esperado). */
 export function verifyGoogleLinkToken(
   token: string | undefined,
-  expectedEmail: string
+  expectedEmail: string,
+  client: GoogleClient
 ): VerifiedGoogleLink | null {
-  const key = googleLinkKey()
+  const key = googleLinkKey(client)
   if (!key || !token) return null
   const dot = token.lastIndexOf(".")
   if (dot === -1) return null
@@ -251,13 +371,19 @@ export function googleLinkCookieOptions() {
   }
 }
 
-/** Canjea el código de autorización y devuelve el perfil verificado. */
+/**
+ * Canjea el código de autorización y devuelve el perfil verificado.
+ * `redirectUri` debe ser EXACTAMENTE el de la petición de autorización
+ * (en el flujo de tenants es la URI fija del relevo, no la del host donde
+ * corre este canje).
+ */
 export async function exchangeGoogleCode(
   code: string,
-  redirectUri: string
+  redirectUri: string,
+  client: GoogleClient
 ): Promise<GoogleProfile> {
-  const clientId = process.env.GOOGLE_CLIENT_ID
-  const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+  const clientId = client.id
+  const clientSecret = client.secret
   if (!clientId || !clientSecret) {
     throw new AppError(500, "google_not_configured", "Google OAuth is not configured")
   }

@@ -56,3 +56,6 @@ agent/sandbox/workspace/out/
 agent/sandbox/workspace/sims/dist/
 agent/sandbox/workspace/public/*.wav
 client_secret_*.json
+
+# credenciales OAuth entregadas por el dueño (nunca al repo)
+assets/OAuth_*.txt
