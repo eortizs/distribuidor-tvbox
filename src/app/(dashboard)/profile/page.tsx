@@ -21,6 +21,11 @@ import { requireUser } from "@/server/auth/guards"
 import { getProfile } from "@/server/auth/profile"
 import { findUserById } from "@/server/auth/users"
 import { getUserMpTokenStatus } from "@/server/mercadopago/tokens"
+import {
+  getTenantBanking,
+  getTenantMpTokenStatus,
+} from "@/server/tenants/business"
+import { effectiveDbContext } from "@/server/tenant/context"
 
 export const instant = false
 
@@ -66,6 +71,17 @@ export default async function ProfilePage() {
     redirect("/login")
   }
   const { email, role, createdAt, account } = profile
+
+  // Datos del NEGOCIO del tenant de la cuenta (Fase 3 §3.4): propietario
+  // edita; sucursal ve en modo lectura. Plataforma (sin tenant): sin tarjeta.
+  const context = await effectiveDbContext()
+  const tenantId = context?.tenantId ?? null
+  const [business, businessMpToken] = tenantId
+    ? await Promise.all([
+        getTenantBanking(tenantId).catch(() => null),
+        getTenantMpTokenStatus(tenantId).catch(() => null),
+      ])
+    : [null, null]
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
@@ -125,6 +141,18 @@ export default async function ProfilePage() {
               bankHolder={account?.bankHolder ?? ""}
               bankClabe={account?.bankClabe ?? ""}
               mpToken={mpToken}
+              business={
+                business
+                  ? {
+                      bankName: business.bankName ?? "",
+                      bankHolder: business.bankHolder ?? "",
+                      bankClabe: business.bankClabe ?? "",
+                    }
+                  : null
+              }
+              businessMpToken={businessMpToken}
+              canEditBusiness={isOwnerRole(role)}
+              showBusinessCard={tenantId !== null}
             />
           </div>
         </TabsContent>

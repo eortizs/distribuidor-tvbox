@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
 import {
+  clearBusinessMpToken,
   clearMpToken,
   updateBankingAction,
+  updateBusinessBankingAction,
   updateProfileAction,
   type UpdateProfileState,
 } from "@/app/actions/profile"
@@ -54,6 +56,10 @@ export function ProfileForm({
   bankHolder,
   bankClabe,
   mpToken,
+  business,
+  businessMpToken,
+  canEditBusiness,
+  showBusinessCard,
 }: {
   fullName: string
   whatsappPhone: string
@@ -61,6 +67,13 @@ export function ProfileForm({
   bankHolder: string
   bankClabe: string
   mpToken: MpTokenStatus | null
+  /** Datos del negocio del tenant (Fase 3); null = cuenta sin negocio. */
+  business: { bankName: string; bankHolder: string; bankClabe: string } | null
+  businessMpToken: MpTokenStatus | null
+  /** Propietario: edita la tarjeta del negocio; sucursal: solo lectura. */
+  canEditBusiness: boolean
+  /** La cuenta tiene tenant (legado o negocio): la tarjeta se muestra. */
+  showBusinessCard: boolean
 }) {
   const router = useRouter()
   const [state, formAction, isPending] = useActionState(
@@ -69,6 +82,10 @@ export function ProfileForm({
   )
   const [bankingState, bankingFormAction, isBankingPending] = useActionState(
     updateBankingAction,
+    initialState
+  )
+  const [businessState, businessFormAction, isBusinessPending] = useActionState(
+    updateBusinessBankingAction,
     initialState
   )
   // WRITE-ONLY: el token nunca se pre-llena; tras guardar se limpia el campo
@@ -105,6 +122,30 @@ export function ProfileForm({
       router.refresh()
     }
   }, [bankingState.success, router])
+
+  const businessTokenRef = useRef<HTMLInputElement>(null)
+  const [isClearBusinessPending, startClearBusinessTransition] = useTransition()
+
+  function handleQuitarBusinessToken(): void {
+    startClearBusinessTransition(async () => {
+      const result = await clearBusinessMpToken()
+      if (result.error) {
+        toast.error(result.error)
+        return
+      }
+      toast.success(result.success)
+      if (businessTokenRef.current) businessTokenRef.current.value = ""
+      router.refresh()
+    })
+  }
+
+  useEffect(() => {
+    if (businessState.success) {
+      toast.success(businessState.success)
+      if (businessTokenRef.current) businessTokenRef.current.value = ""
+      router.refresh()
+    }
+  }, [businessState.success, router])
 
   return (
     <div className="flex flex-col gap-6">
@@ -163,10 +204,10 @@ export function ProfileForm({
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">Datos bancarios</CardTitle>
+          <CardTitle className="text-base">Cuenta propia (opcional)</CardTitle>
           <CardDescription className="text-sm">
-            Cuenta donde recibes tus pagos por transferencia, y tu token de
-            Mercado Pago para verificar depósitos automáticamente.
+            Tu cuenta personal para cobrar. Si la dejas vacía, tus cobros van
+            a la cuenta del negocio (Datos del negocio).
           </CardDescription>
         </CardHeader>
         <form action={bankingFormAction} className="flex flex-col">
@@ -292,6 +333,133 @@ export function ProfileForm({
           </CardFooter>
         </form>
       </Card>
+
+      {showBusinessCard && business ? (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Datos del negocio</CardTitle>
+            <CardDescription className="text-sm">
+              {canEditBusiness
+                ? "La cuenta del negocio: tus cobros van aquí cuando tu cuenta propia está vacía, y las sucursales la heredan."
+                : "La cuenta del negocio donde cobran los links cuando no registran una cuenta propia. La edita el propietario."}
+            </CardDescription>
+          </CardHeader>
+          <form action={businessFormAction} className="flex flex-col">
+            <CardContent className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="business-bank-name">Banco</Label>
+                <Input
+                  id="business-bank-name"
+                  name="bankName"
+                  type="text"
+                  defaultValue={business.bankName}
+                  maxLength={60}
+                  disabled={!canEditBusiness}
+                  placeholder="BBVA"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="business-bank-holder">Destinatario</Label>
+                <Input
+                  id="business-bank-holder"
+                  name="bankHolder"
+                  type="text"
+                  defaultValue={business.bankHolder}
+                  maxLength={100}
+                  autoComplete="name"
+                  disabled={!canEditBusiness}
+                  placeholder="Don Polo SA de CV"
+                />
+              </div>
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="business-bank-clabe">CLABE</Label>
+                <Input
+                  id="business-bank-clabe"
+                  name="bankClabe"
+                  type="text"
+                  inputMode="numeric"
+                  defaultValue={formatClabe(business.bankClabe)}
+                  placeholder="002 180 123 456 789 012"
+                  disabled={!canEditBusiness}
+                  onChange={(e) => {
+                    e.currentTarget.value = formatClabe(e.currentTarget.value)
+                  }}
+                />
+              </div>
+              {canEditBusiness ? (
+                <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <Label htmlFor="business-mp-token">Token de Mercado Pago del negocio</Label>
+                    {businessMpToken ? (
+                      <span className="flex items-center gap-2">
+                        <Badge
+                          variant={businessMpToken.status === "active" ? "default" : "destructive"}
+                          className="text-xs"
+                        >
+                          {businessMpToken.status === "active" ? "Vinculado" : "Inválido"}
+                        </Badge>
+                        <span className="text-muted-foreground text-xs">
+                          {businessMpToken.nickname ? `${businessMpToken.nickname} · ` : ""}
+                          ••••{businessMpToken.last4}
+                        </span>
+                      </span>
+                    ) : null}
+                  </div>
+                  <Input
+                    id="business-mp-token"
+                    ref={businessTokenRef}
+                    name="mpToken"
+                    type="password"
+                    defaultValue=""
+                    maxLength={512}
+                    autoComplete="off"
+                    placeholder={businessMpToken ? "Reemplazar token…" : "APP_USR-…"}
+                  />
+                  <p className="text-muted-foreground text-xs">
+                    Access token de producción de la cuenta de Mercado Pago DEL
+                    NEGOCIO. Verifica automáticamente los depósitos de todos
+                    los links que cobran a esta cuenta y habilita el Reporte
+                    SPEI del negocio. Cifrado en el servidor; no se vuelve a
+                    mostrar.
+                    {businessMpToken?.status === "invalid"
+                      ? " El token registrado fue rechazado por Mercado Pago: regístralo nuevamente."
+                      : ""}
+                    {businessMpToken?.validatedAt
+                      ? ` Validado el ${tokenDateFormat.format(new Date(businessMpToken.validatedAt))}.`
+                      : ""}
+                  </p>
+                </div>
+              ) : null}
+              {businessState.error ? (
+                <p className="text-destructive text-sm" role="alert">
+                  {businessState.error}
+                </p>
+              ) : null}
+            </CardContent>
+            {canEditBusiness ? (
+              <CardFooter className="flex flex-wrap items-center justify-between gap-2 pt-3">
+                {businessMpToken ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="text-muted-foreground"
+                    onClick={handleQuitarBusinessToken}
+                    disabled={isClearBusinessPending}
+                  >
+                    {isClearBusinessPending ? "Quitando…" : "Quitar token"}
+                  </Button>
+                ) : (
+                  <span />
+                )}
+                <Button type="submit" size="sm" disabled={isBusinessPending}>
+                  {isBusinessPending ? "Guardando…" : "Guardar datos del negocio"}
+                </Button>
+              </CardFooter>
+            ) : null}
+          </form>
+        </Card>
+      ) : null}
     </div>
   )
 }

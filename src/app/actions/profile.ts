@@ -1,6 +1,9 @@
 "use server"
 
+import { revalidatePath } from "next/cache"
+import { pool } from "@/server/db"
 import { requireUser } from "@/server/auth/guards"
+import { isOwnerRole } from "@/server/auth/types"
 import { hashPassword, verifyPassword } from "@/server/auth/password"
 import { saveProfile } from "@/server/auth/profile"
 import { findUserById, updatePassword } from "@/server/auth/users"
@@ -8,6 +11,11 @@ import {
   clearUserMpToken,
   saveUserMpToken,
 } from "@/server/mercadopago/tokens"
+import {
+  clearTenantMpToken,
+  saveTenantBanking,
+  saveTenantMpToken,
+} from "@/server/tenants/business"
 import { setWhatsAppPhone } from "@/server/whatsapp/service"
 import { AppError } from "@/server/umejson/types"
 
@@ -211,4 +219,87 @@ export async function changePasswordAction(
 
   await updatePassword(user.id, await hashPassword(newPassword))
   return { error: null, success: "Contraseña actualizada" }
+}
+
+
+/** Tenant de la sesión (null = plataforma sin negocio que editar). */
+async function tenantIdOfSessionUser(userId: string): Promise<string | null> {
+  const result = await pool.query<{ tenant_id: string | null }>(
+    `SELECT tenant_id FROM users WHERE id = $1::uuid LIMIT 1`,
+    [userId]
+  )
+  return result.rows[0]?.tenant_id ?? null
+}
+
+export interface BusinessBankingState {
+  error: null | string
+  success: null | string
+}
+
+/**
+ * Guarda los DATOS DEL NEGOCIO (Fase 3 §3.4): propietario edita; la
+ * sucursal ve la tarjeta en modo lectura (la UI no envía el form).
+ * Vaciar un campo lo limpia a propósito.
+ */
+export async function updateBusinessBankingAction(
+  _prev: BusinessBankingState,
+  formData: FormData
+): Promise<BusinessBankingState> {
+  try {
+    const sessionUser = await requireUser("core")
+    const tenantId = await tenantIdOfSessionUser(sessionUser.id)
+    if (!tenantId) {
+      return { error: "Tu cuenta no pertenece a un negocio.", success: null }
+    }
+    if (!isOwnerRole(sessionUser.role)) {
+      return {
+        error: "Solo el propietario puede editar los datos del negocio.",
+        success: null,
+      }
+    }
+    await saveTenantBanking(tenantId, {
+      bankName: String(formData.get("bankName") ?? ""),
+      bankHolder: String(formData.get("bankHolder") ?? ""),
+      bankClabe: String(formData.get("bankClabe") ?? ""),
+    })
+    const mpToken = String(formData.get("mpToken") ?? "").trim()
+    if (mpToken.length > 0) {
+      await saveTenantMpToken(tenantId, mpToken)
+    }
+    revalidatePath("/profile")
+    return { error: null, success: "Datos del negocio guardados" }
+  } catch (error) {
+    if (error instanceof AppError) {
+      return { error: error.message, success: null }
+    }
+    throw error
+  }
+}
+
+/**
+ * Quita el token de Mercado Pago del NEGOCIO (acción plain, como
+ * clearMpToken).
+ */
+export async function clearBusinessMpToken(): Promise<BusinessBankingState> {
+  try {
+    const sessionUser = await requireUser("core")
+    const tenantId = await tenantIdOfSessionUser(sessionUser.id)
+    if (!tenantId) {
+      return { error: "Tu cuenta no pertenece a un negocio.", success: null }
+    }
+    if (!isOwnerRole(sessionUser.role)) {
+      return {
+        error: "Solo el propietario puede editar los datos del negocio.",
+        success: null,
+      }
+    }
+    await clearTenantMpToken(tenantId)
+    revalidatePath("/profile")
+    return { error: null, success: "Token del negocio eliminado" }
+  } catch (error) {
+    if (error instanceof AppError) {
+      return { error: error.message, success: null }
+    }
+    throw error
+  }
 }

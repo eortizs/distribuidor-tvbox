@@ -3,6 +3,7 @@ import { pool } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 import { cifrarToken, descifrarToken, isTokensCryptoReady } from "@/server/conectores/crypto"
 
+import { getTenantMpAccessToken } from "@/server/tenants/business"
 import { mercadoPagoRequestAs } from "./client"
 import { MercadoPagoError } from "./errors"
 
@@ -213,6 +214,22 @@ export async function getOwnMpAccessToken(userId: string): Promise<string | null
 }
 
 /**
+ * Token del NEGOCIO del tenant de un usuario (nivel 2 de la resolución):
+ * null si el usuario no tiene tenant o el negocio no tiene token activo.
+ */
+async function getBusinessTokenForUser(
+  userId: string
+): Promise<string | null> {
+  const result = await pool.query<{ tenant_id: string | null }>(
+    `SELECT tenant_id FROM users WHERE id = $1::uuid LIMIT 1`,
+    [userId]
+  )
+  const tenantId = result.rows[0]?.tenant_id ?? null
+  if (!tenantId) return null
+  return getTenantMpAccessToken(tenantId)
+}
+
+/**
  * Token de lectura para la cuenta que RECIBE el dinero de una operación:
  * `sellerUserId` = usuario con credencial propia (distribuidor); `null` =
  * cuenta de plataforma del `.env` (flujo histórico del admin). Null = no hay
@@ -222,7 +239,15 @@ export async function getOwnMpAccessToken(userId: string): Promise<string | null
 export async function resolveSellerMpAccessToken(
   sellerUserId: string | null
 ): Promise<string | null> {
-  if (sellerUserId !== null) return getOwnMpAccessToken(sellerUserId)
+  if (sellerUserId !== null) {
+    const own = await getOwnMpAccessToken(sellerUserId)
+    if (own) return own
+    // Nivel negocio: el token de la cuenta compartida del tenant del
+    // vendedor (Fase 3). El legado no tiene token de negocio y cae abajo.
+    const business = await getBusinessTokenForUser(sellerUserId)
+    if (business) return business
+    return null
+  }
   const platform = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() ?? ""
   return platform.length > 0 ? platform : null
 }
@@ -236,14 +261,25 @@ export async function resolveSellerMpAccessToken(
 export async function resolvePaymentOrderDepositToken(
   creatorUserId: string
 ): Promise<string | null> {
+  // Tres niveles (Fase 3): token propio → token del negocio del tenant →
+  // plataforma SOLO si el tenant comparte cuenta (use_platform_mp_account,
+  // el legado la tiene) y el creador es propietario.
   const own = await getOwnMpAccessToken(creatorUserId)
   if (own) return own
-  const role = await pool.query<{ role: string }>(
-    `SELECT role FROM users WHERE id = $1::uuid LIMIT 1`,
+  const business = await getBusinessTokenForUser(creatorUserId)
+  if (business) return business
+  const creator = await pool.query<{ role: string; tenant_id: string | null }>(
+    `SELECT role, tenant_id FROM users WHERE id = $1::uuid LIMIT 1`,
     [creatorUserId]
   )
-  const creatorRole = role.rows[0]?.role
-  if (!creatorRole || !isOwnerRole(creatorRole)) return null
+  const creatorRole = creator.rows[0]?.role
+  const tenantId = creator.rows[0]?.tenant_id ?? null
+  if (!creatorRole || !isOwnerRole(creatorRole) || !tenantId) return null
+  const shares = await pool.query<{ shares: boolean }>(
+    `SELECT use_platform_mp_account AS shares FROM tenants WHERE id = $1::uuid`,
+    [tenantId]
+  )
+  if (shares.rows[0]?.shares !== true) return null
   const platform = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() ?? ""
   return platform.length > 0 ? platform : null
 }

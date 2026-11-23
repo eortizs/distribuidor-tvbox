@@ -59,6 +59,8 @@ export async function createPaymentOrderAction(input: {
   amountMxn: number
   /** Concepto de pago: UNA palabra alfanumérica (obligatorio). */
   note: string
+  /** Cliente del registro local asociado (Fase 3); opcional. */
+  clientId?: string | null
 }): Promise<CreatePaymentOrderResult> {
   const user = await requireUser("core")
 
@@ -102,6 +104,7 @@ export async function createPaymentOrderAction(input: {
       amountMxn: amount,
       note,
       bank,
+      clientId: input.clientId || null,
     })
 
     const waUrl = buildPaymentOrderWaLink(created.amountMxn)

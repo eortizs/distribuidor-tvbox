@@ -1,6 +1,8 @@
 import { isOwnerRole } from "@/server/auth/types"
 import { ClientesAccordion } from "@/components/entities/clientes-accordion"
+import { ClientesRegistry } from "@/components/clientes/clientes-registry"
 import { requireUser } from "@/server/auth/guards"
+import { effectiveDbContext, findTenantById } from "@/server/tenant/context"
 import { resolveClientScope } from "@/server/flujotv/scope"
 import {
   isCouponQaEnabled,
@@ -35,7 +37,21 @@ export default async function EntitiesPage({
 }: {
   searchParams: Promise<{ orden?: string; estado?: string }>
 }) {
-  const [user, params] = await Promise.all([requireUser("flujo"), searchParams])
+  const [user, params] = await Promise.all([requireUser("core"), searchParams])
+
+  // RAMA POR TIPO DE TENANT (§3.5): un negocio solo-núcleo NO tiene FlujoTV
+  // — su /clientes es el registro local (nombre, WhatsApp, notas y links).
+  // El legado conserva el acordeón FlujoTV intacto.
+  const context = await effectiveDbContext()
+  const tenant = context?.tenantId ? await findTenantById(context.tenantId) : null
+  if (tenant && tenant.kind === "business") {
+    return (
+      <div className="flex flex-1 flex-col p-4 md:p-6">
+        <ClientesRegistry />
+      </div>
+    )
+  }
+
   const [scope, saldos] = await Promise.all([
     resolveClientScope(user),
     getSaldosActual(user.id),

@@ -150,7 +150,7 @@ check("clasificación de rutas por prefijo", () => {
   assert.equal(routeModuleForPath("/users"), "core")
   assert.equal(routeModuleForPath("/perfil"), "core")
   assert.equal(routeModuleForPath("/api/flujotv/clients"), "flujo")
-  assert.equal(routeModuleForPath("/clientes"), "flujo")
+  assert.equal(routeModuleForPath("/clientes"), "core")
   assert.equal(routeModuleForPath("/api/transferencias/orders"), "flujo")
   assert.equal(routeModuleForPath("/api/notas"), "general")
   assert.equal(routeModuleForPath("/modulos/alertas"), "general")

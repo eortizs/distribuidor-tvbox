@@ -68,6 +68,9 @@ export interface PaymentOrder {
   /** Tenant de la orden (RLS); lo trae la resolución pública del link corto. */
   tenantId: string
   creatorUserId: string
+  /** Cliente asociado del registro local (Fase 3); null = sin cliente. */
+  clientId: string | null
+  clientName: string | null
   creatorUsername: string | null
   amountMxn: number
   note: string | null
@@ -188,6 +191,8 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
     code: String(row.code),
     tenantId: String(row.tenant_id),
     creatorUserId: String(row.creator_user_id),
+    clientId: (row.client_id as string | null) ?? null,
+    clientName: (row.client_name as string | null) ?? null,
     creatorUsername:
       row.creator_username === null || row.creator_username === undefined
         ? null
@@ -248,8 +253,11 @@ const SELECT_COLUMNS = `
          o.payer_nudged_at, o.ticket_file_id, o.ticket_sha256,
          o.scan_status, o.scan_result, o.resolved_at, o.rejection_reason,
          o.created_at, o.mp_payment_id, o.mp_deposit_at, o.verifying_since,
-         o.deposit_next_check_at, o.deposit_checks, o.deposit_escalated_at
+         o.deposit_next_check_at, o.deposit_checks, o.deposit_escalated_at,
+         o.client_id, cl.name AS client_name,
+         o.client_id, cl.name AS client_name
     FROM payment_orders o
+    LEFT JOIN clients cl ON cl.id = o.client_id
     LEFT JOIN users u ON u.id = o.creator_user_id`
 
 /**
@@ -262,7 +270,27 @@ export async function createPaymentOrder(input: {
   amountMxn: number
   note: string | null
   bank: { bank: string; account: string; holder: string }
+  /** Cliente del registro local asociado (Fase 3); opcional y del tenant. */
+  clientId?: string | null
 }): Promise<PaymentOrder> {
+  if (input.clientId) {
+    // El cliente debe existir y ser del tenant del creador (RLS ya filtra;
+    // el chequeo explícito responde 422 en vez de violar la FK).
+    const owned = await pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM clients c
+         JOIN users u ON u.tenant_id = c.tenant_id
+        WHERE c.id = $1::uuid AND u.id = $2::uuid AND c.status = 'active'`,
+      [input.clientId, input.creatorUserId]
+    )
+    if ((owned.rows[0]?.n ?? 0) === 0) {
+      throw new AppError(
+        422,
+        "cliente_invalido",
+        "El cliente seleccionado no existe o no pertenece a tu negocio."
+      )
+    }
+  }
   // Tope por creador antes de acuñar (las ACTIVAS cuentan: pending +
   // verifying reservan código y namespace igual).
   const active = await pool.query<{ n: number }>(
@@ -287,8 +315,8 @@ export async function createPaymentOrder(input: {
       const result = await pool.query(
         `INSERT INTO payment_orders
            (code, creator_user_id, amount_mxn, note, bank_name, bank_account,
-            bank_holder)
-         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7)
+            bank_holder, client_id)
+         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8::uuid)
          RETURNING id`,
         [
           code,
@@ -298,6 +326,7 @@ export async function createPaymentOrder(input: {
           input.bank.bank,
           input.bank.account,
           input.bank.holder,
+          input.clientId ?? null,
         ]
       )
       const created = await getPaymentOrder(String(result.rows[0].id))
@@ -708,13 +737,27 @@ export async function markPaymentOrderVerifying(orderId: string): Promise<Paymen
  * credencial» viva UNA sola vez sin copias que puedan divergir.
  */
 function depositCredentialExistsSql(orderAlias: string): string {
+  // Tres niveles (Fase 3): token propio del creador, token del NEGOCIO de su
+  // tenant, o cuenta de plataforma (solo propietarios de tenants con la
+  // cuenta compartida habilitada — el legado `tvbox` la tiene).
   return `
           SELECT 1 FROM users u2
            WHERE u2.id = ${orderAlias}.creator_user_id
-             AND (u2.role = 'propietario'
-                  OR EXISTS (
+             AND (EXISTS (
                     SELECT 1 FROM user_mp_tokens t
                      WHERE t.user_id = u2.id AND t.status = 'active'
+                  )
+                  OR EXISTS (
+                    SELECT 1 FROM tenant_mp_tokens tt
+                     WHERE tt.tenant_id = u2.tenant_id AND tt.status = 'active'
+                  )
+                  OR (
+                    u2.role = 'propietario'
+                    AND EXISTS (
+                      SELECT 1 FROM tenants tn
+                       WHERE tn.id = u2.tenant_id
+                         AND tn.use_platform_mp_account
+                    )
                   ))`
 }
 
@@ -824,10 +867,17 @@ export async function listDepositSweeperAccounts(): Promise<
     n: number
   }>(
     `SELECT
-       CASE WHEN u.role = 'propietario' AND NOT EXISTS (
-              SELECT 1 FROM user_mp_tokens t
-               WHERE t.user_id = o.creator_user_id AND t.status = 'active'
-            ) THEN NULL ELSE o.creator_user_id::text END AS seller_user_id,
+       CASE WHEN NOT (
+              EXISTS (
+                SELECT 1 FROM user_mp_tokens t
+                 WHERE t.user_id = o.creator_user_id AND t.status = 'active'
+              )
+              OR EXISTS (
+                SELECT 1 FROM tenant_mp_tokens tt
+                 WHERE tt.tenant_id = u.tenant_id AND tt.status = 'active'
+              )
+            )
+            THEN NULL ELSE o.creator_user_id::text END AS seller_user_id,
        count(*)::int AS n
        FROM payment_orders o
        JOIN users u ON u.id = o.creator_user_id
@@ -871,6 +921,10 @@ export async function listDepositClaimantPaymentOrders(
              AND NOT EXISTS (
                SELECT 1 FROM user_mp_tokens t
                 WHERE t.user_id = u2.id AND t.status = 'active'
+             )
+             AND NOT EXISTS (
+               SELECT 1 FROM tenant_mp_tokens tt
+                WHERE tt.tenant_id = u2.tenant_id AND tt.status = 'active'
              )
          )`
       : `o.creator_user_id = $3::uuid`

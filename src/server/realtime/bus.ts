@@ -17,6 +17,7 @@ import { pool, type PoolClientLike } from "@/server/db"
  */
 
 export type RealtimeKind =
+  | "clients"
   | "entity"
   | "mp_order"
   | "payment_order"

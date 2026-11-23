@@ -23,10 +23,12 @@ export const BUSINESS_TENANT_MODULES: TenantModule[] = ["core"]
 
 /** Clasificación de referencia (§4.5) — prefijos de ruta por módulo. */
 export const CORE_ROUTE_PREFIXES = [
+  "/clientes",
   "/modulos/links-de-pago",
   "/modulos/reporte-spei",
   "/modulos/calculadora",
   "/perfil",
+  "/profile",
   "/users",
   "/modulos/whatsapp",
   "/api/links-pago",
@@ -40,7 +42,6 @@ export const CORE_ROUTE_PREFIXES = [
 ]
 
 export const FLUJO_ROUTE_PREFIXES = [
-  "/clientes",
   "/modulos/paquetes-flujotv",
   "/modulos/actualizacion-flujotv",
   "/modulos/distribuidores",

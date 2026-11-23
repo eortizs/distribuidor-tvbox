@@ -72,6 +72,10 @@ function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
           event.distribuidor === scope.distribuidorName)
       )
     // Gastos: solo los del propio usuario (el listado va por user_id).
+    // Clientes locales del tenant: el refetch llega ya filtrado por el
+    // tenant de la sesión (RLS) — avisar a todos los del tenant es seguro.
+    case "clients":
+      return true
     case "expenses":
       return event.distribuidorId === scope.userId
     // Usuarios/permisos: solo los que tocan la propia cuenta.

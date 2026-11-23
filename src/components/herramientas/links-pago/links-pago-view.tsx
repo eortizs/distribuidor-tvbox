@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState, useTransition } from "react"
+import {useMemo, useState, useTransition, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 
@@ -118,6 +118,8 @@ export function LinksPagoView({
   const [orders, setOrders] = useState(initialOrders)
   const [amount, setAmount] = useState("")
   const [note, setNote] = useState("")
+  const [clients, setClients] = useState<{ id: string; name: string }[]>([])
+  const [clientId, setClientId] = useState<string>("")
   const [formError, setFormError] = useState<string | null>(null)
   const [created, setCreated] = useState<CreatedPaymentOrder | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -150,6 +152,26 @@ export function LinksPagoView({
     [orders]
   )
 
+  // Selector de cliente (Fase 3): el registro local es CORE; si el tenant
+  // aún no tiene clientes, el select no se muestra (asociación opcional).
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await fetch("/api/clientes-registry")
+        const payload = (await response.json()) as { ok: boolean; data?: { id: string; name: string }[] }
+        if (!cancelled && payload.ok && (payload.data?.length ?? 0) > 0) {
+          setClients(payload.data ?? [])
+        }
+      } catch {
+        // Sin clientes o fallo de red: la asociación es opcional.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   function submitCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setFormError(null)
@@ -168,6 +190,7 @@ export function LinksPagoView({
       const result = await createPaymentOrderAction({
         amountMxn: parsed,
         note,
+        clientId: clientId.length > 0 ? clientId : null,
       })
       if (result.error || !result.order) {
         setFormError(result.error ?? "No se pudo crear el link de pago.")
@@ -177,6 +200,7 @@ export function LinksPagoView({
       setCreated(created)
       setAmount("")
       setNote("")
+      setClientId("")
       // Alta optimista: la fila aparece al instante, sin esperar el refresco
       // del RSC (y sin importar si el usuario cierra el diálogo antes). El
       // snapshot del servidor la reemplaza con los mismos datos al llegar.
@@ -188,6 +212,8 @@ export function LinksPagoView({
                 id: created.orderId,
                 code: created.code,
                 creatorUsername: null,
+                clientId: null,
+                clientName: null,
                 amountMxn: created.amountMxn,
                 note: created.note,
                 status: "pending",
@@ -351,6 +377,29 @@ export function LinksPagoView({
                   </p>
                 </div>
               </div>
+              {clients.length > 0 ? (
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="orden-cliente">Cliente (opcional)</Label>
+                  <select
+                    id="orden-cliente"
+                    className="border-input bg-background h-9 rounded-lg border px-3 text-sm"
+                    value={clientId}
+                    onChange={(event) => setClientId(event.target.value)}
+                    disabled={creating || !whatsappConfigured}
+                  >
+                    <option value="">Sin cliente</option>
+                    {clients.map((client) => (
+                      <option key={client.id} value={client.id}>
+                        {client.name}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-muted-foreground text-xs">
+                    Asocia este link a un cliente de tu registro
+                    (Clientes → Nuevo cliente).
+                  </p>
+                </div>
+              ) : null}
               {formError ? (
                 <p className="text-destructive text-sm" role="alert">
                   {formError}
@@ -418,6 +467,11 @@ export function LinksPagoView({
                         <span className="hidden truncate text-muted-foreground text-sm sm:inline">
                           {order.note}
                         </span>
+                      ) : null}
+                      {order.clientName ? (
+                        <Badge variant="secondary" size="sm" className="hidden md:inline-flex">
+                          {order.clientName}
+                        </Badge>
                       ) : null}
                       <span className="ml-auto flex shrink-0 items-center gap-2">
                         {isAdmin && order.creatorUsername ? (

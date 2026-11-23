@@ -11,6 +11,9 @@ export interface PaymentOrderListItem {
   id: string
   code: string
   creatorUsername: string | null
+  /** Cliente del registro local asociado (Fase 3); null = sin cliente. */
+  clientId: string | null
+  clientName: string | null
   amountMxn: number
   note: string | null
   status: PaymentOrder["status"]
@@ -154,6 +157,8 @@ export function toPaymentOrderListItem(order: PaymentOrder): PaymentOrderListIte
     id: order.id,
     code: order.code,
     creatorUsername: order.creatorUsername,
+    clientId: order.clientId,
+    clientName: order.clientName,
     amountMxn: order.amountMxn,
     note: order.note,
     status: order.status,
