@@ -51,7 +51,8 @@ const TABLES = [
   "image_generations","animation_costs","animation_turns",
   "animation_deliverables","expenses","user_settings",
   "user_section_permissions","user_module_permissions","user_module_prefs",
-  "connector_connections","user_mp_tokens","tenants",
+  "connector_connections","user_mp_tokens","clients","tenant_mp_tokens",
+  "tenants",
 ]
 
 const client = new Client({ connectionString: url })
