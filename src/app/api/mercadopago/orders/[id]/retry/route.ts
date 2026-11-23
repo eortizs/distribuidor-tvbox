@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { flujoErrorResponse } from "@/server/flujotv/http"
@@ -37,7 +38,7 @@ export async function POST(
         { status: 404 }
       )
     }
-    if (user.role !== "admin") {
+    if (!isOwnerRole(user.role)) {
       const isBuyer = order.buyer_user_id === user.id
       if (!isBuyer) {
         return Response.json(
@@ -70,7 +71,7 @@ export async function POST(
       // Solo el ADMIN cruza la guardia anti-doble-renovación: un reintento
       // del comprador con renovación reciente del cliente se bloquea igual
       // (el comprador ve el motivo claro en el error de la orden).
-      admin: user.role === "admin",
+      admin: isOwnerRole(user.role),
     })
     return Response.json({ ok: true, data: { order: toMpOrderPublic(fresh) } })
   } catch (error) {

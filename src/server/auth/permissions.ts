@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { pool, withTransaction } from "@/server/db"
 import { publishRealtime } from "@/server/realtime/bus"
 import { navSectionKeys } from "@/components/dashboard/nav-config"
@@ -17,7 +18,7 @@ export function isSectionKey(value: string): boolean {
 
 /** Claves de sección visibles para un usuario (respetando el rol admin). */
 export async function getVisibleSectionKeys(user: AuthUser): Promise<string[]> {
-  if (user.role === "admin") {
+  if (isOwnerRole(user.role)) {
     return [...ALL_KEYS]
   }
   const result = await pool.query(

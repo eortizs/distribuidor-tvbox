@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import {
   createSavedClientFilter,
@@ -19,7 +20,7 @@ export async function GET() {
 
     const filters = await listSavedClientFilters(
       user.id,
-      user.role === "admin"
+      isOwnerRole(user.role)
     )
     return Response.json({ ok: true, data: filters })
   } catch (error) {
@@ -44,7 +45,7 @@ export async function POST(request: Request) {
 
     const filter = await createSavedClientFilter(
       user.id,
-      user.role === "admin",
+      isOwnerRole(user.role),
       body.body
     )
     return Response.json({ ok: true, data: filter }, { status: 201 })

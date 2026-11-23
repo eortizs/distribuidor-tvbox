@@ -1,5 +1,5 @@
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
-import { ACCOUNT_ENTITY_NAME } from "@/server/auth/types"
+import { ACCOUNT_ENTITY_NAME, isOwnerRole, isBranchRole  } from "@/server/auth/types"
 import { ENTITY_NAME_TICKET } from "@/lib/tickets"
 import { errorResponse, readJsonBody } from "@/server/http"
 import { assertPropietarioTicket } from "@/server/tickets/repository"
@@ -15,7 +15,7 @@ type RouteContext = { params: Promise<{ id: string }> }
 function scopeFor(
   user: NonNullable<Awaited<ReturnType<typeof requireApiUser>>>
 ) {
-  return user.role === "distribuidor"
+  return isBranchRole(user.role)
     ? { ownedByDistribuidorId: user.id }
     : undefined
 }
@@ -85,7 +85,7 @@ export async function PATCH(request: Request, ctx: RouteContext) {
     // que muestra el panel admin: su identidad (userId/distribuidorId) y su
     // distribuidorName solo los puede escribir el flujo interno de cuentas.
     const current = await getEntity(id, ownership)
-    if (user.role !== "admin" && current.doc.entityName === ACCOUNT_ENTITY_NAME) {
+    if (!isOwnerRole(user.role) && current.doc.entityName === ACCOUNT_ENTITY_NAME) {
       throw new AppError(
         403,
         "reserved_entity_name",

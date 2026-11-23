@@ -1,3 +1,4 @@
+import { isBranchRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { ENTITY_NAME_TICKET } from "@/lib/tickets"
 import { errorResponse } from "@/server/http"
@@ -19,7 +20,7 @@ export async function GET(request: Request) {
       excludeEntityName: ENTITY_NAME_TICKET,
       q: searchParams.get("q") ?? undefined,
       distribuidorId:
-        user.role === "distribuidor" ? user.id : undefined,
+        isBranchRole(user.role) ? user.id : undefined,
       limit: Number.isFinite(limitParam) ? limitParam : 10,
       offset: Number.isFinite(offsetParam) ? offsetParam : 0,
     })

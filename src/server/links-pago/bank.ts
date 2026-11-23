@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import type { AuthUser } from "@/server/auth/types"
 import { getProfile } from "@/server/auth/profile"
 import { transferBankDataOrNull } from "@/server/mercadopago/config"
@@ -33,7 +34,7 @@ export async function resolveCreatorBankData(
   if (bankName.length > 0 && bankHolder.length > 0 && bankClabe.length > 0) {
     return { bank: bankName, account: bankClabe, holder: bankHolder }
   }
-  if (user.role === "admin") {
+  if (isOwnerRole(user.role)) {
     return transferBankDataOrNull()
   }
   return null

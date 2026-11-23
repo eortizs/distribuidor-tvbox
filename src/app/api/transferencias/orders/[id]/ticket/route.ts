@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { createReadStream } from "node:fs"
 import { stat } from "node:fs/promises"
 import { Readable } from "node:stream"
@@ -19,7 +20,7 @@ export async function GET(_request: Request, ctx: RouteContext) {
   try {
     const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
-    if (user.role !== "admin") {
+    if (!isOwnerRole(user.role)) {
       throw new AppError(
         403,
         "forbidden",

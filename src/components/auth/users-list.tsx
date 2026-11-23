@@ -1,5 +1,6 @@
 "use client"
 
+import {UserRole, isOwnerRole, isBranchRole } from "@/server/auth/types"
 import {
   Fragment,
   useActionState,
@@ -119,7 +120,7 @@ import {
 export interface UserListItem {
   id: string
   username: string
-  role: "admin" | "distribuidor"
+  role: UserRole
   entityCount: number
   /** Reseller FlujoTV ligado a esta cuenta; null si todavía no tiene. */
   distribuidorName: string | null
@@ -143,7 +144,7 @@ export interface UserListItem {
   createdAtLabel: string
 }
 
-type RoleFilter = "all" | "admin" | "distribuidor"
+type RoleFilter = "all" | "admin" | "distribuidor" | "propietario" | "sucursal"
 
 const createState: CreateUserState = { error: null, success: null }
 const updateState: UpdateUserState = { error: null, success: null }
@@ -170,7 +171,9 @@ export function UsersManager({
     return users.filter(
       (user) =>
         (query === "" || user.username.toLowerCase().includes(query)) &&
-        (roleFilter === "all" || user.role === roleFilter)
+        (roleFilter === "all" ||
+          (roleFilter === "admin" && isOwnerRole(user.role)) ||
+          (roleFilter === "distribuidor" && isBranchRole(user.role)))
     )
   }, [users, search, roleFilter])
 
@@ -202,10 +205,14 @@ export function UsersManager({
         ),
         cell: ({ row }) => (
           <Badge
-            variant={row.original.role === "admin" ? "primary-light" : "info-light"}
+            variant={isOwnerRole(row.original.role) ? "primary-light" : "info-light"}
             size="sm"
           >
-            {row.original.role}
+            {isOwnerRole(row.original.role)
+              ? "Propietario"
+              : isBranchRole(row.original.role)
+                ? "Sucursal"
+                : row.original.role}
           </Badge>
         ),
         size: 140,
@@ -302,8 +309,8 @@ export function UsersManager({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All roles</SelectItem>
-            <SelectItem value="admin">admin</SelectItem>
-            <SelectItem value="distribuidor">distribuidor</SelectItem>
+            <SelectItem value="admin">Propietario</SelectItem>
+            <SelectItem value="distribuidor">Sucursal</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -386,8 +393,8 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="distribuidor">distribuidor</SelectItem>
-                <SelectItem value="admin">admin</SelectItem>
+                <SelectItem value="distribuidor">Sucursal</SelectItem>
+                <SelectItem value="admin">Propietario</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -852,8 +859,8 @@ function EditUserForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="distribuidor">distribuidor</SelectItem>
-                <SelectItem value="admin">admin</SelectItem>
+                <SelectItem value="distribuidor">Sucursal</SelectItem>
+                <SelectItem value="admin">Propietario</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -1104,7 +1111,7 @@ function PermissionsForm({
             Deja al menos una sección visible
           </p>
         ) : null}
-        {user.role === "admin" ? (
+        {isOwnerRole(user.role) ? (
           <p className="text-muted-foreground text-xs">
             Las cuentas admin siempre ven todas las secciones.
           </p>

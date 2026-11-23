@@ -1,5 +1,6 @@
 "use server"
 
+import { isOwnerRole } from "@/server/auth/types"
 import { revalidatePath } from "next/cache"
 
 import { getSessionUser } from "@/server/auth/session"
@@ -37,7 +38,7 @@ export async function updateUserPermissionsAction(
   formData: FormData
 ): Promise<UpdatePermissionsState> {
   const session = await getSessionUser()
-  if (!session || session.role !== "admin") {
+  if (!session || !isOwnerRole(session.role)) {
     return { error: "Forbidden", success: null }
   }
 

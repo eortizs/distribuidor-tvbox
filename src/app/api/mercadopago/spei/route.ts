@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import {
   requireApiUser,
   unauthorizedResponse,
@@ -27,7 +28,7 @@ export async function GET(request: Request) {
 
     let accessToken: string | undefined
     let conceptBuyerUserId: string | undefined
-    if (user.role === "admin") {
+    if (isOwnerRole(user.role)) {
       // Cuenta de plataforma: `undefined` → `mercadoPagoGatewayRequest` (503
       // con el mensaje de configuración si falta el token del `.env`).
       accessToken = undefined

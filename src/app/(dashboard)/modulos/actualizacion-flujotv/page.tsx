@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import type { Metadata } from "next"
 
 import { ActualizacionFlujoTv } from "@/components/herramientas/actualizacion-flujotv/actualizacion-flujotv-view"
@@ -25,7 +26,7 @@ export default async function ActualizacionFlujoTvPage({
   // la página: getFlujoApp devuelve los valores por defecto.
   const app = await getFlujoApp()
 
-  const puedeEditar = user.role === "admin"
+  const puedeEditar = isOwnerRole(user.role)
   const params = await searchParams
   // «Configurar» en el hub llega por aquí: solo un admin entra en modo
   // edición; para el resto el parámetro se ignora.

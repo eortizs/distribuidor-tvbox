@@ -1,3 +1,4 @@
+import {isOwnerRole, isBranchRole } from "@/server/auth/types"
 import { redirect } from "next/navigation"
 
 import { PasswordForm } from "@/components/profile/password-form"
@@ -96,10 +97,14 @@ export default async function ProfilePage() {
               </Fact>
               <Fact label="Rol">
                 <Badge
-                  variant={role === "admin" ? "primary-light" : "info-light"}
+                  variant={isOwnerRole(role) ? "primary-light" : "info-light"}
                   size="sm"
                 >
-                  {role}
+                  {isOwnerRole(role)
+                    ? "Propietario"
+                    : isBranchRole(role)
+                      ? "Sucursal"
+                      : role}
                 </Badge>
               </Fact>
               <Fact label="Miembro desde">{formatDate(createdAt)}</Fact>

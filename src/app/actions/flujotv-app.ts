@@ -1,5 +1,6 @@
 "use server"
 
+import { isOwnerRole } from "@/server/auth/types"
 import { type FlujoAppCampo, type FlujoAppInfo } from "@/lib/flujotv-app"
 import { requireUser } from "@/server/auth/guards"
 import { saveFlujoAppCampo } from "@/server/flujotv/app"
@@ -22,7 +23,7 @@ export async function guardarFlujoAppCampoAction(
   valor: string
 ): Promise<FlujoAppInfo> {
   const user = await requireUser("flujo")
-  if (user.role !== "admin") {
+  if (!isOwnerRole(user.role)) {
     throw new Error("Solo un administrador puede editar esta información.")
   }
   const campoValido = CAMPOS.find((item) => item === campo)

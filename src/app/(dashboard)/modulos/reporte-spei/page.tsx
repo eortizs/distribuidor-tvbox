@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import type { Metadata } from "next"
 
 import {
@@ -53,7 +54,7 @@ export default async function ReporteSpeiPage() {
   // Fuente de los depósitos: la credencial PROPIA del distribuidor consulta
   // SU cuenta (columna «Concepto» acotada a SUS conceptos); el admin sigue
   // con la cuenta de plataforma del `.env`, el comportamiento histórico.
-  if (user.role !== "admin") {
+  if (!isOwnerRole(user.role)) {
     const ownToken = await getOwnMpAccessToken(user.id).catch(() => null)
     if (!ownToken) {
       return (

@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { ConfiguracionMenu } from "@/components/configuracion/configuracion-menu"
 import { LicenciasApiView } from "@/components/configuracion/licencias-api-view"
 import { requireUser } from "@/server/auth/guards"
@@ -32,7 +33,7 @@ export default async function ApiLicenciasPage() {
         baseUrl={status.baseUrl}
         updatedAt={status.updatedAt}
         health={status.health}
-        isAdmin={user.role === "admin"}
+        isAdmin={isOwnerRole(user.role)}
       />
     </div>
   )

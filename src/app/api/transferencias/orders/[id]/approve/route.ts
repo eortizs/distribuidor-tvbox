@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { FlujoApiError } from "@/server/flujotv/errors"
 import { flujoErrorResponse } from "@/server/flujotv/http"
@@ -17,7 +18,7 @@ export async function POST(
   try {
     const user = await requireApiUser("core")
     if (!user) return unauthorizedResponse()
-    if (user.role !== "admin") {
+    if (!isOwnerRole(user.role)) {
       return Response.json(
         {
           ok: false,

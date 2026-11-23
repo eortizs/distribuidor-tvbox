@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import {
   deleteSavedClientFilter,
@@ -45,7 +46,7 @@ export async function PATCH(request: Request, ctx: RouteContext) {
     const { id } = await ctx.params
     const updated = await updateSavedClientFilter(
       user.id,
-      user.role === "admin",
+      isOwnerRole(user.role),
       id,
       body.body
     )

@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import type { TenantModule } from "@/lib/tenant-modules"
 import { tenantAllows } from "@/lib/tenant-modules"
 import { currentTenantContext } from "@/server/tenant/context"
@@ -31,7 +32,7 @@ export async function requireAdminApiUser(
   module: TenantModule
 ): Promise<AuthUser | null> {
   const user = await requireApiUser(module)
-  return user && user.role === "admin" ? user : null
+  return user && isOwnerRole(user.role) ? user : null
 }
 
 export function unauthorizedResponse(): Response {

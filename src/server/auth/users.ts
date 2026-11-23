@@ -245,7 +245,7 @@ export async function countAdmins(
   executor: PoolClientLike = pool
 ): Promise<number> {
   const result = await executor.query(
-    "SELECT count(*)::int AS count FROM users WHERE role = 'admin'"
+    "SELECT count(*)::int AS count FROM users WHERE role IN ('admin', 'propietario')"
   )
   return Number(result.rows[0].count)
 }

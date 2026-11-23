@@ -11,7 +11,7 @@ import {
 import { hashPassword } from "@/server/auth/password"
 import { countAdmins, findUserById } from "@/server/auth/users"
 import { getAccountDistribuidorName } from "@/server/auth/accounts"
-import { isValidEmail, isValidRole, normalizeEmail, type UserRole } from "@/server/auth/types"
+import { isValidEmail, isValidRole, normalizeEmail, type UserRole, isOwnerRole  } from "@/server/auth/types"
 import { DISTRIBUTOR_LINK_NONE } from "@/lib/distributor-link"
 import { parseAbonoAmount, parseSaldoTipo } from "@/lib/saldo"
 import { formatMxn } from "@/lib/finanzas"
@@ -29,7 +29,7 @@ export async function createUserAction(
   formData: FormData
 ): Promise<CreateUserState> {
   const session = await getSessionUser()
-  if (!session || session.role !== "admin") {
+  if (!session || !isOwnerRole(session.role)) {
     return { error: "Forbidden", success: null }
   }
 
@@ -79,7 +79,7 @@ export async function updateUserAction(
   formData: FormData
 ): Promise<UpdateUserState> {
   const session = await getSessionUser()
-  if (!session || session.role !== "admin") {
+  if (!session || !isOwnerRole(session.role)) {
     return { error: "Forbidden", success: null }
   }
 
@@ -119,7 +119,7 @@ export async function updateUserAction(
     if (!isValidRole(role)) {
       return { error: "Role must be admin or distribuidor", success: null }
     }
-    if (target.role === "admin") {
+    if (isOwnerRole(target.role)) {
       const admins = await countAdmins()
       if (admins <= 1) {
         return { error: "Cannot demote the last admin", success: null }
@@ -213,7 +213,7 @@ export async function deleteUserAction(
   formData: FormData
 ): Promise<DeleteUserState> {
   const session = await getSessionUser()
-  if (!session || session.role !== "admin") {
+  if (!session || !isOwnerRole(session.role)) {
     return { error: "Forbidden", success: null }
   }
 
@@ -225,7 +225,7 @@ export async function deleteUserAction(
   if (target.id === session.id) {
     return { error: "You cannot delete your own account", success: null }
   }
-  if (target.role === "admin") {
+  if (isOwnerRole(target.role)) {
     const admins = await countAdmins()
     if (admins <= 1) {
       return { error: "Cannot delete the last admin", success: null }
@@ -260,7 +260,7 @@ export async function adjustUserSaldoAction(
   formData: FormData
 ): Promise<AdjustSaldoState> {
   const session = await getSessionUser()
-  if (!session || session.role !== "admin") {
+  if (!session || !isOwnerRole(session.role)) {
     return { error: "Forbidden", success: null }
   }
 

@@ -1,5 +1,6 @@
 "use client"
 
+import { isOwnerRole } from "@/server/auth/types"
 import Link from "next/link"
 import { CoinsIcon, LogOutIcon, TvIcon } from "lucide-react"
 import { cn } from "cn"
@@ -41,7 +42,7 @@ export function AppUserMenu({
 }) {
   const mainItems = accountNav.filter((item) => !item.adminOnly)
   const adminItems = accountNav.filter(
-    (item) => item.adminOnly && user.role === "admin"
+    (item) => item.adminOnly && isOwnerRole(user.role)
   )
   const initials = user.username.slice(0, 2).toUpperCase()
 

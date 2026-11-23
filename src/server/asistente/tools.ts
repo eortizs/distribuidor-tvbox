@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { EXPENSE_CATEGORIES } from "@/lib/finanzas"
 import { isRenewalMonths } from "@/lib/flujotv"
 import type { FlujoClient, RenewalMonths } from "@/lib/flujotv"
@@ -790,7 +791,7 @@ async function estadoOrden(args: ToolCallArgs, userId: string) {
   const row = await getMpOrder(orderId.trim())
   // Solo el comprador (o un admin) ve la orden; a nadie más se le confirma
   // siquiera su existencia.
-  if (!row || (row.buyer_user_id !== user.id && user.role !== "admin")) {
+  if (!row || (row.buyer_user_id !== user.id && !isOwnerRole(user.role))) {
     throw new AppError(404, "not_found", "No encontré esa orden en tu cuenta.")
   }
   return {
@@ -821,7 +822,7 @@ async function miPerfil(userId: string) {
   return {
     ok: true,
     usuario: user.username,
-    perfil: user.role === "admin" ? "administrador" : "distribuidor",
+    perfil: isOwnerRole(user.role) ? "propietario" : "sucursal",
     reseller_flujotv: reseller,
     saldo_cupones: round2(saldos.cupones),
     saldo_tokens: round2(saldos.tokens),

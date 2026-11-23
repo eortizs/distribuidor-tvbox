@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { flujoErrorResponse } from "@/server/flujotv/http"
 import { flujoRawRequest } from "@/server/flujotv/service"
@@ -16,7 +17,7 @@ export async function POST(request: Request) {
     if (!user) return unauthorizedResponse()
     // Solo admin: la consola cruda permite operar la API de licencias
     // (p. ej. renovaciones) sin pasar por el cobro de Mercado Pago.
-    if (user.role !== "admin") {
+    if (!isOwnerRole(user.role)) {
       return Response.json(
         {
           ok: false,

@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import type { Metadata } from "next"
 
 import { LinksPagoView } from "@/components/herramientas/links-pago/links-pago-view"
@@ -16,7 +17,7 @@ export default async function LinksPagoPage() {
 
   // Distribuidor: solo sus órdenes; admin: todas (con quién las creó).
   const orders = await listPaymentOrders({
-    creatorUserId: user.role === "admin" ? undefined : user.id,
+    creatorUserId: isOwnerRole(user.role) ? undefined : user.id,
   })
 
   return (
@@ -24,7 +25,7 @@ export default async function LinksPagoPage() {
       <h1 className="sr-only">SPEILink</h1>
       <LinksPagoView
         initialOrders={orders.map(toPaymentOrderListItem)}
-        isAdmin={user.role === "admin"}
+        isAdmin={isOwnerRole(user.role)}
         whatsappConfigured={whatsappAgentNumber() !== null}
         scanConfigured={receiptScanConfigured()}
       />

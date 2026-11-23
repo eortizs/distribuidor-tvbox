@@ -354,7 +354,7 @@ function fanoutAdminCopies(input: RenewalNotificationInput): void {
   if (!buyerUserId) return
 
   void Promise.all([
-    pool.query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin'`),
+    pool.query<{ id: string }>(`SELECT id FROM users WHERE role IN ('admin', 'propietario')`),
     pool.query<{ username: string }>(
       `SELECT username FROM users WHERE id = $1::uuid`,
       [buyerUserId]
@@ -425,7 +425,7 @@ export function createAdminTransferRejectedNotification(
     " Revísala en Transferencias por revisar."
 
   void pool
-    .query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin'`)
+    .query<{ id: string }>(`SELECT id FROM users WHERE role IN ('admin', 'propietario')`)
     .then((result) =>
       Promise.all(
         result.rows.map((row) =>
@@ -468,7 +468,7 @@ export function createAdminTransferEscalatedNotification(
   if (!userName || !input.orderId) return
 
   void pool
-    .query<{ id: string }>(`SELECT id FROM users WHERE role = 'admin'`)
+    .query<{ id: string }>(`SELECT id FROM users WHERE role IN ('admin', 'propietario')`)
     .then((result) =>
       Promise.all(
         result.rows.map((row) =>

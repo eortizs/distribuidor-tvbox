@@ -1,5 +1,6 @@
 "use client"
 
+import {UserRole, isOwnerRole, isBranchRole } from "@/server/auth/types"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   CheckIcon,
@@ -48,7 +49,7 @@ import type { WhatsAppStatusInfo } from "@/server/whatsapp/socket"
 interface RegisteredNumber {
   id: string
   username: string
-  role: "admin" | "distribuidor"
+  role: UserRole
   phone: string
 }
 
@@ -648,10 +649,10 @@ export function WhatsAppView({
                     {item.username}
                   </span>
                   <Badge
-                    variant={item.role === "admin" ? "primary-light" : "info-light"}
+                    variant={isOwnerRole(item.role) ? "primary-light" : "info-light"}
                     size="xs"
                   >
-                    {item.role}
+                    {isOwnerRole(item.role) ? "Propietario" : isBranchRole(item.role) ? "Sucursal" : item.role}
                   </Badge>
                   <span className="text-muted-foreground text-sm tabular-nums">
                     {item.phone}

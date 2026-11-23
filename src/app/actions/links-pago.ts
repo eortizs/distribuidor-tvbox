@@ -1,5 +1,6 @@
 "use server"
 
+import { isOwnerRole } from "@/server/auth/types"
 import { revalidatePath } from "next/cache"
 import QRCode from "qrcode"
 
@@ -81,7 +82,7 @@ export async function createPaymentOrderAction(input: {
   if (!bank) {
     return {
       error:
-        user.role === "admin"
+        isOwnerRole(user.role)
           ? "Faltan los datos bancarios para recibir el pago: complétalos en Perfil → Datos bancarios o configura TRANSFER_BANK_NAME/ACCOUNT/HOLDER en el servidor."
           : "Faltan tus datos bancarios para recibir el pago: complétalos en Perfil → Datos bancarios (Banco, Destinatario y CLABE).",
       order: null,
@@ -159,7 +160,7 @@ export async function getPaymentOrderLinkAction(input: {
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
   if (!order) return { error: "El link de pago no existe.", order: null }
-  if (user.role !== "admin" && order.creatorUserId !== user.id) {
+  if (!isOwnerRole(user.role) && order.creatorUserId !== user.id) {
     return { error: "Solo el creador del link o un administrador puede verla.", order: null }
   }
   if (order.status !== "pending" && order.status !== "verifying") {
@@ -232,7 +233,7 @@ export async function resolvePaymentOrderAction(input: {
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
   if (!order) return { error: "El link de pago no existe." }
-  if (user.role !== "admin" && order.creatorUserId !== user.id) {
+  if (!isOwnerRole(user.role) && order.creatorUserId !== user.id) {
     return { error: "Solo el creador del link o un administrador puede resolverla." }
   }
   if (order.status !== "pending" && order.status !== "verifying") {
@@ -308,7 +309,7 @@ export async function cancelPaymentOrderAction(input: {
 
   const order = await getPaymentOrder(input.orderId).catch(() => null)
   if (!order) return { error: "El link de pago no existe." }
-  if (user.role !== "admin" && order.creatorUserId !== user.id) {
+  if (!isOwnerRole(user.role) && order.creatorUserId !== user.id) {
     return { error: "Solo el creador del link o un administrador puede cancelarla." }
   }
   if (order.status !== "pending" && order.status !== "verifying") {

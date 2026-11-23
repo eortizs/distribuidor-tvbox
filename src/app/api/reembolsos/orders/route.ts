@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { mpErrorResponse } from "@/server/mercadopago/errors"
 import { listRefundOrders } from "@/server/mercadopago/service"
@@ -12,7 +13,7 @@ export async function GET() {
   try {
     const user = await requireApiUser("flujo")
     if (!user) return unauthorizedResponse()
-    if (user.role !== "admin") {
+    if (!isOwnerRole(user.role)) {
       return Response.json(
         {
           ok: false,

@@ -1,3 +1,4 @@
+import { isBranchRole } from "@/server/auth/types"
 import type { FlujoClient } from "@/lib/flujotv"
 
 import { getAccountDistribuidorName } from "@/server/auth/accounts"
@@ -40,7 +41,7 @@ function rawDistributorValue(raw: Record<string, unknown>): string {
  * el panel completo sería filtrar datos de otros distribuidores).
  */
 export async function resolveClientScope(user: AuthUser): Promise<ClientScope> {
-  if (user.role !== "distribuidor") return { kind: "all" }
+  if (!isBranchRole(user.role)) return { kind: "all" }
   const name = (await getAccountDistribuidorName(user.id))?.trim() ?? ""
   return name.length > 0 ? { kind: "distributor", name } : { kind: "none" }
 }

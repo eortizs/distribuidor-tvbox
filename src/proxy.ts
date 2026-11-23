@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { NextResponse, type NextRequest } from "next/server"
 
 import { findSessionUser } from "@/server/auth/session-lookup"
@@ -194,7 +195,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url)
   }
 
-  if (session && session.role !== "admin" && pathname.startsWith("/users")) {
+  if (session && !isOwnerRole(session.role) && pathname.startsWith("/users")) {
     const url = request.nextUrl.clone()
     url.pathname = "/clientes"
     return NextResponse.redirect(url)

@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import type { Metadata } from "next"
 
 import { Calculadora } from "@/components/herramientas/calculadora/calculadora"
@@ -17,7 +18,7 @@ export default async function CalculadoraPage() {
   // ocultó para esta cuenta, la calculadora tampoco ofrece cobros (admins
   // siempre pueden).
   const hiddenModules =
-    user.role === "admin" ? null : await getHiddenModules(user.id)
+    isOwnerRole(user.role) ? null : await getHiddenModules(user.id)
   const puedeCobrar =
     hiddenModules === null ||
     !hiddenModules.includes("/modulos/links-de-pago")

@@ -711,7 +711,7 @@ function depositCredentialExistsSql(orderAlias: string): string {
   return `
           SELECT 1 FROM users u2
            WHERE u2.id = ${orderAlias}.creator_user_id
-             AND (u2.role = 'admin'
+             AND (u2.role IN ('admin', 'propietario')
                   OR EXISTS (
                     SELECT 1 FROM user_mp_tokens t
                      WHERE t.user_id = u2.id AND t.status = 'active'
@@ -824,7 +824,7 @@ export async function listDepositSweeperAccounts(): Promise<
     n: number
   }>(
     `SELECT
-       CASE WHEN u.role = 'admin' AND NOT EXISTS (
+       CASE WHEN u.role IN ('admin', 'propietario') AND NOT EXISTS (
               SELECT 1 FROM user_mp_tokens t
                WHERE t.user_id = o.creator_user_id AND t.status = 'active'
             ) THEN NULL ELSE o.creator_user_id::text END AS seller_user_id,
@@ -867,7 +867,7 @@ export async function listDepositClaimantPaymentOrders(
       ? `EXISTS (
           SELECT 1 FROM users u2
            WHERE u2.id = o.creator_user_id
-             AND u2.role = 'admin'
+             AND u2.role IN ('admin', 'propietario')
              AND NOT EXISTS (
                SELECT 1 FROM user_mp_tokens t
                 WHERE t.user_id = u2.id AND t.status = 'active'

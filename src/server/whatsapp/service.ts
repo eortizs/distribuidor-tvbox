@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto"
 import { pool } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 
+import type { UserRole } from "@/server/auth/types"
+
 import {
   canonicalWhatsAppDigits,
   isValidWhatsAppNumber,
@@ -23,7 +25,7 @@ import {
 export interface WhatsAppUser {
   id: string
   username: string
-  role: "admin" | "distribuidor"
+  role: UserRole
   whatsappPhone: string
 }
 
@@ -37,7 +39,7 @@ export async function findUserByWhatsAppPhone(
   const result = await pool.query<{
     id: string
     username: string
-    role: "admin" | "distribuidor"
+    role: UserRole
     whatsapp_phone: string
   }>(
     `SELECT id, username, role, whatsapp_phone

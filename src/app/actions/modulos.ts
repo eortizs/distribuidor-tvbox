@@ -1,5 +1,6 @@
 "use server"
 
+import { isOwnerRole } from "@/server/auth/types"
 import { revalidatePath } from "next/cache"
 
 import { getSessionUser } from "@/server/auth/session"
@@ -45,7 +46,7 @@ export async function updateUserModulesAction(
   visibleHrefs: string[]
 ): Promise<UpdateUserModulesResult> {
   const session = await getSessionUser()
-  if (!session || session.role !== "admin") {
+  if (!session || !isOwnerRole(session.role)) {
     return {
       ok: false,
       error: "Solo un admin puede ajustar los módulos de una cuenta.",

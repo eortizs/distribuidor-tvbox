@@ -1,5 +1,6 @@
 "use server"
 
+import { isOwnerRole } from "@/server/auth/types"
 import { requireUser } from "@/server/auth/guards"
 import {
   DEFAULT_FLUJO_API_BASE,
@@ -36,7 +37,7 @@ function readApiKey(formData: FormData): string {
 /** Solo un admin puede cambiar la clave que usa todo el panel. */
 async function requireAdmin() {
   const user = await requireUser("flujo")
-  if (user.role !== "admin") {
+  if (!isOwnerRole(user.role)) {
     throw new Error("Solo un administrador puede cambiar la clave de la API.")
   }
   return user

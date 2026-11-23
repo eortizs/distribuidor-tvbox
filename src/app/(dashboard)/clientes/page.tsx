@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { ClientesAccordion } from "@/components/entities/clientes-accordion"
 import { requireUser } from "@/server/auth/guards"
 import { resolveClientScope } from "@/server/flujotv/scope"
@@ -45,7 +46,7 @@ export default async function EntitiesPage({
     <div className="flex flex-1 flex-col p-4 md:p-6">
       <ClientesAccordion
         distribuidorName={distribuidorName}
-        isAdmin={user.role === "admin"}
+        isAdmin={isOwnerRole(user.role)}
         priceMxn={licensePriceMxnOrNull()}
         returnOrder={params.orden?.trim() || null}
         returnState={params.estado?.trim() || null}

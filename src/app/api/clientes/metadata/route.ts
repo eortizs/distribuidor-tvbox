@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import type { AuthUser } from "@/server/auth/types"
 import { getFlujoClient } from "@/server/flujotv/service"
@@ -110,7 +111,7 @@ export async function PUT(request: Request) {
 
     // El precio especial cambia lo que se cobra por renovar a ese cliente:
     // solo el administrador puede fijarlo o quitarlo.
-    if (payload.price_mxn !== undefined && user.role !== "admin") {
+    if (payload.price_mxn !== undefined && !isOwnerRole(user.role)) {
       throw new AppError(
         403,
         "forbidden",
@@ -124,7 +125,7 @@ export async function PUT(request: Request) {
       userId: user.id,
       alias: payload.alias,
       whatsappPhone: payload.whatsapp_phone,
-      priceMxn: user.role === "admin" ? payload.price_mxn : undefined,
+      priceMxn: isOwnerRole(user.role) ? payload.price_mxn : undefined,
     })
     const resolvedPrice = await clientLicensePriceMxnOrNull(userName)
 

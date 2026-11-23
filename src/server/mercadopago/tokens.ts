@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { pool } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 import { cifrarToken, descifrarToken, isTokensCryptoReady } from "@/server/conectores/crypto"
@@ -241,7 +242,8 @@ export async function resolvePaymentOrderDepositToken(
     `SELECT role FROM users WHERE id = $1::uuid LIMIT 1`,
     [creatorUserId]
   )
-  if (role.rows[0]?.role !== "admin") return null
+  const creatorRole = role.rows[0]?.role
+  if (!creatorRole || !isOwnerRole(creatorRole)) return null
   const platform = process.env.MERCADOPAGO_ACCESS_TOKEN?.trim() ?? ""
   return platform.length > 0 ? platform : null
 }

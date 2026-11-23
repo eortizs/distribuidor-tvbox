@@ -1,3 +1,4 @@
+import { isBranchRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { errorResponse } from "@/server/http"
 import { assertPropietarioTicket } from "@/server/tickets/repository"
@@ -12,7 +13,7 @@ export async function GET(_request: Request, ctx: RouteContext) {
 
     const { id } = await ctx.params
     const scope =
-      user.role === "distribuidor"
+      isBranchRole(user.role)
         ? { ownedByDistribuidorId: user.id }
         : undefined
     // El journal de un ticket es privado del propietario: se comprueba la

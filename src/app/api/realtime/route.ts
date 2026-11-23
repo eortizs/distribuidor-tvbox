@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import type { NextRequest } from "next/server"
 
 import { getAccountDistribuidorName } from "@/server/auth/accounts"
@@ -105,12 +106,12 @@ export async function GET(request: NextRequest) {
   }
 
   const distribuidorName =
-    session.role === "admin"
+    isOwnerRole(session.role)
       ? null
       : await getAccountDistribuidorName(session.id)
   const scope: SessionScope = {
     userId: session.id,
-    isAdmin: session.role === "admin",
+    isAdmin: isOwnerRole(session.role),
     distribuidorName,
     tenantId: session.tenantId,
   }

@@ -1,3 +1,4 @@
+import { isOwnerRole } from "@/server/auth/types"
 import { requireApiUser, unauthorizedResponse } from "@/server/auth/api"
 import { mpErrorResponse } from "@/server/mercadopago/errors"
 import {
@@ -34,7 +35,7 @@ export async function GET(
 
     const isOwner =
       order.buyer_user_id !== null && order.buyer_user_id === user.id
-    if (!isOwner && user.role !== "admin") {
+    if (!isOwner && !isOwnerRole(user.role)) {
       return Response.json(
         {
           ok: false,

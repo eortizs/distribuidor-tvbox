@@ -1,3 +1,4 @@
+import { isBranchRole } from "@/server/auth/types"
 import { DistribuidoresView } from "@/components/herramientas/distribuidores/distribuidores-view"
 import type { UserListItem } from "@/components/auth/users-list"
 import { requireRole } from "@/server/auth/guards"
@@ -33,7 +34,7 @@ export default async function DistribuidoresPage() {
   ])
 
   const distribuidores: UserListItem[] = users
-    .filter((user) => user.role === "distribuidor")
+    .filter((user) => isBranchRole(user.role))
     .map((user) => ({
       id: user.id,
       username: user.username,

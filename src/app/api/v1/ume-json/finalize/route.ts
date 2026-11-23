@@ -11,7 +11,7 @@ import {
 } from "@/server/umejson/schema"
 import { createEntity } from "@/server/umejson/repository"
 import { type UmeJson } from "@/server/umejson/types"
-import { ACCOUNT_ENTITY_NAME } from "@/server/auth/types"
+import { ACCOUNT_ENTITY_NAME, isOwnerRole, isBranchRole  } from "@/server/auth/types"
 import { ENTITY_NAME_TICKET } from "@/lib/tickets"
 
 export async function POST(request: Request) {
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     // La entidad Cuenta es la única fuente de verdad del vínculo usuario ↔
     // reseller que muestra el panel admin: solo el flujo interno de cuentas
     // (createAccount) puede crearla, nunca un cliente de la API.
-    if (user.role !== "admin" && doc.entityName === ACCOUNT_ENTITY_NAME) {
+    if (!isOwnerRole(user.role) && doc.entityName === ACCOUNT_ENTITY_NAME) {
       return Response.json(
         {
           ok: false,
@@ -110,7 +110,7 @@ export async function POST(request: Request) {
       )
     }
 
-    if (user.role === "distribuidor") {
+    if (isBranchRole(user.role)) {
       doc.dynamicProperties = {
         ...doc.dynamicProperties,
         distribuidorId: user.id,
