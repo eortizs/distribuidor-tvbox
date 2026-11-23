@@ -3,7 +3,6 @@ import Link from "next/link"
 import type { ReactNode } from "react"
 import {
   ArrowLeftRightIcon,
-  CalculatorIcon,
   CheckIcon,
   CircleCheckIcon,
   LandmarkIcon,
@@ -28,11 +27,10 @@ import {
   NavbarLoginButton,
   PrimarySignupCta,
 } from "@/components/short/landing-cta"
-import { SavingsCalculator } from "@/components/short/savings-calculator"
 import { WhatsAppPhoneDemo } from "@/components/short/whatsapp-phone-demo"
 import { shortLinkBaseUrl } from "@/server/site-url"
 
-const TITLE = "SPEILink — Links de pago por WhatsApp con 0% de comisión"
+const TITLE = "SPEILink — Links de pago por WhatsApp con confirmación automática"
 const DESCRIPTION =
   "Crea links de pago para WhatsApp y recibe el 100% de tu dinero directo en tu cuenta. Cada pago se valida con su concepto de pago y depósito bancario."
 
@@ -77,14 +75,14 @@ const STEPS = [
     icon: ArrowLeftRightIcon,
     title: "Tu cliente transfiere",
     description:
-      "El cliente paga por SPEI directo a tu cuenta desde cualquier banco en México, sin descargar apps.",
+      "El cliente paga por transferencia directo a tu cuenta desde cualquier banco en México, sin descargar apps.",
   },
   {
     step: "03",
     icon: CircleCheckIcon,
-    title: <><BrandInline /> valida todo</>,
+    title: "Confirmación automática sin mover un dedo",
     description:
-      "El cliente envía su comprobante por el chat y el sistema valida el concepto de pago y el depósito real en tu cuenta.",
+      "En cuanto el dinero entra a tu cuenta, nuestro sistema detecta el depósito solo y envía el recibo confirmado por WhatsApp, sin que tengas que revisar tu banco ni validar capturas de pantalla.",
   },
 ]
 
@@ -95,7 +93,7 @@ const CAROUSEL_SLIDES = [
     badge: "Abarrotes y tienditas",
     title: "Cobra directo en tu mostrador",
     benefit:
-      "Tus clientes transfieren desde su celular y el pago se confirma al instante, sin terminal ni comisiones.",
+      "Tus clientes transfieren desde su celular y el pago se confirma al instante, sin terminal.",
   },
   {
     src: "/carrusel/taller.webp",
@@ -109,7 +107,7 @@ const CAROUSEL_SLIDES = [
     src: "/carrusel/artesanias.webp",
     alt: "Artesana sonriente en su tienda de artesanías mexicanas con un cartel que dice «Se aceptan transferencias con WhatsApp»",
     badge: "Artesanías y más",
-    title: "Acepta transferencias sin comisión",
+    title: "Acepta transferencias sin complicaciones",
     benefit:
       "Vende en ferias, locales o por mensaje conservando íntegro el margen de cada pieza.",
   },
@@ -122,9 +120,9 @@ const TRUST_POINTS = [
     description: (
       <>
         Conectas tu cuenta de Mercado Pago con un clic —la única cuenta digital en
-        México capaz de notificar y monitorear movimientos SPEI en tiempo real y sin
-        costo de consulta—. <BrandInline /> solo lee la confirmación del depósito; tu
-        dinero nunca pasa por intermediarios.
+        México capaz de notificar y monitorear movimientos de transferencia en tiempo
+        real y sin costo de consulta—. <BrandInline /> solo lee la confirmación del
+        depósito; tu dinero nunca pasa por intermediarios.
       </>
     ),
     showBanks: false,
@@ -144,7 +142,7 @@ const TRUST_POINTS = [
     icon: WalletIcon,
     title: "Compatible con toda la banca mexicana",
     description:
-      "Tus clientes pagan desde BBVA, Banorte, Santander, Nu, Citibanamex o cualquier banco en México vía SPEI.",
+      "Tus clientes pagan desde BBVA, Banorte, Santander, Nu, Citibanamex o cualquier banco en México por transferencia.",
     showBanks: true,
   },
   {
@@ -176,7 +174,7 @@ const MP_BENEFITS = [
   {
     title: "Control total de tu dinero",
     description:
-      "Recibe pagos desde cualquier banco de México vía SPEI y administra tus ingresos desde una sola app.",
+      "Recibe pagos desde cualquier banco de México por transferencia y administra tus ingresos desde una sola app.",
   },
 ]
 
@@ -200,11 +198,11 @@ const FAQ_ITEMS: FaqAccordionItem[] = [
     question:
       "¿Por qué necesito usar una cuenta de Mercado Pago para recibir los pagos?",
     answer:
-      "Porque actualmente es la única plataforma financiera en México que permite conectar y validar transferencias SPEI entrantes en tiempo real y sin costo por consulta. Otros bancos tradicionales cobran altas comisiones por acceso a sus sistemas de monitoreo, lo que nos obligaría a cobrarte por cada venta. Gracias a esto, tus clientes pueden pagarte desde cualquier banco (BBVA, Banorte, Nu, etc.) y tú recibes la confirmación al instante sin pagar comisiones.",
+      "Porque actualmente es la única plataforma financiera en México que permite conectar y validar transferencias entrantes en tiempo real y sin costo por consulta. Gracias a esto, tus clientes pueden pagarte desde cualquier banco (BBVA, Banorte, Nu, etc.) y tú recibes la confirmación al instante.",
   },
   {
     id: "modelo-negocio",
-    question: <>¿Cómo gana dinero <BrandInline /> si no cobra comisión?</>,
+    question: <>¿Cómo gana dinero <BrandInline />?</>,
     answer:
       "Ofrecemos un plan gratuito para empezar y planes mensuales fijos para negocios con alto volumen.",
   },
@@ -212,7 +210,7 @@ const FAQ_ITEMS: FaqAccordionItem[] = [
     id: "mercado-pago-cliente",
     question: "¿Mis clientes necesitan tener Mercado Pago?",
     answer:
-      "No. Pueden transferirte desde BBVA, Banorte, Santander, Nu, Citibanamex o cualquier banco en México vía SPEI.",
+      "No. Pueden transferirte desde BBVA, Banorte, Santander, Nu, Citibanamex o cualquier banco en México por transferencia.",
   },
 ]
 
@@ -269,15 +267,17 @@ export default function ShortLandingPage() {
             <div className="flex flex-col items-center text-center lg:col-span-7 lg:items-start lg:text-left">
               <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3.5 py-1.5 text-xs font-semibold text-[#065F46] sm:text-sm">
                 <CheckIcon className="size-4 text-[#059669]" aria-hidden="true" />
-                0% de comisión al cobrar por WhatsApp
+                100% automatizado.
               </span>
               <h1 className="mt-5 text-3xl leading-[1.1] font-extrabold tracking-[-0.02em] text-balance text-[#0F172A] sm:text-4xl lg:text-5xl">
-                Empieza a cobrar hoy y quédate con el{" "}
-                <span className="text-[#059669] tabular-nums">100%</span> de tus ventas.
+                Acepta pagos por WhatsApp y confirma la transferencia{" "}
+                <span className="text-[#059669]">al instante.</span>
               </h1>
               <p className="mt-4 max-w-xl text-base leading-relaxed text-pretty text-slate-600 sm:text-lg">
-                Links de pago por WhatsApp con depósito directo a tu cuenta. Sin
-                intermediarios y con verificación bancaria automática.
+                Todo ocurre en automático, sin que tengas que dictar tu CLABE,
+                contestar chats ni abrir tu app del banco. Tu cliente escanea o
+                abre tu link, transfiere y <BrandInline /> valida el depósito y
+                confirma por ti.
               </p>
               <div className="mt-7 w-full sm:w-auto">
                 <PrimarySignupCta variant="hero" />
@@ -299,7 +299,7 @@ export default function ShortLandingPage() {
               </div>
               <div className="mt-6 w-full border-t border-slate-200/80 pt-5">
                 <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
-                  Tus clientes pagan vía SPEI desde cualquier banco
+                  Tus clientes pagan por transferencia desde cualquier banco
                 </p>
                 <div className="mt-2.5 flex flex-wrap items-center justify-center gap-2 lg:justify-start">
                   {COMPATIBLE_BANKS.map((bank) => (
@@ -338,7 +338,7 @@ export default function ShortLandingPage() {
               </div>
               <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
                 <strong className="font-semibold text-[#0F172A]">CLABE + WhatsApp:</strong>{" "}
-                recibe transferencias SPEI verificadas al instante y quédate con el{" "}
+                recibe transferencias verificadas al instante y quédate con el{" "}
                 <span className="font-semibold text-[#059669] tabular-nums">100%</span>{" "}
                 de tus ventas.
               </p>
@@ -346,33 +346,14 @@ export default function ShortLandingPage() {
           </div>
         </section>
 
-        <section className="bg-white py-14 sm:py-20">
-          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6 lg:px-8">
-            <div className="mb-8 flex flex-col items-center gap-2.5 text-center">
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-[#065F46]">
-                <CalculatorIcon className="size-3.5 text-[#059669]" aria-hidden="true" />
-                Calculadora de ahorro
-              </span>
-              <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-balance text-[#0F172A] sm:text-3xl">
-                Mira cuánto dejas de regalar en comisiones
-              </h2>
-              <p className="max-w-xl text-sm text-slate-600 sm:text-base">
-                Compara el 4% promedio de las terminales tradicionales contra el 0% de
-                comisión con <BrandInline />.
-              </p>
-            </div>
-            <SavingsCalculator />
-          </div>
-        </section>
-
         <section className="border-y border-slate-200/80 bg-[#F8FAFC] py-14 sm:py-20">
           <div className="mx-auto w-full max-w-6xl px-4 sm:px-6 lg:px-8">
             <div className="mb-10 flex flex-col items-center gap-2 text-center">
               <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-[#0F172A] sm:text-3xl">
-                Cobra en 3 pasos simples
+                Cobra en tres simples pasos.
               </h2>
               <p className="max-w-xl text-sm text-slate-600 sm:text-base">
-                Sin hardware, sin apps para tus clientes y con confirmación automática.
+                Link → Transferencia → Validación
               </p>
             </div>
             <div className="relative grid grid-cols-1 gap-5 lg:grid-cols-3 lg:gap-6">
@@ -522,10 +503,9 @@ export default function ShortLandingPage() {
                   para tu negocio
                 </h2>
                 <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
-                  Para que <BrandInline /> valide tus ventas al instante con 0% de
-                  comisión, solo necesitas conectar una cuenta gratuita de Mercado Pago.
-                  Además de ahorrarte las comisiones de las terminales tradicionales, tu
-                  negocio obtiene beneficios financieros inmediatos:
+                  Para que <BrandInline /> valide tus ventas al instante, solo necesitas
+                  conectar una cuenta gratuita de Mercado Pago. Además, tu negocio
+                  obtiene beneficios financieros inmediatos:
                 </p>
               </div>
               <ul className="grid grid-cols-1 gap-4 lg:grid-cols-3 lg:gap-5">
@@ -567,7 +547,7 @@ export default function ShortLandingPage() {
                 Preguntas frecuentes
               </h2>
               <p className="text-sm text-slate-600 sm:text-base">
-                Todo lo que necesitas saber antes de recibir tu primer pago sin comisión.
+                Todo lo que necesitas saber antes de recibir tu primer pago.
               </p>
             </div>
             <FaqAccordion items={FAQ_ITEMS} />
@@ -583,11 +563,11 @@ export default function ShortLandingPage() {
               />
               <div className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-4">
                 <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-balance sm:text-4xl">
-                  Deja de regalar el 4% en cada venta.
+                  Deja de revisar tu banco en cada transferencia.
                 </h2>
                 <p className="text-sm leading-relaxed text-slate-300 sm:text-base">
-                  Empieza a cobrar hoy y quédate con el 100% de tus ventas con 0% de
-                  comisión al cobrar por WhatsApp.
+                  Empieza a cobrar hoy por WhatsApp con confirmación automática al
+                  instante.
                 </p>
                 <div className="mt-2 w-full sm:w-auto">
                   <PrimarySignupCta variant="banner" />
@@ -624,10 +604,9 @@ export default function ShortLandingPage() {
           </div>
           <p className="border-t border-slate-100 pt-5 text-xs leading-relaxed text-slate-500">
             <BrandInline /> es una plataforma tecnológica de gestión y conciliación de
-            cobros. No es una institución financiera ni capta recursos del público.
-            SPEI® es una marca registrada del Banco de México. <BrandInline /> es un
-            servicio independiente y no está afiliado ni patrocinado por Banxico ni por
-            Mercado Pago.
+            cobros. No es una institución financiera ni capta recursos del público.{" "}
+            <BrandInline /> es un servicio independiente y no está afiliado ni
+            patrocinado por Banxico ni por Mercado Pago.
           </p>
         </div>
       </footer>

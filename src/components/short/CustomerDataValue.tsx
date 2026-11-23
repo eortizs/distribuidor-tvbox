@@ -38,14 +38,13 @@ export function CustomerDataValue() {
             Tu mayor activo comercial
           </span>
           <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-balance text-[#0F172A] sm:text-3xl">
-            Más valioso que ahorrar comisiones: quédate con el contacto de cada
-            cliente
+            Quédate con el contacto de cada cliente
           </h2>
           <p className="max-w-2xl text-sm leading-relaxed text-slate-600 sm:text-base">
-            Cuando te pagan con efectivo o terminal bancaria, tu cliente se va y
-            pierdes todo rastro de él. Con <BrandInline />, cada transferencia
-            construye tu propia base de datos de clientes reales en WhatsApp, de
-            forma natural y sin pedir formularios incómodos.
+            Cuando te pagan con efectivo o transferencia bancaria, tu cliente
+            se va y pierdes todo rastro de él. Con <BrandInline />, cada
+            transferencia construye tu propia base de datos de clientes reales
+            en WhatsApp, de forma natural y sin pedir formularios incómodos.
           </p>
         </div>
 
@@ -74,24 +73,14 @@ export function CustomerDataValue() {
         </div>
 
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-rose-200/80 bg-rose-50/60 p-5">
-              <p className="text-sm font-bold text-rose-800">
-                Efectivo o Terminal Bancaria
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-slate-600">
-                Cobras una vez y el cliente desaparece.
-              </p>
-            </div>
-            <div className="rounded-xl border-2 border-[#059669]/40 bg-emerald-50/70 p-5">
-              <p className="text-sm font-bold text-[#065F46]">
-                <BrandInline /> por WhatsApp
-              </p>
-              <p className="mt-1 text-sm leading-relaxed text-[#1E293B]">
-                Cobras con 0% de comisión y ganas un canal directo para venderle
-                una y otra vez.
-              </p>
-            </div>
+          <div className="rounded-xl border-2 border-[#059669]/40 bg-emerald-50/70 p-5">
+            <p className="text-sm font-bold text-[#065F46]">
+              <BrandInline /> por WhatsApp
+            </p>
+            <p className="mt-1 text-sm leading-relaxed text-[#1E293B]">
+              Cobras al instante y ganas un canal directo para venderle una y
+              otra vez.
+            </p>
           </div>
         </div>
       </div>

@@ -45,7 +45,7 @@ export function FloatingCommissionBadge() {
         <span className="relative inline-flex size-2 rounded-full bg-emerald-400" />
       </span>
       <span className="min-w-0 truncate text-[11px] font-medium sm:text-sm">
-        0% de comisión en todas tus transferencias, siempre
+        Confirmación automática en todas tus transferencias, siempre
       </span>
       <FloatingSignupCta />
     </div>

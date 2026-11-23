@@ -1,8 +1,6 @@
 import type { ReactNode } from "react"
 import { CircleCheckIcon } from "lucide-react"
 
-import { BrandInline } from "@/components/short/brand"
-
 function ChatBubble({
   side,
   variant = "client",
@@ -40,6 +38,9 @@ export function WhatsAppPhoneDemo() {
         aria-hidden="true"
         className="pointer-events-none absolute -inset-4 rounded-[3rem] bg-gradient-to-tr from-emerald-500/15 via-sky-500/10 to-transparent blur-2xl"
       />
+      <div className="absolute -top-4 left-1/2 z-20 -translate-x-1/2 rounded-full border border-emerald-200/90 bg-white/95 px-3.5 py-1.5 text-xs font-semibold whitespace-nowrap text-[#065F46] shadow-lg shadow-slate-900/10 backdrop-blur-md">
+        ⚡ Piloto automático: tú no respondes nada.
+      </div>
       <div className="relative overflow-hidden rounded-[2.25rem] border-[6px] border-[#0F172A] bg-[#0F172A] shadow-2xl shadow-slate-900/20">
         <div
           aria-hidden="true"
@@ -60,11 +61,11 @@ export function WhatsAppPhoneDemo() {
           />
           <div className="flex min-w-0 flex-col">
             <span className="text-sm font-semibold leading-tight text-white">
-              <BrandInline /> Asistente
+              Asistente Automático · Tu Negocio
             </span>
             <span className="flex items-center gap-1.5 text-xs text-emerald-300">
               <span aria-hidden="true" className="size-1.5 rounded-full bg-emerald-400" />
-              Validación en tiempo real
+              En línea • Respuesta automática 24/7
             </span>
           </div>
         </div>
@@ -130,10 +131,10 @@ export function WhatsAppPhoneDemo() {
             </span>
             <div className="min-w-0">
               <p className="text-xs font-semibold text-[#0F172A]">
-                Depósito SPEI verificado en cuenta
+                Transferencia verificada en cuenta
               </p>
               <p className="text-xs text-slate-500">
-                Concepto <span className="font-mono font-semibold text-[#1E293B]">COMPRA500</span> · 0% comisión
+                Concepto <span className="font-mono font-semibold text-[#1E293B]">COMPRA500</span>
               </p>
             </div>
           </div>

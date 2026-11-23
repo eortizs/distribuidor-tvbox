@@ -24,7 +24,7 @@ export function DirectTransferFlow() {
               Banco del cliente
             </span>
             <ArrowRightIcon className="size-4 shrink-0 text-slate-500" aria-hidden="true" />
-            <span className={NODE_CLASS}>Transferencia SPEI</span>
+            <span className={NODE_CLASS}>Transferencia</span>
             <ArrowRightIcon className="size-4 shrink-0 text-slate-500" aria-hidden="true" />
             <span className={NODE_CLASS}>
               <ShieldCheckIcon className="size-4 shrink-0 text-emerald-400" aria-hidden="true" />
