@@ -40,10 +40,24 @@ export default async function LoginPage({
   const oauthCode = params.error
   const isNotice = oauthCode != null && oauthCode in OAUTH_NOTICES
 
+  // Google OAuth solo en el host legado (Google no admite wildcards de
+  // redirección); GOOGLE_ALLOWED_HOSTS (separado por comas) habilita hosts
+  // con URI propia registrada en Google Cloud Console.
+  const { requestHost } = await import("@/server/tenant/request-host")
+  const { resolveTenantHost } = await import("@/server/tenant/hosts")
+  const currentHost = await requestHost()
+  const hostKind = resolveTenantHost(currentHost).kind
+  const allowedHosts = (process.env.GOOGLE_ALLOWED_HOSTS || "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean)
+  const googleOnThisHost =
+    hostKind === "legacy" || allowedHosts.includes(currentHost)
+
   return (
     <AuthShell>
       <LoginForm
-        googleEnabled={isGoogleAuthEnabled()}
+        googleEnabled={isGoogleAuthEnabled() && googleOnThisHost}
         oauthError={
           oauthCode && !isNotice
             ? (OAUTH_ERRORS[oauthCode] ?? OAUTH_ERRORS.google_failed)

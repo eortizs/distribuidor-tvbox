@@ -4,7 +4,7 @@ CREATE TABLE users (
   id            uuid PRIMARY KEY,                -- UUID v7
   username      text NOT NULL UNIQUE,
   password_hash text NOT NULL,                   -- scrypt:N:r:p:salt:hash
-  role          text NOT NULL CHECK (role IN ('admin', 'distribuidor')),
+  role          text NOT NULL CHECK (role IN ('plataforma', 'propietario', 'sucursal')),
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 

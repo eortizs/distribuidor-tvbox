@@ -69,7 +69,7 @@ export interface CreateAccountInput {
   googlePicture?: string | null
   /** Nombre completo de la cuenta Google, si el id_token lo trajo. */
   fullName?: string
-  /** Defaults to "distribuidor"; only the admin flow overrides it. */
+  /** Defaults to "sucursal"; only the owner flow overrides it. */
   role?: UserRole
   /** Tenant de la cuenta (alta desde plataforma/host); si falta, el trigger lo toma del contexto. */
   tenantId?: string
@@ -94,7 +94,7 @@ export async function createAccount(
       "Login must be a valid email address"
     )
   }
-  const role: UserRole = input.role ?? "distribuidor"
+  const role: UserRole = input.role ?? "sucursal"
   let created: AuthUser | null = null
 
   try {

@@ -1,8 +1,4 @@
-export type UserRole =
-  | "admin"
-  | "distribuidor"
-  | "propietario"
-  | "sucursal"
+export type UserRole = "plataforma" | "propietario" | "sucursal"
 
 /**
  * entityName of the umeJSON entity that mirrors each auth user.
@@ -33,18 +29,16 @@ export interface AuthUser {
 }
 
 /**
- * Fase 2 (expansión de roles): `propietario`/`sucursal` son los nombres
- * nuevos de `admin`/`distribuidor`. Durante el periodo de expansión el
- * código decide por estos dos predicados (nunca por literales); el rename de
- * datos llega con db/apply-roles-rename.mjs y entonces el tipo se reduce a
- * `plataforma | propietario | sucursal`.
+ * Predicados de rol (nombres finales tras el rename de
+ * db/apply-roles-rename.mjs). El código NUNCA compara literales de rol
+ * directamente: siempre pasa por aquí.
  */
 export function isOwnerRole(role: string): boolean {
-  return role === "admin" || role === "propietario"
+  return role === "propietario"
 }
 
 export function isBranchRole(role: string): boolean {
-  return role === "distribuidor" || role === "sucursal"
+  return role === "sucursal"
 }
 
 export function isPlatformRole(role: string): boolean {
@@ -53,10 +47,7 @@ export function isPlatformRole(role: string): boolean {
 
 export function isValidRole(role: string): role is UserRole {
   return (
-    role === "admin" ||
-    role === "distribuidor" ||
-    role === "propietario" ||
-    role === "sucursal"
+    role === "plataforma" || role === "propietario" || role === "sucursal"
   )
 }
 

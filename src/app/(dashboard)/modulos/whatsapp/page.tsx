@@ -15,7 +15,7 @@ export const metadata: Metadata = {
 }
 
 export default async function WhatsAppPage() {
-  await requireRole("admin", "core")
+  await requireRole("propietario", "core")
   const [outbox, log, users] = await Promise.all([
     listWhatsAppOutbox(),
     listWhatsAppLog(50),

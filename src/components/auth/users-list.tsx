@@ -144,7 +144,7 @@ export interface UserListItem {
   createdAtLabel: string
 }
 
-type RoleFilter = "all" | "admin" | "distribuidor" | "propietario" | "sucursal"
+type RoleFilter = "all" | "propietario" | "sucursal"
 
 const createState: CreateUserState = { error: null, success: null }
 const updateState: UpdateUserState = { error: null, success: null }
@@ -172,8 +172,8 @@ export function UsersManager({
       (user) =>
         (query === "" || user.username.toLowerCase().includes(query)) &&
         (roleFilter === "all" ||
-          (roleFilter === "admin" && isOwnerRole(user.role)) ||
-          (roleFilter === "distribuidor" && isBranchRole(user.role)))
+          (roleFilter === "propietario" && isOwnerRole(user.role)) ||
+          (roleFilter === "sucursal" && isBranchRole(user.role)))
     )
   }, [users, search, roleFilter])
 
@@ -309,8 +309,8 @@ export function UsersManager({
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">All roles</SelectItem>
-            <SelectItem value="admin">Propietario</SelectItem>
-            <SelectItem value="distribuidor">Sucursal</SelectItem>
+            <SelectItem value="propietario">Propietario</SelectItem>
+            <SelectItem value="sucursal">Sucursal</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -388,13 +388,13 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
           </Field>
           <Field>
             <FieldLabel htmlFor="new-role">Role</FieldLabel>
-            <Select name="role" defaultValue="distribuidor">
+            <Select name="role" defaultValue="sucursal">
               <SelectTrigger id="new-role" className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="distribuidor">Sucursal</SelectItem>
-                <SelectItem value="admin">Propietario</SelectItem>
+                <SelectItem value="sucursal">Sucursal</SelectItem>
+                <SelectItem value="propietario">Propietario</SelectItem>
               </SelectContent>
             </Select>
           </Field>
@@ -859,8 +859,8 @@ function EditUserForm({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="distribuidor">Sucursal</SelectItem>
-                <SelectItem value="admin">Propietario</SelectItem>
+                <SelectItem value="sucursal">Sucursal</SelectItem>
+                <SelectItem value="propietario">Propietario</SelectItem>
               </SelectContent>
             </Select>
           </Field>

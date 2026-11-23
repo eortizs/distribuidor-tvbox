@@ -29,6 +29,7 @@ type ShellViewport = {
 export function DashboardShell({
   user,
   saldoCupones,
+  tenantName = null,
   saldoTokens,
   visibleSections,
   children,
@@ -40,6 +41,8 @@ export function DashboardShell({
   saldoTokens: number
   /** Claves de sección visibles para este usuario (permisos por cuenta). */
   visibleSections: string[]
+  /** Nombre del tenant (branding multitenant); null = sin tenant resuelto. */
+  tenantName?: string | null
   children: React.ReactNode
 }) {
   const pathname = usePathname() ?? ""
@@ -128,8 +131,13 @@ export function DashboardShell({
             </Button>
           </h1>
         ) : headerTitle ? (
-          <h1 className="text-base font-semibold tracking-tight">
+          <h1 className="inline-flex items-baseline gap-2 text-base font-semibold tracking-tight">
             {headerTitle}
+            {tenantName ? (
+              <span className="text-muted-foreground text-xs font-normal">
+                · {tenantName}
+              </span>
+            ) : null}
           </h1>
         ) : null}
         <div className="ml-auto flex items-center gap-1 md:gap-2">

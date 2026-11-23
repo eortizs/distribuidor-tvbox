@@ -56,7 +56,7 @@ export async function createUserAction(
       password,
       role,
       actor: `user:${session.username}`,
-      source: "admin",
+      source: "propietario",
     })
   } catch (error) {
     if (error instanceof AppError && error.code === "email_taken") {
@@ -66,7 +66,7 @@ export async function createUserAction(
   }
 
   revalidatePath("/users")
-  return { error: null, success: `Account '${email}' created as ${role}` }
+  return { error: null, success: `Cuenta '${email}' creada como ${role}` }
 }
 
 export interface UpdateUserState {

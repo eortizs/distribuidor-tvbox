@@ -18,14 +18,24 @@ export interface AuthenticatedSession extends AuthUser {
   tenantId: string | null
 }
 
-export async function createSession(user: AuthUser): Promise<void> {
+export async function createSession(
+  user: AuthUser & { tenantId?: string | null }
+): Promise<void> {
   const token = randomBytes(32).toString("base64url")
   const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000)
 
+  // El tenant de la sesión es el del USUARIO (NULL = plataforma); explícito
+  // para que no dependa del GUC del trigger (el lookup va por systemPool).
   await systemPool.query(
-    `INSERT INTO sessions (id, user_id, token_hash, expires_at)
-     VALUES ($1, $2, $3, $4)`,
-    [crypto.randomUUID(), user.id, hashSessionToken(token), expiresAt]
+    `INSERT INTO sessions (id, user_id, token_hash, expires_at, tenant_id)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [
+      crypto.randomUUID(),
+      user.id,
+      hashSessionToken(token),
+      expiresAt,
+      user.tenantId ?? null,
+    ]
   )
 
   const cookieStore = await cookies()

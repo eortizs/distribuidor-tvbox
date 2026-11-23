@@ -13,7 +13,7 @@ export const instant = false
 export default async function LabFlujoTvPage() {
   // Solo admin: incluye la consola cruda que permite operar la API de
   // licencias (p. ej. renovaciones) sin pasar por el cobro de Mercado Pago.
-  await requireRole("admin", "flujo")
+  await requireRole("propietario", "flujo")
   const status = await getFlujoStatus()
 
   return <FlujoLab initialStatus={status} />

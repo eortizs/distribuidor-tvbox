@@ -76,6 +76,23 @@ export async function runAsPlatform<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 /**
+ * DUAL (consola de plataforma creando/ajustando UN tenant): fija
+ * app.platform=on Y app.tenant_id=<id> — las políticas pasan por plataforma
+ * y el trigger de tenant_id rellena las filas nuevas con el tenant dado.
+ */
+export async function runWithPlatformTenant<T>(
+  tenantId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const context: TenantContext = {
+    tenantId,
+    platform: true,
+    source: "explicit",
+  }
+  return als.run(context, fn)
+}
+
+/**
  * Contexto de la petición HTTP desde headers() de Next, memoizado por
  * identidad del objeto de headers (uno por petición en el runtime).
  */

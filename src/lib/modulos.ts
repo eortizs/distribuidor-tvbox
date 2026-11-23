@@ -49,7 +49,7 @@ export interface Modulo {
   icon: LucideIcon
   /**
    * Solo visible para cuentas admin: el hub oculta la tarjeta y la ruta
-   * queda servida detrás de `requireRole("admin")`.
+   * queda servida detrás de `requireRole("propietario")`.
    */
   adminOnly?: boolean
   /**

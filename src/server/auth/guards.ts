@@ -1,4 +1,4 @@
-import { redirect } from "next/navigation"
+import { notFound, redirect } from "next/navigation"
 
 import type { TenantModule } from "@/lib/tenant-modules"
 import { tenantAllows } from "@/lib/tenant-modules"
@@ -23,6 +23,24 @@ export async function requireUser(module: TenantModule): Promise<AuthUser> {
     redirect("/clientes")
   }
   return { ...user, tenantId: currentTenantContext()?.tenantId ?? null }
+}
+
+/**
+ * Consola de plataforma (§4.5): requiere sesión en el host de plataforma Y
+ * rol `plataforma`. En otro host la página responde 404 neutro.
+ */
+export async function requirePlatformUser(): Promise<AuthUser> {
+  const { resolveTenantHost } = await import("@/server/tenant/hosts")
+  const { requestHost } = await import("@/server/tenant/request-host")
+  const { isPlatformRole } = await import("./types")
+  if (resolveTenantHost(await requestHost()).kind !== "platform") {
+    notFound()
+  }
+  const user = await requireUser("core")
+  if (!isPlatformRole(user.role)) {
+    notFound()
+  }
+  return user
 }
 
 export async function requireRole(

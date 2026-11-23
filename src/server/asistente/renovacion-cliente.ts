@@ -210,7 +210,7 @@ async function findDistributorUserForReseller(
         AND e.entity_name = $2
         AND e.doc->'dynamicProperties'->>'userId' = u.id
         AND e.doc->'dynamicProperties'->>'distribuidorId' = u.id
-      WHERE u.role IN ('distribuidor', 'sucursal')
+      WHERE u.role = 'sucursal'
         AND lower(e.doc->'dynamicProperties'->>'distribuidorName') = $1
       ORDER BY u.created_at ASC
       LIMIT 1`,
@@ -223,7 +223,7 @@ async function findDistributorUserForReseller(
 /** Primer admin por antigüedad: comprador de las órdenes de clientes suyos. */
 async function firstAdminUserId(): Promise<string | null> {
   const result = await pool.query<{ id: string }>(
-    `SELECT id FROM users WHERE role IN ('admin', 'propietario') ORDER BY created_at ASC LIMIT 1`
+    `SELECT id FROM users WHERE role = 'propietario' ORDER BY created_at ASC LIMIT 1`
   )
   return result.rows[0] ? String(result.rows[0].id) : null
 }

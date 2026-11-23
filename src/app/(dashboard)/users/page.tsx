@@ -13,7 +13,7 @@ function formatDate(date: Date): string {
 }
 
 export default async function UsersPage() {
-  const session = await requireRole("admin", "core")
+  const session = await requireRole("propietario", "core")
   const [users, deniedByUser] = await Promise.all([
     listUsers(),
     listDeniedSectionsByUser(),

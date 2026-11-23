@@ -26,7 +26,7 @@ function formatDate(date: Date): string {
  * exactamente igual que la página de Usuarios.
  */
 export default async function DistribuidoresPage() {
-  const session = await requireRole("admin", "flujo")
+  const session = await requireRole("propietario", "flujo")
   const [users, deniedByUser, hiddenModulesByUser] = await Promise.all([
     listUsers(),
     listDeniedSectionsByUser(),

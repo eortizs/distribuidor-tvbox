@@ -148,6 +148,7 @@ export async function loginAction(
     id: user.id,
     username: user.username,
     role: user.role,
+    tenantId: tenantIdOfUser,
   })
 
   redirect("/clientes")
@@ -191,12 +192,14 @@ export async function registerAction(
   }
 
   let user: AuthUser
+  let userTenantId: string | null = null
   try {
     user = await createAccount({
       email,
       password,
       tenantId: entry.tenantId,
     })
+    userTenantId = entry.tenantId
   } catch (error) {
     if (error instanceof AppError && error.code === "email_taken") {
       return { error: "An account with this email already exists" }
@@ -208,6 +211,7 @@ export async function registerAction(
     id: user.id,
     username: user.username,
     role: user.role,
+    tenantId: userTenantId,
   })
 
   redirect("/clientes")

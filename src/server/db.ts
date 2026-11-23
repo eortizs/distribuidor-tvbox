@@ -49,6 +49,13 @@ export async function setTenantContextInTx(
   if (!effective) return
   if (effective.platform) {
     await client.query("SELECT set_config('app.platform', 'on', true)")
+    // Dual (runWithPlatformTenant): además fija el tenant para el trigger
+    // de tenant_id de las filas nuevas.
+    if (isValidTenantId(effective.tenantId)) {
+      await client.query("SELECT set_config('app.tenant_id', $1, true)", [
+        effective.tenantId,
+      ])
+    }
     return
   }
   if (isValidTenantId(effective.tenantId)) {
