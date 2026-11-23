@@ -60,6 +60,15 @@ export interface Modulo {
   configurable?: boolean
 }
 
+/**
+ * Versión serializable de `Modulo` para cruzar la frontera RSC → Client
+ * Component: sin el `icon`, que es una función y las funciones NO viajan
+ * del servidor al cliente (React 441 «Functions cannot be passed directly
+ * to Client Components»). El cliente re-atacha el icono desde el catálogo
+ * estático por `href`.
+ */
+export type ModuloSerial = Omit<Modulo, "icon">
+
 export const MODULOS: Modulo[] = [
   {
     title: "Alertas",
@@ -303,17 +312,28 @@ export function modulePrefsEqual(
 }
 
 
+/** Proyección serializable de un módulo (sin el icono, que no viaja). */
+const toSerial = (modulo: Modulo): ModuloSerial => ({
+  title: modulo.title,
+  description: modulo.description,
+  href: modulo.href,
+  modulo: modulo.modulo,
+  adminOnly: modulo.adminOnly,
+  configurable: modulo.configurable,
+})
+
 /**
  * Catálogo filtrado por los módulos habilitados del tenant (§4.5): el hub
  * de Módulos y las APIs de visibilidad sirven SOLO los módulos del tenant
  * (legado = los tres; negocio = núcleo). `allowed` null = sin restricción
- * (plataforma/legado sin contexto).
+ * (plataforma/legado sin contexto). Devuelve la forma serializable: la
+ * página RSC se la pasa al hub cliente y los iconos no pueden viajar.
  */
 export function modulosForTenantModules(
   allowed: string[] | null | undefined
-): Modulo[] {
-  if (allowed === null || allowed === undefined) return [...MODULOS]
-  return MODULOS.filter((modulo) =>
-    tenantAllows(allowed, modulo.modulo)
+): ModuloSerial[] {
+  if (allowed === null || allowed === undefined) return MODULOS.map(toSerial)
+  return MODULOS.filter((modulo) => tenantAllows(allowed, modulo.modulo)).map(
+    toSerial
   )
 }

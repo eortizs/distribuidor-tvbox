@@ -65,6 +65,7 @@ import {
   type Asignaciones,
   type Modulo,
   type ModuloFiltro,
+  type ModuloSerial,
   type ModulePrefs,
 } from "@/lib/modulos"
 import { saveModulePrefsAction } from "@/app/actions/modulos"
@@ -137,6 +138,9 @@ function foldTerm(value: string): string {
     .replace(/[\u0300-\u036f]/g, "")
 }
 
+/** Catálogo completo indexado por href: re-atacha iconos al serializable. */
+const MODULOS_BY_HREF = new Map(MODULOS.map((modulo) => [modulo.href, modulo]))
+
 export function HerramientasAccordion({
   initialPrefs,
   isAdmin = false,
@@ -157,9 +161,11 @@ export function HerramientasAccordion({
   hiddenModules?: string[]
   /**
    * Catálogo YA filtrado por los módulos del tenant (§4.5): el hub sirve
-   * solo los módulos habilitados (legado = todos; negocio = núcleo).
+   * solo los módulos habilitados (legado = todos; negocio = núcleo). Llega
+   * serializable desde la RSC (sin iconos: las funciones no cruzan la
+   * frontera servidor→cliente); aquí se re-atachan desde MODULOS.
    */
-  modulos?: Modulo[]
+  modulos?: ModuloSerial[]
 }) {
   const [favorites, setFavorites] = useState<string[]>(
     initialPrefs?.favorites ?? []
@@ -310,14 +316,19 @@ export function HerramientasAccordion({
    * Catálogo visible para esta cuenta: el listado completo de MODULOS menos
    * los módulos `adminOnly` cuando la cuenta no es admin, y menos los
    * módulos que el admin ocultó a esta cuenta. La búsqueda, las vistas y
-   * los contadores trabajan siempre sobre este catálogo.
+   * los contadores trabajan siempre sobre este catálogo. Los serializables
+   * que llegan de la RSC se resuelven contra el catálogo estático (misma
+   * fuente única); un href desconocido no existe y se descarta.
    */
   const catalog = useMemo(
     () =>
-      modulos.filter(
-        (tool) =>
-          (!tool.adminOnly || isAdmin) && !hiddenModules.includes(tool.href)
-      ),
+      (modulos ?? MODULOS)
+        .map((serial) => MODULOS_BY_HREF.get(serial.href))
+        .filter((modulo): modulo is Modulo => modulo !== undefined)
+        .filter(
+          (tool) =>
+            (!tool.adminOnly || isAdmin) && !hiddenModules.includes(tool.href)
+        ),
     [modulos, isAdmin, hiddenModules]
   )
 
