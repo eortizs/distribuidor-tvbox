@@ -2,7 +2,6 @@ import { notFound, redirect } from "next/navigation"
 
 import type { TenantModule } from "@/lib/tenant-modules"
 import { tenantAllows } from "@/lib/tenant-modules"
-import { currentTenantContext } from "@/server/tenant/context"
 import { effectiveTenantModules } from "@/server/tenant/modules"
 import { getSessionUser } from "./session"
 import type { AuthUser, UserRole } from "./types"
@@ -22,7 +21,9 @@ export async function requireUser(module: TenantModule): Promise<AuthUser> {
   if (!tenantAllows(modules, module)) {
     redirect("/clientes")
   }
-  return { ...user, tenantId: currentTenantContext()?.tenantId ?? null }
+  // El tenant viene EN la sesión (getSessionUser): el contexto ALS no cruza
+  // de forma fiable los awaits de Next (ver comentario allí).
+  return { ...user, tenantId: user.tenantId ?? null }
 }
 
 /**

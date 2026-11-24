@@ -181,9 +181,12 @@ export async function publishRealtime(
   event: Omit<RealtimeEvent, "at">
 ): Promise<void> {
   // Sello de tenancy automático: el evento hereda el tenant del contexto del
-  // escritor (ALS); nunca se envía a sesiones de otro tenant.
-  const { currentTenantContext } = await import("@/server/tenant/context")
-  const context = currentTenantContext()
+  // escritor; nunca se envía a sesiones de otro tenant. `effectiveDbContext`
+  // (async) porque la lectura SYNC del ALS devuelve null en las continuaciones
+  // HTTP tras los awaits de Next (hallazgo 2026-11-24): aquí el fallback por
+  // headers de la petición resuelve el tenant real de la sesión.
+  const { effectiveDbContext } = await import("@/server/tenant/context")
+  const context = await effectiveDbContext()
   const stamped = context && context.source !== "fallback"
     ? { ...event, tenantId: context.platform ? null : context.tenantId }
     : event

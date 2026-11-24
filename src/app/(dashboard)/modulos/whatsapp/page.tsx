@@ -7,7 +7,7 @@ import { whatsappAgentLlmConfigured } from "@/server/whatsapp/config"
 import { listWhatsAppLog, listWhatsAppOutbox } from "@/server/whatsapp/service"
 import { getWhatsAppStatus } from "@/server/whatsapp/gateway"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
-import { currentTenantContext, findTenantById } from "@/server/tenant/context"
+import { findTenantById } from "@/server/tenant/context"
 import { whatsappAgentNumber } from "@/server/whatsapp/config"
 
 export const metadata: Metadata = {
@@ -15,8 +15,10 @@ export const metadata: Metadata = {
 }
 
 export default async function WhatsAppPage() {
-  await requireRole("propietario", "core")
-  const tenantId = currentTenantContext()?.tenantId ?? null
+  const user = await requireRole("propietario", "core")
+  // Tenant de la SESIÓN (requireRole → requireUser → getSessionUser): el
+  // contexto ALS sync no cruza los awaits de Next de forma fiable.
+  const tenantId = user.tenantId ?? null
   const isLegacy = tenantId === LEGACY_TENANT_ID
   // Número del canal: el legado usa el del env; un negocio el que declaró
   // (§4.5 2B). Las partes del agente LLM y de TVBox solo existen en el

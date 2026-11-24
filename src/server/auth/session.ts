@@ -54,7 +54,7 @@ export async function createSession(
  * corre bajo el tenant del usuario. La cookie de un host ajeno (sesión de A
  * en host de B) se rechaza: sin contexto ⇒ sin datos.
  */
-export async function getSessionUser(): Promise<AuthUser | null> {
+export async function getSessionUser(): Promise<AuthenticatedSession | null> {
   const cookieStore = await cookies()
   const token = cookieStore.get(SESSION_COOKIE)?.value
   if (!token) return null
@@ -77,11 +77,17 @@ export async function getSessionUser(): Promise<AuthUser | null> {
     source: "session",
   })
 
+  // El tenant viaja EN el resultado: `setRequestContext` usa ALS enterWith,
+  // que NO alcanza la continuación del llamador tras los awaits de esta
+  // función (requireUser/requireApiUser leían currentTenantContext() como
+  // null y user.tenantId quedaba vacío en TODA la app). La sesión es la
+  // fuente; el store ALS queda solo como cortesía para el mismo async chain.
   return {
     id: session.id,
     username: session.username,
     role: session.role,
     googlePicture: session.googlePicture,
+    tenantId: session.tenantId,
   }
 }
 

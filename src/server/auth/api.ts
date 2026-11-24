@@ -1,7 +1,6 @@
 import { isOwnerRole } from "@/server/auth/types"
 import type { TenantModule } from "@/lib/tenant-modules"
 import { tenantAllows } from "@/lib/tenant-modules"
-import { currentTenantContext } from "@/server/tenant/context"
 import { effectiveTenantModules } from "@/server/tenant/modules"
 import { getSessionUser } from "./session"
 import type { AuthUser } from "./types"
@@ -21,7 +20,9 @@ export async function requireApiUser(
     if (!user) return null
     const modules = await effectiveTenantModules()
     if (!tenantAllows(modules, module)) return null
-    return { ...user, tenantId: currentTenantContext()?.tenantId ?? null }
+    // El tenant viene EN la sesión (getSessionUser): el contexto ALS no
+    // cruza de forma fiable los awaits de Next (ver comentario allí).
+    return { ...user, tenantId: user.tenantId ?? null }
   } catch {
     return null
   }

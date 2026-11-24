@@ -5,7 +5,7 @@ import { AppError } from "@/server/umejson/types"
 
 import type { UserRole } from "@/server/auth/types"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
-import { currentTenantContext, findTenantById } from "@/server/tenant/context"
+import { findTenantById, tenantIdOfUser } from "@/server/tenant/context"
 
 import {
   canonicalWhatsAppDigits,
@@ -161,7 +161,11 @@ export async function enqueueWhatsAppForUser(
 ): Promise<boolean> {
   const phone = await getWhatsAppPhoneOf(input.userId)
   if (!phone) return false
-  const own = await tenantOwnNumber(currentTenantContext()?.tenantId ?? null)
+  // Tenant del DESTINATARIO (fuente única users.tenant_id, cache 30 s): el
+  // contexto ALS sync devuelve null en las continuaciones HTTP tras los
+  // awaits de Next (hallazgo 2026-11-24) — la supresión del auto-chat debe
+  // ser determinista por destinatario, no dependiente del escritor.
+  const own = await tenantOwnNumber(await tenantIdOfUser(input.userId))
   if (!shouldMirrorToUser({ userPhone: phone, tenantNumber: own })) {
     return false
   }
