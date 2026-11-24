@@ -1,13 +1,21 @@
 import { ArrowRightIcon } from "lucide-react"
 
 /*
- * Preventa: el servicio aún no abre al público. Mantener `LAUNCH_ENABLED = false`
- * para que ningún CTA emita enlaces hacia `/register`, `/login` ni `wa.me`.
- * Al lanzar, activar `LAUNCH_ENABLED = true` y cablear `<a href>` con
- * `${publicSiteUrl()}/register`, `${publicSiteUrl()}/login` y
- * `https://wa.me/<WHATSAPP_AGENT_NUMBER>`.
+ * Lanzamiento (§4.6 del plan): `LAUNCH_ENABLED = false` mantiene TODOS los
+ * CTAs deshabilitados en preventa (ningún enlace a /registro, /acceder ni
+ * wa.me). Al abrir el servicio: activar `LAUNCH_ENABLED = true` + build para
+ * publicar los CTAs (alta → /registro, sesión → /acceder) y definir
+ * `SPEILINK_SUPPORT_WHATSAPP` (número del soporte, solo dígitos) para el CTA
+ * del pie; sin ella el soporte sigue deshabilitado aunque el resto abra.
+ *
+ * NOTA: el alta REAL exige además `SELF_SIGNUP_ENABLED=on` en el servidor
+ * (interruptor independiente del build; con la página de /registro apagada
+ * muestra «Muy pronto»).
  */
 export const LAUNCH_ENABLED = false
+
+const SUPPORT_WHATSAPP =
+  (process.env.SPEILINK_SUPPORT_WHATSAPP || "").replace(/\D/g, "") || null
 
 const BASE_CTA_CLASS =
   "inline-flex items-center justify-center font-semibold transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669] focus-visible:ring-offset-2"
@@ -24,27 +32,9 @@ const VARIANT_CLASSES = {
     "min-h-13 w-full gap-2 rounded-xl bg-[#059669] px-7 text-base font-bold text-white shadow-lg shadow-black/25 focus-visible:ring-offset-[#0F172A] sm:w-auto sm:min-w-[280px]",
 } as const
 
-export function PrimarySignupCta({
-  variant,
-  className,
-}: {
-  variant: "navbar" | "hero" | "section" | "banner"
-  className?: string
-}) {
+function CtaInner({ variant }: { variant: keyof typeof VARIANT_CLASSES }) {
   return (
-    <button
-      type="button"
-      disabled={!LAUNCH_ENABLED}
-      aria-disabled={!LAUNCH_ENABLED}
-      className={[
-        BASE_CTA_CLASS,
-        VARIANT_CLASSES[variant],
-        !LAUNCH_ENABLED ? PRESALE_CLASS : "",
-        className ?? "",
-      ]
-        .filter(Boolean)
-        .join(" ")}
-    >
+    <>
       {variant === "navbar" ? (
         <>
           <span className="sm:hidden">Crear cuenta</span>
@@ -57,45 +47,126 @@ export function PrimarySignupCta({
           <ArrowRightIcon className="size-4 shrink-0" aria-hidden="true" />
         </>
       )}
-    </button>
+    </>
   )
 }
 
-export function NavbarLoginButton() {
+/**
+ * CTA de alta. En preventa es `<button disabled>` SIN destino (cero /registro
+ * en el HTML); al lanzar enlaza a la página de registro del apex.
+ */
+export function PrimarySignupCta({
+  variant,
+  className,
+}: {
+  variant: "navbar" | "hero" | "section" | "banner"
+  className?: string
+}) {
+  if (!LAUNCH_ENABLED) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-disabled="true"
+        className={[
+          BASE_CTA_CLASS,
+          VARIANT_CLASSES[variant],
+          PRESALE_CLASS,
+          className ?? "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      >
+        <CtaInner variant={variant} />
+      </button>
+    )
+  }
   return (
-    <button
-      type="button"
-      disabled={!LAUNCH_ENABLED}
-      aria-disabled={!LAUNCH_ENABLED}
-      className="inline-flex min-h-11 shrink-0 cursor-not-allowed items-center whitespace-nowrap rounded-lg px-2 text-sm font-semibold text-[#1E293B] opacity-65 focus-visible:outline-none sm:px-3.5"
+    <a
+      href="/registro"
+      className={[
+        BASE_CTA_CLASS,
+        VARIANT_CLASSES[variant],
+        "hover:bg-[#047857]",
+        className ?? "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <CtaInner variant={variant} />
+    </a>
+  )
+}
+
+/** «Iniciar sesión»: al lanzar lleva a /acceder (buscador de subdominio). */
+export function NavbarLoginButton() {
+  if (!LAUNCH_ENABLED) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-disabled="true"
+        className="inline-flex min-h-11 shrink-0 cursor-not-allowed items-center whitespace-nowrap rounded-lg px-2 text-sm font-semibold text-[#1E293B] opacity-65 focus-visible:outline-none sm:px-3.5"
+      >
+        Iniciar sesión
+      </button>
+    )
+  }
+  return (
+    <a
+      href="/acceder"
+      className="inline-flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-lg px-2 text-sm font-semibold text-[#1E293B] transition-colors hover:text-[#059669] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669] sm:px-3.5"
     >
       Iniciar sesión
-    </button>
+    </a>
   )
 }
 
+/** Soporte del pie: solo vivo con `SPEILINK_SUPPORT_WHATSAPP` definida. */
 export function FooterSupportButton() {
+  if (!LAUNCH_ENABLED || !SUPPORT_WHATSAPP) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-disabled="true"
+        className="inline-flex min-h-11 cursor-not-allowed items-center text-sm font-medium text-slate-600 underline underline-offset-4 opacity-65 focus-visible:outline-none"
+      >
+        Soporte por WhatsApp
+      </button>
+    )
+  }
   return (
-    <button
-      type="button"
-      disabled={!LAUNCH_ENABLED}
-      aria-disabled={!LAUNCH_ENABLED}
-      className="inline-flex min-h-11 cursor-not-allowed items-center text-sm font-medium text-slate-600 underline underline-offset-4 opacity-65 focus-visible:outline-none"
+    <a
+      href={`https://wa.me/${SUPPORT_WHATSAPP}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex min-h-11 items-center text-sm font-medium text-slate-600 underline underline-offset-4 transition-colors hover:text-[#059669] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669]"
     >
       Soporte por WhatsApp
-    </button>
+    </a>
   )
 }
 
 export function FloatingSignupCta() {
+  if (!LAUNCH_ENABLED) {
+    return (
+      <button
+        type="button"
+        disabled
+        aria-disabled="true"
+        className="relative hidden shrink-0 cursor-not-allowed items-center gap-1 whitespace-nowrap rounded-full px-1 text-xs font-bold text-emerald-300 focus-visible:outline-none disabled:opacity-90 after:absolute after:inset-0 after:-m-2 after:content-[''] sm:inline-flex sm:text-sm"
+      >
+        Empezar gratis <span aria-hidden="true">→</span>
+      </button>
+    )
+  }
   return (
-    <button
-      type="button"
-      disabled={!LAUNCH_ENABLED}
-      aria-disabled={!LAUNCH_ENABLED}
-      className="relative hidden shrink-0 cursor-not-allowed items-center gap-1 whitespace-nowrap rounded-full px-1 text-xs font-bold text-emerald-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 disabled:opacity-90 after:absolute after:inset-0 after:-m-2 after:content-[''] sm:inline-flex sm:text-sm"
+    <a
+      href="/registro"
+      className="relative hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1 text-xs font-bold text-emerald-300 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 after:absolute after:inset-0 after:-m-2 after:content-[''] sm:inline-flex sm:text-sm"
     >
       Empezar gratis <span aria-hidden="true">→</span>
-    </button>
+    </a>
   )
 }

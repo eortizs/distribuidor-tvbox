@@ -114,7 +114,7 @@ const TRUST_POINTS = [
     title: "Tu dinero, directo a tu cuenta",
     description: (
       <>
-        Conectas tu cuenta de Mercado Pago con un clic —la única cuenta digital en
+        Conectas tu cuenta de Mercado Pago desde la app —la única cuenta digital en
         México capaz de notificar y monitorear movimientos de transferencia en tiempo
         real y sin costo de consulta—. <BrandInline /> solo lee la confirmación del
         depósito; tu dinero nunca pasa por intermediarios.
