@@ -178,7 +178,11 @@ export async function createTenant(
   }
 }
 
-/** Suspende o reactiva un tenant. Suspendido ⇒ sus sesiones quedan rechazadas. */
+/**
+ * Suspende o reactiva un tenant. Suspendido ⇒ sus sesiones quedan rechazadas
+ * al instante Y su socket WhatsApp se cierra (sin borrar su carpeta); al
+ * reactivar vuelve a arrancar si hay número declarado.
+ */
 export async function setTenantStatus(
   tenantId: string,
   status: "active" | "suspended"
@@ -192,6 +196,16 @@ export async function setTenantStatus(
       throw new AppError(404, "tenant_no_encontrado", "El tenant no existe o no es de negocio.")
     }
   })
+  try {
+    const gateway = await import("@/server/whatsapp/gateway")
+    if (status === "suspended") {
+      await gateway.stopTenantSession(tenantId)
+    } else {
+      void gateway.startTenantSession(tenantId).catch(() => undefined)
+    }
+  } catch {
+    // El gateway es best-effort: el cambio de estado ya quedó en BD.
+  }
 }
 
 /** Restablece la contraseña del propietario de un tenant (temporal, una vez). */

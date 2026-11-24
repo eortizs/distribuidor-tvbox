@@ -261,16 +261,20 @@ export async function clearTenantMpToken(tenantId: string): Promise<void> {
 }
 
 /**
- * Declara el WhatsApp del negocio (§4.5 del plan): dígitos canónicos con
- * código de país. El índice único parcial `tenants_whatsapp_number_uidx`
- * garantiza UNA sesión por número: un número tomado por otro negocio
- * responde 409. La escritura corre bajo `runWithPlatformTenant` (la política
+ * Declara el WhatsApp del negocio (§4.5 2B): dígitos canónicos con código
+ * de país. El índice único parcial `tenants_whatsapp_number_uidx` garantiza
+ * UNA sesión por número: un número tomado por otro negocio responde 409.
+ * La escritura corre bajo `runWithPlatformTenant` (la política
  * `tenants_write` solo deja escribir a plataforma) con columnas fijas y
  * `kind = 'business'`.
+ *
+ * Cambiar un número ya vinculado exige `replaceLinked`: borra la sesión
+ * (sin compartir carpeta con el nuevo número) y pide QR nuevo.
  */
 export async function saveTenantWhatsappNumber(
   tenantId: string,
-  rawNumber: string
+  rawNumber: string,
+  opts?: { replaceLinked?: boolean }
 ): Promise<string> {
   const { normalizeWhatsAppDigits, canonicalWhatsAppDigits, isValidWhatsAppNumber } =
     await import("@/server/whatsapp/config")
@@ -282,11 +286,35 @@ export async function saveTenantWhatsappNumber(
       "Escribe el número con código de país (52 para México) sin espacios ni guiones."
     )
   }
+  const tenant = await (await import("@/server/tenant/context")).findTenantById(tenantId)
+  const previous = tenant?.whatsappNumber ?? null
+  if (previous !== null && previous !== canonical && !opts?.replaceLinked) {
+    throw new AppError(
+      409,
+      "whatsapp_cambio_confirmar",
+      "Este negocio ya tiene un WhatsApp declarado. Cambiarlo desvincula la sesión actual (pedirá QR nuevo): confirma el cambio."
+    )
+  }
+
+  if (previous !== null && previous !== canonical && opts?.replaceLinked) {
+    // El número es la identidad de la sesión: al cambiarlo se borra la
+    // sesión vieja (socket + carpeta de credenciales) SIN tocar el legado.
+    const { stopTenantSession } = await import("@/server/whatsapp/gateway")
+    await stopTenantSession(tenantId)
+    const { rm } = await import("node:fs/promises")
+    await rm(`storage/whatsapp-sessions/${tenantId}`, {
+      recursive: true,
+      force: true,
+    }).catch(() => undefined)
+  }
+
   try {
     const result = await runWithPlatformTenant(tenantId, () =>
       pool.query<{ id: string }>(
         `UPDATE tenants
             SET whatsapp_number = $2,
+                whatsapp_linked_at = NULL,
+                whatsapp_last_seen_at = NULL,
                 updated_at = now()
           WHERE id = $1::uuid AND kind = 'business'
           RETURNING id`,

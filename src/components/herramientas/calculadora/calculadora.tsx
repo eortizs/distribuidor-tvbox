@@ -357,7 +357,7 @@ export function Calculadora({
       ? moneyLabel(montoEditado)
       : moneyLabel(valorPantalla)
   const cobrarBloqueo = !whatsappConfigured
-    ? "El canal de WhatsApp no está configurado en el servidor: no se pueden crear links de pago."
+    ? "Vincula el WhatsApp de tu negocio en Módulos → WhatsApp para poder cobrar."
     : !bankConfigured
       ? "Completa tus datos bancarios en Perfil → Datos bancarios para recibir tus cobros."
       : null

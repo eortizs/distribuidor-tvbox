@@ -12,6 +12,7 @@ import { shortLinkBaseUrl } from "@/server/site-url"
 import {
   buildPaymentOrderShortLink,
   buildPaymentOrderWaLink,
+  resolvePaymentOrderWhatsAppNumber,
 } from "@/server/links-pago/wa-link"
 
 /*
@@ -237,7 +238,19 @@ export async function GET(
     () => null
   )
   if (order) {
-    const target = buildPaymentOrderWaLink(order)
+    // El 302 abre el chat del número DEL TENANT de la orden (§4.5 2B): el
+    // link de un negocio redirige al WhatsApp de su negocio; el del legado,
+    // al del env. Bajo el contexto del tenant (la lectura del número consulta
+    // la fila con su RLS… por systemPool vía findTenantById, así que el
+    // wrapper solo aporta el GUC del pagador anónimo: innecesario aquí).
+    const waNumber = await resolvePaymentOrderWhatsAppNumber(order.tenantId)
+    const target = waNumber
+      ? buildPaymentOrderWaLink({
+          amountMxn: order.amountMxn,
+          code: order.code,
+          number: waNumber,
+        })
+      : null
     if (!target) {
       return htmlResponse(
         503,

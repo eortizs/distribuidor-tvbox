@@ -5,7 +5,7 @@ import { Calculadora } from "@/components/herramientas/calculadora/calculadora"
 import { requireUser } from "@/server/auth/guards"
 import { getHiddenModules } from "@/server/modulos/visibility"
 import { resolveCreatorBankData } from "@/server/links-pago/bank"
-import { whatsappAgentNumber } from "@/server/whatsapp/config"
+import { resolvePaymentOrderWhatsAppNumber } from "@/server/links-pago/wa-link"
 
 export const metadata: Metadata = {
   title: "Calculadora",
@@ -27,7 +27,7 @@ export default async function CalculadoraPage() {
     <div className="relative mx-auto h-[calc(var(--shell-viewport-height)-var(--shell-header-height)-var(--shell-bottom-nav-space))] min-h-[27.5rem] w-full max-w-xl p-3 sm:p-4">
       <Calculadora
         puedeCobrar={puedeCobrar}
-        whatsappConfigured={whatsappAgentNumber() !== null}
+        whatsappConfigured={(await resolvePaymentOrderWhatsAppNumber(user.tenantId ?? null)) !== null}
         bankConfigured={(await resolveCreatorBankData(user)) !== null}
       />
     </div>

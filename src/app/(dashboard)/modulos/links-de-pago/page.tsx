@@ -5,8 +5,8 @@ import { LinksPagoView } from "@/components/herramientas/links-pago/links-pago-v
 import { toPaymentOrderListItem } from "@/lib/links-pago"
 import { requireUser } from "@/server/auth/guards"
 import { listPaymentOrders } from "@/server/links-pago/repository"
+import { resolvePaymentOrderWhatsAppNumber } from "@/server/links-pago/wa-link"
 import { receiptScanConfigured } from "@/server/transferencias/scan"
-import { whatsappAgentNumber } from "@/server/whatsapp/config"
 
 export const metadata: Metadata = {
   title: "SPEILink",
@@ -26,7 +26,11 @@ export default async function LinksPagoPage() {
       <LinksPagoView
         initialOrders={orders.map(toPaymentOrderListItem)}
         isAdmin={isOwnerRole(user.role)}
-        whatsappConfigured={whatsappAgentNumber() !== null}
+        // POR TENANT (§4.5 2B): el canal es el WhatsApp del negocio (legado:
+        // el del env). Sin él la creación está bloqueada con guía.
+        whatsappConfigured={
+          (await resolvePaymentOrderWhatsAppNumber(user.tenantId ?? null)) !== null
+        }
         scanConfigured={receiptScanConfigured()}
       />
     </div>

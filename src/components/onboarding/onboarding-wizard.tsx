@@ -577,6 +577,19 @@ function WhatsappPanel({ props, onDone }: PanelProps) {
               autoComplete="off"
             />
             {state.error && <p className={FIELD_ERROR_CLASS}>{state.error}</p>}
+            {state.needsReplaceConfirm && (
+              <label className="flex items-start gap-2 rounded-lg border bg-card px-3 py-2.5 text-xs leading-relaxed">
+                <input
+                  type="checkbox"
+                  name="confirmReplace"
+                  className="mt-0.5 size-4 shrink-0"
+                />
+                <span>
+                  Confirmo cambiar el WhatsApp del negocio: la sesión actual se
+                  desvincula y habrá que escanear un QR nuevo.
+                </span>
+              </label>
+            )}
             {state.success && (
               <p className="text-success text-xs font-medium">{state.success}</p>
             )}

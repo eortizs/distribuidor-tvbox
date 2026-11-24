@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache"
 import QRCode from "qrcode"
 
 import { requireUser } from "@/server/auth/guards"
+import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { resolveCreatorBankData } from "@/server/links-pago/bank"
@@ -22,7 +23,11 @@ import {
   PAYMENT_ORDER_MIN_MXN,
   resolvePaymentOrder,
 } from "@/server/links-pago/repository"
-import { buildPaymentOrderShortLink, buildPaymentOrderWaLink } from "@/server/links-pago/wa-link"
+import {
+  buildPaymentOrderShortLink,
+  buildPaymentOrderWaLink,
+  resolvePaymentOrderWhatsAppNumber,
+} from "@/server/links-pago/wa-link"
 
 import type { PaymentOrder } from "@/server/links-pago/repository"
 
@@ -98,6 +103,21 @@ export async function createPaymentOrderAction(input: {
     }
   }
 
+  // El canal WhatsApp es la vía de entrega y cobro del módulo: el número se
+  // resuelve ANTES de crear la orden (error claro, sin crear y cancelar).
+  // El link de un negocio abre el chat de SU número; el del legado, el del
+  // env (§4.5 2B).
+  const waNumber = await resolvePaymentOrderWhatsAppNumber(user.tenantId ?? null)
+  if (!waNumber) {
+    return {
+      error:
+        user.tenantId && user.tenantId !== LEGACY_TENANT_ID
+          ? "Vincula el WhatsApp de tu negocio en Módulos → WhatsApp antes de crear links de pago."
+          : "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar el link de pago.",
+      order: null,
+    }
+  }
+
   try {
     const created = await createPaymentOrder({
       creatorUserId: user.id,
@@ -107,16 +127,11 @@ export async function createPaymentOrderAction(input: {
       clientId: input.clientId || null,
     })
 
-    const waUrl = buildPaymentOrderWaLink(created)
-    if (!waUrl) {
-      // El canal WhatsApp es la vía de entrega y cobro del módulo: sin
-      // número del agente la orden no sirve — se revierte y se explica.
-      await cancelPaymentOrder({ orderId: created.id, reviewedBy: user.id })
-      return {
-        error: "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar el link de pago.",
-        order: null,
-      }
-    }
+    const waUrl = buildPaymentOrderWaLink({
+      amountMxn: created.amountMxn,
+      code: created.code,
+      number: waNumber,
+    })
 
     // El QR codifica el link CORTO (se identifica con el código de
     // concepto); el botón de apertura usa wa.me directo (un salto menos).
@@ -170,13 +185,21 @@ export async function getPaymentOrderLinkAction(input: {
     return { error: "El link ya está resuelto.", order: null }
   }
 
-  const waUrl = buildPaymentOrderWaLink(order)
-  if (!waUrl) {
+  const waNumber = await resolvePaymentOrderWhatsAppNumber(order.tenantId)
+  if (!waNumber) {
     return {
-      error: "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar el link de pago.",
+      error:
+        order.tenantId !== LEGACY_TENANT_ID
+          ? "Vincula el WhatsApp de tu negocio en Módulos → WhatsApp antes de compartir links."
+          : "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar el link de pago.",
       order: null,
     }
   }
+  const waUrl = buildPaymentOrderWaLink({
+    amountMxn: order.amountMxn,
+    code: order.code,
+    number: waNumber,
+  })
 
   const shortUrl = buildPaymentOrderShortLink(order.code)
   const qrDataUrl = await QRCode.toDataURL(shortUrl, { margin: 1, width: 320 })

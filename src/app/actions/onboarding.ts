@@ -25,6 +25,8 @@ export interface BusinessSetupState {
   success: string | null
   /** Estado del token tras validar (paso 1): cuenta y últimos 4. */
   tokenStatus?: TenantMpTokenStatus | null
+  /** Cambiar el WhatsApp declarado exige confirmación (paso 3). */
+  needsReplaceConfirm?: boolean
 }
 
 /** Tenant de negocio de la sesión; error listo para el form si no aplica. */
@@ -120,15 +122,26 @@ export async function saveBusinessWhatsappNumberAction(
     }
     const number = await saveTenantWhatsappNumber(
       tenantId,
-      String(formData.get("whatsappNumber") ?? "")
+      String(formData.get("whatsappNumber") ?? ""),
+      // Cambiar un número ya declarado exige confirmación (borra la sesión
+      // y pide QR nuevo); el checkbox del panel la envía en el reintento.
+      { replaceLinked: formData.get("confirmReplace") === "on" }
     )
     revalidatePath("/onboarding")
     revalidatePath("/profile")
+    revalidatePath("/modulos/whatsapp")
     return {
       error: null,
       success: `WhatsApp del negocio declarado (+${number}). Vincúlalo por QR en Módulos → WhatsApp.`,
     }
   } catch (error) {
+    if (error instanceof AppError && error.code === "whatsapp_cambio_confirmar") {
+      return {
+        error: error.message,
+        success: null,
+        needsReplaceConfirm: true,
+      }
+    }
     return errorState(error)
   }
 }

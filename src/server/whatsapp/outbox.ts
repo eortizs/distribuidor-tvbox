@@ -2,13 +2,17 @@ import { pool, withTransaction } from "@/server/db"
 import { publicSiteUrl } from "@/server/site-url"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
 import { runAsPlatform, runWithTenant } from "@/server/tenant/context"
+import { tenantHostForSlug } from "@/server/tenant/hosts"
+import { listActiveTenants } from "@/server/tenant/context"
 
 import {
   WHATSAPP_KIND_CLIENT_RENEWAL,
   WHATSAPP_KIND_PAYMENT_ORDER,
   logWhatsAppMessageDetached,
 } from "./service"
-import { getWhatsAppStatus, sendWhatsAppText } from "./gateway"
+import { sendWhatsAppText, sessionForTenant } from "./gateway"
+import { shouldDispatchTenant } from "./tenant-routing"
+import type { WhatsAppSession } from "./session"
 
 /*
  * Dispatcher de la cola de salida de WhatsApp: cada notificación de campana
@@ -49,26 +53,38 @@ export interface OutboxClaimRow {
   attempts: number
 }
 
+/** Tenant de trabajo del despacho (su socket, su contexto, su link). */
+interface DispatchTenant {
+  id: string
+  kind: "legacy" | "business"
+  slug: string
+}
+
 let timer: ReturnType<typeof setInterval> | null = null
 let ticking = false
 let lastPruneAt = 0
 
-/**
- * Texto de WhatsApp para un envío de la cola. Los espejos de notificación
- * llevan el link al panel; los avisos DIRECTOS a destinatarios sin cuenta
- * (clientes FlujoTV `client_renewal` y pagadores de órdenes de pago
- * `payment_order`) no: un enlace que no pueden usar solo confunde.
- */
+/** Kinds DIRECTOS a destinatarios sin cuenta: sin link al panel. */
 const NO_PANEL_LINK_KINDS = new Set([
   WHATSAPP_KIND_CLIENT_RENEWAL,
   WHATSAPP_KIND_PAYMENT_ORDER,
 ])
 
-function mirrorMessage(row: OutboxClaimRow): string {
+/**
+ * Texto de WhatsApp para un envío de la cola. Los espejos de notificación
+ * llevan el link al panel —del tenant emisor: el legado el sitio público, un
+ * negocio SU subdominio—; los avisos DIRECTOS a destinatarios sin cuenta
+ * (clientes FlujoTV `client_renewal` y pagadores de órdenes de pago
+ * `payment_order`) no: un enlace que no pueden usar solo confunde.
+ */
+function mirrorMessage(row: OutboxClaimRow, tenant: DispatchTenant): string {
   const base = `${row.title}\n${row.body}`
-  return NO_PANEL_LINK_KINDS.has(row.kind ?? "")
-    ? base
-    : `${base}\n\nPanel: ${publicSiteUrl()}`
+  if (NO_PANEL_LINK_KINDS.has(row.kind ?? "")) return base
+  const panelUrl =
+    tenant.kind === "business"
+      ? `https://${tenantHostForSlug(tenant.slug)}`
+      : publicSiteUrl()
+  return `${base}\n\nPanel: ${panelUrl}`
 }
 
 async function claimBatch(): Promise<OutboxClaimRow[]> {
@@ -109,11 +125,10 @@ async function claimBatch(): Promise<OutboxClaimRow[]> {
  * atascado; sin este tope el tick quedaría `ticking=true` para siempre. */
 const SEND_TIMEOUT_MS = 60_000
 
-async function sendOne(row: OutboxClaimRow): Promise<void> {
+async function sendOne(row: OutboxClaimRow, tenant: DispatchTenant): Promise<void> {
   try {
-    // El envío sale por el socket del tenant propietario de la fila (2A:
-    // solo el legado tiene sesión; 2B despacha por tenant).
-    const send = sendWhatsAppText(LEGACY_TENANT_ID, row.phone, mirrorMessage(row))
+    // El envío sale por el socket del tenant propietario de la fila.
+    const send = sendWhatsAppText(tenant.id, row.phone, mirrorMessage(row, tenant))
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(
         () => reject(new Error("whatsapp_send_timeout")),
@@ -186,17 +201,30 @@ async function tick(): Promise<void> {
     }
   })
 
-  // El despacho SOLO reclama con el socket del legado abierto: los mensajes
-  // quedan `pending` y salen al reconectar (deploy, corte de red). 2B
-  // añade el bucle por tenant con sesión abierta.
-  if ((await getWhatsAppStatus(LEGACY_TENANT_ID)).status !== "open") return
+  // El despacho corre POR TENANT con sesión ABIERTA (§4.5 2B): sin sesión
+  // abierta no se reclama nada, así que no se queman intentos. El legado
+  // entra con su sesión de boot; los negocios, la suya.
+  const tenants = await listActiveTenants().catch(() => [])
+  const legacy = tenants.find((t) => t.id === LEGACY_TENANT_ID)
+  if (legacy) {
+    await dispatchTenant({ id: legacy.id, kind: legacy.kind, slug: legacy.slug })
+  }
+  for (const tenant of tenants) {
+    if (tenant.kind !== "business" || tenant.id === LEGACY_TENANT_ID) continue
+    await dispatchTenant({ id: tenant.id, kind: tenant.kind, slug: tenant.slug })
+  }
+}
 
-  // Tenancy (§4.2, caso explícito): el dispatcher legado corre bajo el
-  // tenant tvbox.
-  await runWithTenant(LEGACY_TENANT_ID, async () => {
+/** Reclama y envía UN lote del tenant si su sesión está abierta. */
+async function dispatchTenant(tenant: DispatchTenant): Promise<void> {
+  const session: WhatsAppSession | null = sessionForTenant(tenant.id)
+  if (!shouldDispatchTenant(session?.status ?? null)) return
+  // El claim y los UPDATEs de resultado corren bajo el tenant de la fila
+  // (RLS por wa_outbox.tenant_id).
+  await runWithTenant(tenant.id, async () => {
     const batch = await claimBatch()
     for (const row of batch) {
-      await sendOne(row)
+      await sendOne(row, tenant)
     }
   })
 }

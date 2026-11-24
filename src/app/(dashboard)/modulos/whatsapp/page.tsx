@@ -3,13 +3,12 @@ import type { Metadata } from "next"
 import { WhatsAppView } from "@/components/herramientas/whatsapp/whatsapp-view"
 import { requireRole } from "@/server/auth/guards"
 import { listUsers } from "@/server/auth/users"
-import {
-  whatsappAgentLlmConfigured,
-  whatsappAgentNumber,
-} from "@/server/whatsapp/config"
+import { whatsappAgentLlmConfigured } from "@/server/whatsapp/config"
 import { listWhatsAppLog, listWhatsAppOutbox } from "@/server/whatsapp/service"
 import { getWhatsAppStatus } from "@/server/whatsapp/gateway"
-import { currentTenantContext } from "@/server/tenant/context"
+import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
+import { currentTenantContext, findTenantById } from "@/server/tenant/context"
+import { whatsappAgentNumber } from "@/server/whatsapp/config"
 
 export const metadata: Metadata = {
   title: "WhatsApp",
@@ -17,6 +16,14 @@ export const metadata: Metadata = {
 
 export default async function WhatsAppPage() {
   await requireRole("propietario", "core")
+  const tenantId = currentTenantContext()?.tenantId ?? null
+  const isLegacy = tenantId === LEGACY_TENANT_ID
+  // Número del canal: el legado usa el del env; un negocio el que declaró
+  // (§4.5 2B). Las partes del agente LLM y de TVBox solo existen en el
+  // legado.
+  const agentNumber = isLegacy
+    ? whatsappAgentNumber()
+    : ((await findTenantById(tenantId ?? ""))?.whatsappNumber ?? null)
   const [outbox, log, users] = await Promise.all([
     listWhatsAppOutbox(),
     listWhatsAppLog(50),
@@ -36,11 +43,10 @@ export default async function WhatsAppPage() {
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
       <h1 className="sr-only">WhatsApp</h1>
       <WhatsAppView
-        initialStatus={await getWhatsAppStatus(
-          currentTenantContext()?.tenantId ?? ""
-        )}
-        agentNumber={whatsappAgentNumber()}
-        llmConfigured={whatsappAgentLlmConfigured()}
+        initialStatus={await getWhatsAppStatus(tenantId ?? "")}
+        agentNumber={agentNumber}
+        llmConfigured={isLegacy ? whatsappAgentLlmConfigured() : false}
+        variant={isLegacy ? "legacy" : "business"}
         initialOutbox={outbox}
         initialLog={log}
         registered={registered}

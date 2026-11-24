@@ -4,12 +4,16 @@ import { pool } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 
 import type { UserRole } from "@/server/auth/types"
+import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
+import { currentTenantContext, findTenantById } from "@/server/tenant/context"
 
 import {
   canonicalWhatsAppDigits,
   isValidWhatsAppNumber,
   normalizeWhatsAppDigits,
+  whatsappAgentNumber,
 } from "./config"
+import { shouldMirrorToUser } from "./tenant-routing"
 
 /**
  * Persistencia del módulo WhatsApp: cola de salida (`wa_outbox`), bitácora
@@ -131,16 +135,36 @@ async function insertOutboxRow(input: {
 }
 
 /**
+ * Número de WhatsApp DEL TENANT actual (el dueño del socket que serviría el
+ * espejo): el legado usa el del env; un negocio el declarado. Null = sin
+ * número (fuera del canal).
+ */
+async function tenantOwnNumber(tenantId: string | null): Promise<string | null> {
+  if (!tenantId) return null
+  if (tenantId === LEGACY_TENANT_ID) return whatsappAgentNumber()
+  const tenant = await findTenantById(tenantId).catch(() => null)
+  return tenant?.whatsappNumber ?? null
+}
+
+/**
  * Encola una copia de notificación para el WhatsApp registrado del usuario.
  * Sin número registrado no hace nada (la mayoría de los usuarios: cero
  * escrituras). Devuelve true si quedó encolada. Los errores se registran y
  * se tragan: la notificación que la originó no debe enterarse.
+ *
+ * AUTO-CHAT (§4.5 2B): si el WhatsApp registrado del usuario ES el número de
+ * SU tenant (el dueño probando su propio negocio), no se encola su espejo —
+ * el socket no puede entregarse un mensaje a sí mismo.
  */
 export async function enqueueWhatsAppForUser(
   input: EnqueueWhatsAppInput
 ): Promise<boolean> {
   const phone = await getWhatsAppPhoneOf(input.userId)
   if (!phone) return false
+  const own = await tenantOwnNumber(currentTenantContext()?.tenantId ?? null)
+  if (!shouldMirrorToUser({ userPhone: phone, tenantNumber: own })) {
+    return false
+  }
   return insertOutboxRow({
     userId: input.userId,
     notificationId: input.notificationId,

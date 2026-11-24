@@ -331,10 +331,10 @@ export function LinksPagoView({
           <div className="flex flex-col gap-3">
             {!whatsappConfigured ? (
               <Alert variant="destructive">
-                <AlertTitle>Canal de WhatsApp no configurado</AlertTitle>
+                <AlertTitle>Canal de WhatsApp no vinculado</AlertTitle>
                 <AlertDescription>
-                  El servidor no tiene WHATSAPP_AGENT_NUMBER: no hay chat al
-                  que apuntar el link de pago. Configúralo para usar el módulo.
+                  Vincula el WhatsApp de tu negocio en Módulos → WhatsApp: sin
+                  él no hay chat al que apuntar el link de pago.
                 </AlertDescription>
               </Alert>
             ) : !scanConfigured ? (

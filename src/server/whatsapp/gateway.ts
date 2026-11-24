@@ -1,5 +1,5 @@
 import { Boom } from "@hapi/boom"
-import { rm } from "node:fs/promises"
+import { rm, stat } from "node:fs/promises"
 import QRCode from "qrcode"
 import makeWASocket, {
   Browsers,
@@ -41,8 +41,9 @@ import {
   type WhatsAppStatus,
 } from "./session"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
-import { findTenantById, runWithTenant } from "@/server/tenant/context"
+import { findTenantById, listActiveTenants, runWithTenant } from "@/server/tenant/context"
 import { whatsappAgentNumber } from "./config"
+import { routeBusinessUserTurn } from "./tenant-routing"
 
 /*
  * Gateway WhatsApp POR TENANT (§4.5 2A del plan): registro `Map<tenantId,
@@ -637,49 +638,50 @@ async function handleIncomingMessage(
         log("payment_order_branch", error)
         return null
       })
-      if (paymentHandled !== null) {
-        logWhatsAppMessageDetached({
-          direction: "in",
-          userId: null,
-          phone,
-          text:
-            paymentHandled.inboundText ||
-            (paymentHandled.mediaMime
-              ? `[archivo: ${paymentHandled.mediaMime}]`
-              : ""),
-          meta: {
-            jid,
-            rama: "orden_pago",
-            order: paymentHandled.orderId,
-            tenant: session.tenantId,
-            media: paymentHandled.mediaMime,
-          },
-        })
-        const respuestas = [
-          paymentHandled.text,
-          ...(paymentHandled.additionalTexts ?? []),
-        ].filter((texto) => texto.length > 0)
-        for (const respuesta of respuestas) {
-          await sendTextToJid(session, jid, respuesta).catch(
-            (error: unknown) => log("payment_order_reply", error)
-          )
-          logWhatsAppMessageDetached({
-            direction: "out",
-            userId: null,
-            phone,
-            text: respuesta,
-            meta: {
-              jid,
-              source: "payment_order",
-              order: paymentHandled.orderId,
-              tenant: session.tenantId,
-            },
-          })
-        }
+      if (paymentHandled === null) {
+        // Sin orden: silencio (routeBusinessUnknownTurn: es el número del
+        // negocio, sin cortesía de «no registrado»). Diagnóstico en log.
+        log(`incoming_business_silent phone=${phone} jid=${jid}`)
         return
       }
-      // Sin orden: silencio (es el número del negocio). Diagnóstico en log.
-      log(`incoming_business_silent phone=${phone} jid=${jid}`)
+      logWhatsAppMessageDetached({
+        direction: "in",
+        userId: null,
+        phone,
+        text:
+          paymentHandled.inboundText ||
+          (paymentHandled.mediaMime
+            ? `[archivo: ${paymentHandled.mediaMime}]`
+            : ""),
+        meta: {
+          jid,
+          rama: "orden_pago",
+          order: paymentHandled.orderId,
+          tenant: session.tenantId,
+          media: paymentHandled.mediaMime,
+        },
+      })
+      const respuestas = [
+        paymentHandled.text,
+        ...(paymentHandled.additionalTexts ?? []),
+      ].filter((texto) => texto.length > 0)
+      for (const respuesta of respuestas) {
+        await sendTextToJid(session, jid, respuesta).catch(
+          (error: unknown) => log("payment_order_reply", error)
+        )
+        logWhatsAppMessageDetached({
+          direction: "out",
+          userId: null,
+          phone,
+          text: respuesta,
+          meta: {
+            jid,
+            source: "payment_order",
+            order: paymentHandled.orderId,
+            tenant: session.tenantId,
+          },
+        })
+      }
       return
     }
 
@@ -803,10 +805,14 @@ async function handleIncomingMessage(
     // NEGOCIO con USUARIO del tenant (§4.5 2B): SOLO la intercepción de
     // «Solicito un link de pago…» (texto). Adjuntos, en silencio: el número
     // del negocio no es un asistente.
+    const route = routeBusinessUserTurn({
+      hasMedia: mediaInfo !== null,
+      hasText: Boolean(text),
+    })
     const { maybeHandlePaymentOrderText } = await import(
       "@/server/links-pago/whatsapp"
     )
-    if (!mediaInfo && text) {
+    if (route === "payment_order_text") {
       const paymentHandled = await maybeHandlePaymentOrderText({
         phone,
         text: text.trim(),
@@ -1115,9 +1121,10 @@ export async function getWhatsAppQrDataUrl(tenantId: string): Promise<string | n
  * (el QR es la señal de que WhatsApp pidió registro).
  */
 export async function requestWhatsAppPairing(tenantId: string): Promise<string> {
-  // La sesión SOLO existe si el gateway la arrancó (legado al boot; negocio
-  // en 2B con número declarado): sin sesión no hay pairing que pedir.
-  const live = sessionForTenant(tenantId)
+  // El legado registra su sesión al boot; un negocio con número declarado se
+  // auto-registra aquí (sin sesión no hay pairing que pedir).
+  const live =
+    sessionForTenant(tenantId) ?? (await autoRegisterTenantSession(tenantId))
   if (!live) throw new Error("whatsapp_not_configured")
   const number = live.agentNumber
   if (!number) throw new Error("whatsapp_not_configured")
@@ -1173,14 +1180,62 @@ export async function sendWhatsAppText(
   return jid
 }
 
+/** ¿Ya existen credenciales de la sesión en disco? (arranque silencioso). */
+async function hasStoredCredentials(session: WhatsAppSession): Promise<boolean> {
+  try {
+    await stat(session.authFolder)
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
- * Arranque del gateway desde `instrumentation.ts`: idempotente. 2A arranca
- * SOLO la sesión legada (número del env, carpeta histórica); 2B añade el
- * bucle escalonado de negocios. Sin número de agente configurado no hace
- * nada (módulo deshabilitado).
+ * Registra y arranca la sesión de un NEGOCIO con número declarado. Con
+ * credenciales previas abre el socket directo; sin ellas la deja registrada
+ * en `disabled` para que el pairing (QR/código) la pida. El legado NO entra
+ * por aquí: su arranque es el del boot con el número del env.
+ */
+export async function startTenantSession(tenantId: string): Promise<boolean> {
+  if (tenantId === LEGACY_TENANT_ID) return false
+  const tenant = await findTenantById(tenantId).catch(() => null)
+  if (!tenant || tenant.kind !== "business" || tenant.status !== "active") {
+    return false
+  }
+  const number = tenant.whatsappNumber
+  if (!number) return false
+  const session = ensureSessionRegistered(tenantId, "business")
+  session.agentNumber = number
+  if (!(await hasStoredCredentials(session))) {
+    // Sin credenciales no hay socket que abrir: la vinculación la pide el
+    // propietario desde el módulo (QR o código de emparejamiento).
+    return false
+  }
+  if (session.socket || session.status === "revoked") return false
+  await ensureWhatsAppSocket(session)
+  return true
+}
+
+/**
+ * Registra la sesión del negocio si tiene número declarado (SIN abrir
+ * socket): condición del pairing.
+ */
+async function autoRegisterTenantSession(tenantId: string): Promise<WhatsAppSession | null> {
+  if (tenantId === LEGACY_TENANT_ID) return null
+  const tenant = await findTenantById(tenantId).catch(() => null)
+  if (!tenant || tenant.kind !== "business" || !tenant.whatsappNumber) return null
+  const session = ensureSessionRegistered(tenantId, "business")
+  session.agentNumber = tenant.whatsappNumber
+  return session
+}
+
+/**
+ * Arranque del gateway desde `instrumentation.ts`: idempotente. El legado
+ * como hoy (número del env); después, cada negocio activo con número
+ * declarado y credenciales, escalonado 1.5 s (jamás dos procesos con las
+ * mismas llaves de Baileys: staging no arranca negocios).
  */
 export async function startWhatsAppGateway(): Promise<void> {
-  const { whatsappAgentNumber } = await import("./config")
   const agentNumber = whatsappAgentNumber()
   if (!agentNumber) {
     logInfo("whatsapp.disabled", { reason: "WHATSAPP_AGENT_NUMBER ausente" })
@@ -1192,4 +1247,19 @@ export async function startWhatsAppGateway(): Promise<void> {
   const session = ensureSessionRegistered(LEGACY_TENANT_ID, "legacy")
   session.agentNumber = agentNumber
   await ensureWhatsAppSocket(session)
+
+  // Negocios (2B): escalonados tras el legado para no golpear WhatsApp a la
+  // vez. Un fallo de UN negocio no corta el resto ni el arranque.
+  try {
+    const tenants = await listActiveTenants()
+    for (const tenant of tenants) {
+      if (tenant.kind !== "business" || !tenant.whatsappNumber) continue
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      void startTenantSession(tenant.id).catch((error: unknown) =>
+        log(`tenant_session_start ${tenant.id}`, error)
+      )
+    }
+  } catch (error) {
+    log("tenant_sessions_boot", error)
+  }
 }

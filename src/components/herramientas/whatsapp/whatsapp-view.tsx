@@ -94,18 +94,22 @@ export function WhatsAppView({
   initialStatus,
   agentNumber,
   llmConfigured,
+  variant = "legacy",
   initialOutbox,
   initialLog,
   registered,
 }: {
   initialStatus: WhatsAppStatusInfo
-  /** Número completo del agente (solo admin); null si el módulo está sin config. */
+  /** Número del canal (solo admin); null si el módulo está sin config. */
   agentNumber: string | null
   llmConfigured: boolean
+  /** legacy = panel TVBox (agente IA); business = WhatsApp del negocio. */
+  variant?: "legacy" | "business"
   initialOutbox: WhatsAppOutboxRow[]
   initialLog: WhatsAppLogRow[]
   registered: RegisteredNumber[]
 }) {
+  const isBusiness = variant === "business"
   const [status, setStatus] = useState(initialStatus)
   const [outbox, setOutbox] = useState(initialOutbox)
   const [log, setLog] = useState(initialLog)
@@ -474,8 +478,15 @@ export function WhatsAppView({
       <FrameHeader>
         <FrameTitle className="text-xl font-semibold">WhatsApp</FrameTitle>
         <FrameDescription>
-          Espejo de las notificaciones del panel y agente de consultas por el
-          número {agentNumber ? `+${agentNumber.replace(/^(\d{2})(\d+)$/, "+$1 $2")}` : "del agente IA"}.
+          {isBusiness
+            ? "Espejo de las notificaciones del panel y avisos de pago de tu negocio por el número "
+            : "Espejo de las notificaciones del panel y agente de consultas por el número "}
+          {agentNumber
+            ? `+${agentNumber.replace(/^(\d{2})(\d+)$/, "+$1 $2")}`
+            : isBusiness
+              ? "declarado del negocio"
+              : "del agente IA"}
+          .
         </FrameDescription>
       </FrameHeader>
 
@@ -484,9 +495,11 @@ export function WhatsAppView({
           <div className="flex flex-wrap items-center gap-2">
             <Badge variant={statusMeta.variant}>{statusMeta.label}</Badge>
             {!status.configured ? (
-              <Badge variant="secondary">Sin WHATSAPP_AGENT_NUMBER</Badge>
+              <Badge variant="secondary">
+                {isBusiness ? "Sin número declarado" : "Sin WHATSAPP_AGENT_NUMBER"}
+              </Badge>
             ) : null}
-            {!llmConfigured ? (
+            {!isBusiness && !llmConfigured ? (
               <Badge variant="warning-light">Agente sin modelo</Badge>
             ) : null}
           </div>

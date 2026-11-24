@@ -14,6 +14,12 @@ import {
   createWhatsAppSession,
   maskNumber,
 } from "../src/server/whatsapp/session.ts"
+import {
+  routeBusinessUnknownTurn,
+  routeBusinessUserTurn,
+  shouldDispatchTenant,
+  shouldMirrorToUser,
+} from "../src/server/whatsapp/tenant-routing.ts"
 
 const LEGACY_TENANT_ID = "8e83b5cc-9f43-28b2-a8f3-2882fef090a8"
 
@@ -67,6 +73,57 @@ check("sesión legado con su carpeta histórica", () => {
 check("máscara del número", () => {
   assert.equal(maskNumber("525540049353"), "525•••353")
   assert.equal(maskNumber("12345"), "•••")
+})
+
+// ---------------------------------------------------------------------------
+// 2B: enrutamiento del entrante de negocio, auto-chat y despacho.
+// ---------------------------------------------------------------------------
+
+check("usuario del negocio: solo texto intercepta; adjuntos silencio", () => {
+  assert.equal(
+    routeBusinessUserTurn({ hasMedia: false, hasText: true }),
+    "payment_order_text"
+  )
+  assert.equal(
+    routeBusinessUserTurn({ hasMedia: true, hasText: true }),
+    "silent"
+  )
+  assert.equal(
+    routeBusinessUserTurn({ hasMedia: false, hasText: false }),
+    "silent"
+  )
+})
+check("número ajeno con orden atendida; sin orden SILENCIO", () => {
+  assert.equal(
+    routeBusinessUnknownTurn({ paymentOrderHandled: true }),
+    "payment_order"
+  )
+  assert.equal(
+    routeBusinessUnknownTurn({ paymentOrderHandled: false }),
+    "silent"
+  )
+})
+check("auto-chat: el número del tenant no recibe su propio espejo", () => {
+  assert.equal(
+    shouldMirrorToUser({ userPhone: "525540049353", tenantNumber: "525540049353" }),
+    false
+  )
+  assert.equal(
+    shouldMirrorToUser({ userPhone: "521234567890", tenantNumber: "525540049353" }),
+    true
+  )
+  // Sin número de tenant (canal sin declarar): el espejo va normal.
+  assert.equal(
+    shouldMirrorToUser({ userPhone: "521234567890", tenantNumber: null }),
+    true
+  )
+})
+check("dispatcher: solo reclama con la sesión abierta", () => {
+  assert.equal(shouldDispatchTenant("open"), true)
+  assert.equal(shouldDispatchTenant("close"), false)
+  assert.equal(shouldDispatchTenant("connecting"), false)
+  assert.equal(shouldDispatchTenant("revoked"), false)
+  assert.equal(shouldDispatchTenant(null), false)
 })
 
 if (process.exitCode) {
