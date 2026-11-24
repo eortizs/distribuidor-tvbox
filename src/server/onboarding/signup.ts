@@ -91,6 +91,9 @@ function ipRateLimited(ip: string): boolean {
   return false
 }
 
+/** Tope por IP visible para el flujo Google (se aplica también en el callback). */
+export const isSignupRateLimited = ipRateLimited
+
 async function dailyCapReached(): Promise<boolean> {
   const result = await systemPool.query<{ n: number }>(
     `SELECT count(*)::int AS n

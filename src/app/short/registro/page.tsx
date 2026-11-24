@@ -4,6 +4,7 @@ import { LockIcon } from "lucide-react"
 
 import { Wordmark } from "@/components/short/brand"
 import { SignupForm } from "@/components/short/signup-form"
+import { googleSignupReady } from "@/server/auth/google"
 import { selfSignupEnabled } from "@/server/onboarding/signup"
 import { hostSlugPrefix, tenantBaseHost } from "@/server/tenant/hosts"
 import { connection } from "next/server"
@@ -23,11 +24,40 @@ export const metadata: Metadata = {
   icons: { icon: "/spei-link-favicon.ico" },
 }
 
-export default async function SignupPage() {
+/** Mensajes de los errores que vuelven por query desde el flujo Google. */
+const SIGNUP_ERRORS: Record<string, string> = {
+  signup_closed: "El registro aún no está abierto. Vuelve pronto.",
+  signup_rate:
+    "Demasiados intentos desde tu conexión. Inténtalo de nuevo en una hora.",
+  signup_rejected: "No fue posible crear la cuenta.",
+  signup_legal: "Debes aceptar los Términos de Uso y el Aviso de Privacidad.",
+  signup_name: "El nombre del negocio debe tener entre 1 y 80 caracteres.",
+  signup_slug_reserved: "Ese subdominio está reservado. Elige otro.",
+  signup_slug_taken: "Ese subdominio ya está ocupado. Elige otro.",
+  signup_slug_shape:
+    "El subdominio debe tener 3-30 caracteres (letras, dígitos y guiones), sin guiones al inicio o al final.",
+  google_signup_unavailable:
+    "El acceso con Google no está disponible en este momento. Usa la opción de correo.",
+  google_signup_state:
+    "La sesión con Google expiró; inténtalo de nuevo.",
+  google_signup_cancelled: "Cancelaste el registro con Google.",
+  google_signup_invalid: "No se pudo completar el registro con Google.",
+  google_signup_failed: "No se pudo completar el registro con Google.",
+  google_signup_email_taken:
+    "Ese correo de Google ya está registrado. Inicia sesión desde el panel de tu negocio o usa otro correo.",
+}
+
+export default async function SignupPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string; businessName?: string; slug?: string }>
+}) {
   await connection()
   const enabled = selfSignupEnabled()
   const baseHost = tenantBaseHost()
   const prefix = hostSlugPrefix()
+  const params = await searchParams
+  const oauthError = params.error ? SIGNUP_ERRORS[params.error] ?? null : null
 
   return (
     <div className="flex min-h-svh flex-col bg-white text-[#0F172A]">
@@ -94,7 +124,14 @@ export default async function SignupPage() {
           <div className="order-1 lg:order-2">
             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-xl shadow-slate-900/5 sm:p-7">
               {enabled ? (
-                <SignupForm baseHost={baseHost} slugPrefix={prefix} />
+                <SignupForm
+                  baseHost={baseHost}
+                  slugPrefix={prefix}
+                  googleReady={googleSignupReady()}
+                  oauthError={oauthError}
+                  initialBusinessName={params.businessName ?? ""}
+                  initialSlug={params.slug ?? ""}
+                />
               ) : (
                 <div className="flex flex-col items-center gap-3 py-10 text-center">
                   <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-3.5 py-1.5 text-xs font-semibold text-[#065F46]">

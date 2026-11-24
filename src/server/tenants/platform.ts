@@ -76,6 +76,11 @@ export interface CreateTenantInput {
   ownerPassword?: string
   /** Nombre completo del propietario (entidad Cuenta); opcional. */
   ownerFullName?: string
+  /**
+   * `sub` de Google verificado (alta pública del apex): cuenta SOLO-Google
+   * (sin contraseña local) que entra por «Continuar con Google».
+   */
+  ownerGoogleSub?: string | null
 }
 
 export interface CreatedTenant {
@@ -115,7 +120,9 @@ export async function createTenant(
   if (await findTenantBySlug(slug)) {
     throw new AppError(409, "slug_tomado", `El slug '${slug}' ya existe.`)
   }
-  const temporaryPassword = input.ownerPassword ?? randomBytes(9).toString("base64url")
+  const googleOnly = Boolean(input.ownerGoogleSub)
+  const temporaryPassword =
+    input.ownerPassword ?? (googleOnly ? "" : randomBytes(9).toString("base64url"))
   const tenantId = crypto.randomUUID()
 
   const owner = await runWithPlatformTenant(tenantId, () =>
@@ -128,14 +135,16 @@ export async function createTenant(
         )
         // El propietario y su entidad Cuenta viven en la MISMA transacción
         // (dual GUC): valida el documento umeJSON y crea el usuario con rol
-        // propietario del tenant nuevo.
+        // propietario del tenant nuevo. Google-only: sin contraseña local
+        // (entra por «Continuar con Google»), igual que el legado.
         return await createAccount(
           {
             email,
-            password: temporaryPassword,
+            password: googleOnly ? undefined : temporaryPassword,
             role: "propietario",
             tenantId,
             fullName: input.ownerFullName,
+            googleSub: input.ownerGoogleSub ?? undefined,
             actor: "platform",
             source: "platform",
           },

@@ -18,8 +18,8 @@ export interface GettingStartedSteps {
 }
 
 const STEP_META = [
-  { key: "mpToken", label: "Conectar Mercado Pago", paso: 1 },
-  { key: "banking", label: "Cuenta donde recibes", paso: 2 },
+  { key: "mpToken", label: "Cuenta de Mercado Pago", paso: 1 },
+  { key: "banking", label: "Vincular token + CLABE", paso: 2 },
   { key: "whatsapp", label: "WhatsApp del negocio", paso: 3 },
 ] as const
 

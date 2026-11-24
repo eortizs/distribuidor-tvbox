@@ -27,6 +27,7 @@ export const OAUTH_CALLBACK_PATH = "/api/auth/google/callback"
 export const OAUTH_STATE_MAX_LENGTH = 256
 
 const TENANT_STATE_PREFIX = "t"
+const SIGNUP_STATE_PREFIX = "s"
 const SLUG_MAX_LENGTH = 64
 const NONCE_RE = /^[A-Za-z0-9_-]{16,128}$/
 const RELAY_PARAM_RE = /^[A-Za-z0-9\-._~+/=:]+$/
@@ -39,6 +40,7 @@ export interface TenantOAuthState {
 
 export type ParsedOAuthState =
   | ({ kind: "tenant" } & TenantOAuthState)
+  | { kind: "signup"; nonce: string }
   | { kind: "opaque" }
 
 /** `state` de un flujo iniciado en un tenant: `t.<slug>.<nonce>`. */
@@ -46,8 +48,14 @@ export function encodeTenantOAuthState(slug: string, nonce: string): string {
   return `${TENANT_STATE_PREFIX}.${slug}.${nonce}`
 }
 
+/** `state` del ALTA PÚBLICA por Google en el apex: `s.<nonce>`. */
+export function encodeSignupOAuthState(nonce: string): string {
+  return `${SIGNUP_STATE_PREFIX}.${nonce}`
+}
+
 /**
  * `t.<slug>.<nonce>` = flujo de tenant (el relevo sabe a dónde volver);
+ * `s.<nonce>` = alta pública por Google (se atiende EN el apex);
  * cualquier otra cadena no vacía es el `state` opaco del panel legado.
  * null = malformado (vacío, demasiado largo, prefijo roto o slug que no
  * cumple la regla del catálogo).
@@ -77,6 +85,11 @@ export function parseOAuthState(
       return null
     }
     return { kind: "tenant", slug, nonce }
+  }
+  if (state.startsWith(`${SIGNUP_STATE_PREFIX}.`)) {
+    const nonce = state.slice(SIGNUP_STATE_PREFIX.length + 1)
+    if (!NONCE_RE.test(nonce)) return null
+    return { kind: "signup", nonce }
   }
   return { kind: "opaque" }
 }

@@ -11,7 +11,6 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { Badge } from "@/components/reui/badge"
 import {
   Frame,
   FrameDescription,
@@ -29,18 +28,20 @@ import {
 } from "@/components/reui/stepper"
 import { formatClabe } from "@/lib/clabe"
 import {
-  saveBusinessBankingAction,
-  saveBusinessMpTokenAction,
+  saveBusinessMpLinkAction,
   saveBusinessWhatsappNumberAction,
   type BusinessSetupState,
 } from "@/app/actions/onboarding"
 
 /**
- * Asistente de configuración del negocio (§4.3 del plan): UN paso por
- * pantalla, acción primaria a la derecha («Continuar»), «Saltar por ahora» a
- * la izquierda. Todo paso se salta; lo saltado queda pendiente en la tarjeta
- * «Primeros pasos» de /clientes y /onboarding sigue siendo la pantalla de
- * edición una vez completo.
+ * Asistente de configuración del negocio — flujo REAL del dueño (2026-11-24):
+ * 1) cuenta SPEILink (ya creada), 2) crear cuenta de Mercado Pago (guía,
+ * ocurre en la app de MP), 3) vincularla (access token + CLABE juntos),
+ * 4) WhatsApp del negocio (declarar aquí; QR en Módulos → WhatsApp).
+ * Un paso por pantalla, primaria a la derecha («Continuar»), «Saltar por
+ * ahora» a la izquierda; lo saltado queda en la tarjeta «Primeros pasos» y
+ * el siguiente login vuelve a sugerirlo. /onboarding sigue siendo la
+ * pantalla de edición una vez completo.
  */
 
 export interface OnboardingWizardProps {
@@ -57,7 +58,7 @@ export interface OnboardingWizardProps {
   initialStep: number
 }
 
-const STEP_LABELS = ["Bienvenida", "Mercado Pago", "Cuenta de cobro", "WhatsApp"]
+const STEP_LABELS = ["Bienvenida", "Mercado Pago", "Vinculación", "WhatsApp"]
 const INPUT_CLASS = "h-10 w-full rounded-lg px-3 text-base md:text-sm"
 const FIELD_ERROR_CLASS = "text-destructive text-xs font-medium"
 
@@ -116,17 +117,10 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
       </Stepper>
 
       {step === 0 && (
-        <WelcomePanel
-          props={props}
-          onContinue={() => setStep(firstPending)}
-        />
+        <WelcomePanel props={props} onContinue={() => setStep(firstPending)} />
       )}
-      {step === 1 && (
-        <MpTokenPanel props={props} onDone={() => advance(2)} />
-      )}
-      {step === 2 && (
-        <BankingPanel props={props} onDone={() => advance(3)} />
-      )}
+      {step === 1 && <MpCreatePanel props={props} onDone={() => advance(2)} onSkip={() => advance(3)} />}
+      {step === 2 && <MpLinkPanel props={props} onDone={() => advance(3)} onSkip={() => advance(3)} />}
       {step === 3 && (
         <WhatsappPanel props={props} onDone={() => advance(4)} />
       )}
@@ -135,7 +129,12 @@ export function OnboardingWizard(props: OnboardingWizardProps) {
   )
 }
 
-type PanelProps = { props: OnboardingWizardProps; onDone: () => void }
+type PanelProps = {
+  props: OnboardingWizardProps
+  onDone: () => void
+  /** Solo los pasos MP: saltar salta AMBOS (crear + vincular). */
+  onSkip?: () => void
+}
 
 function WelcomePanel({
   props,
@@ -154,21 +153,21 @@ function WelcomePanel({
             Bienvenido a tu panel, {props.businessName}
           </FrameTitle>
           <FrameDescription>
-            Configura tres cosas y tu negocio queda listo para cobrar:
-            conecta tu cuenta de Mercado Pago, elige la cuenta donde recibes
-            los pagos y vincula el WhatsApp de tu negocio.
+            Configura tres cosas y tu negocio queda listo para cobrar: tu
+            cuenta de Mercado Pago (crearla y vincularla) y el WhatsApp de tu
+            negocio.
           </FrameDescription>
         </FrameHeader>
         <div className="flex flex-col gap-2 pb-1">
           <StepRow
             done={props.steps.mpToken}
-            label="Conecta tu cuenta de Mercado Pago"
+            label="Cuenta de Mercado Pago"
             description="Para confirmar cada pago automáticamente."
           />
           <StepRow
             done={props.steps.banking}
-            label="Cuenta donde recibes"
-            description="La CLABE donde entra tu dinero."
+            label="Vinculación: token + CLABE"
+            description="La cuenta donde entra tu dinero y la lectura de depósitos."
           />
           <StepRow
             done={props.steps.whatsapp}
@@ -216,64 +215,27 @@ function StepRow({
   )
 }
 
-function MpTokenPanel({ props, onDone }: PanelProps) {
-  const [mode, setMode] = useState<"have" | "need">("have")
-  const [state, formAction, pending] = useActionState<BusinessSetupState, FormData>(
-    saveBusinessMpTokenAction,
-    INITIAL_ACTION_STATE
+/**
+ * PASO «Crear cuenta de Mercado Pago»: ocurre en la app de MP (el rol del
+ * asistente es guiar). Quien ya tiene cuenta avanza directo a la
+ * vinculación; quien no, ve la guía de 3 pasos + enlace de referido.
+ */
+function MpCreatePanel({ props, onDone, onSkip }: PanelProps) {
+  const [mode, setMode] = useState<"have" | "need">(
+    props.steps.mpToken ? "have" : "need"
   )
-
-  if (props.token && props.token.status === "active") {
-    return (
-      <Frame variant="inverse">
-        <FramePanel>
-          <FrameHeader>
-            <FrameTitle className="flex items-center gap-2 text-base">
-              <WalletIcon className="size-5" aria-hidden="true" />
-              Conecta tu cuenta de Mercado Pago
-            </FrameTitle>
-            <FrameDescription>
-              Puedes reemplazarla cuando quieras pegando otro token de
-              producción (aquí mismo o en Perfil → Cuenta propia).
-            </FrameDescription>
-          </FrameHeader>
-          <div className="flex flex-col gap-3 pb-1">
-            <div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-2.5">
-              <CircleCheckIcon
-                className="text-primary size-5 shrink-0"
-                aria-hidden="true"
-              />
-              <div className="min-w-0 text-sm">
-                <p className="font-medium">
-                  {props.token.nickname ?? "Cuenta de Mercado Pago"}
-                </p>
-                <p className="text-muted-foreground text-xs">
-                  Terminación {props.token.last4}
-                </p>
-              </div>
-              <Badge variant="success-light" size="sm" className="ml-auto">
-                Conectada
-              </Badge>
-            </div>
-            <ReplaceTokenForm onDone={onDone} />
-          </div>
-        </FramePanel>
-      </Frame>
-    )
-  }
-
   return (
     <Frame variant="inverse">
       <FramePanel>
         <FrameHeader>
           <FrameTitle className="flex items-center gap-2 text-base">
             <WalletIcon className="size-5" aria-hidden="true" />
-            Conecta tu cuenta de Mercado Pago
+            Crea tu cuenta de Mercado Pago
           </FrameTitle>
           <FrameDescription>
-            {props.token && props.token.status === "invalid"
-              ? "El token registrado quedó inválido: vincula uno nuevo."
-              : "El sistema confirma cada depósito leyendo TU cuenta de Mercado Pago. Tu dinero nunca pasa por SPEILink."}
+            Tu dinero entra directo a TU cuenta de Mercado Pago; el sistema
+            solo lee los depósitos que llegan a ella. Nunca pasa por
+            SPEILink.
           </FrameDescription>
         </FrameHeader>
         <div className="flex flex-col gap-3 pb-1">
@@ -303,49 +265,28 @@ function MpTokenPanel({ props, onDone }: PanelProps) {
           </div>
 
           {mode === "have" ? (
-            <form action={formAction} className="flex flex-col gap-2.5">
-              <label htmlFor="mpToken" className="text-sm font-medium">
-                Access token de producción
-              </label>
-              <Input
-                id="mpToken"
-                name="mpToken"
-                type="password"
-                required
-                placeholder="APP-USR-…"
-                className={INPUT_CLASS}
-                aria-invalid={state.error ? true : undefined}
-                autoComplete="off"
-              />
-              {state.error && <p className={FIELD_ERROR_CLASS}>{state.error}</p>}
-              <p className="text-muted-foreground text-xs">
-                Lo encuentras en tu cuenta de Mercado Pago → «Tus integraciones»
-                → «Credenciales de producción». Se guarda cifrado y jamás se
-                vuelve a mostrar.
-              </p>
-              <div className="flex items-center justify-between gap-2 pt-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  onClick={onDone}
-                  size="lg"
-                  className="text-muted-foreground px-3"
-                >
-                  Saltar por ahora
-                </Button>
-                <Button type="submit" disabled={pending} size="lg" className="px-4">
-                  {pending ? "Validando…" : "Conectar y continuar"}
-                  <ArrowRightIcon className="size-4" aria-hidden="true" />
-                </Button>
-              </div>
-            </form>
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={onSkip}
+                size="lg"
+                className="text-muted-foreground px-3"
+              >
+                Saltar por ahora
+              </Button>
+              <Button onClick={onDone} size="lg" className="px-4">
+                Continuar: vincular mi cuenta
+                <ArrowRightIcon className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
           ) : (
             <div className="flex flex-col gap-2.5">
               <ol className="flex flex-col gap-2 text-sm">
                 {[
                   "Entra a mercadopago.com.mx y crea tu cuenta gratis (5 minutos, con tu INE).",
-                  "Dentro de tu cuenta, ve a «Tus integraciones» y crea una aplicación.",
-                  "Copia tu access token de PRODUCCIÓN y pégalo en «Ya tengo cuenta».",
+                  "La app te pedirá validar tu identidad: puede tardar unos minutos.",
+                  "Cuando esté lista, vuelve aquí y pasa al paso de vinculación.",
                 ].map((text, index) => (
                   <li key={index} className="flex items-start gap-2.5">
                     <span className="bg-primary/10 text-primary mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md text-xs font-semibold">
@@ -367,14 +308,21 @@ function MpTokenPanel({ props, onDone }: PanelProps) {
                   Abrir mi cuenta de Mercado Pago
                 </a>
               )}
-              <Button
-                variant="outline"
-                onClick={() => setMode("have")}
-                size="lg"
-                className="px-4"
-              >
-                Ya la tengo: conectar
-              </Button>
+              <div className="flex items-center justify-between gap-2 pt-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={onSkip}
+                  size="lg"
+                  className="text-muted-foreground px-3"
+                >
+                  Saltar por ahora
+                </Button>
+                <Button onClick={onDone} size="lg" className="px-4">
+                  Ya la tengo: vincular
+                  <ArrowRightIcon className="size-4" aria-hidden="true" />
+                </Button>
+              </div>
             </div>
           )}
         </div>
@@ -383,92 +331,61 @@ function MpTokenPanel({ props, onDone }: PanelProps) {
   )
 }
 
-/** Reemplazo del token dentro del panel «ya conectada». */
-function ReplaceTokenForm({ onDone }: { onDone: () => void }) {
-  const [open, setOpen] = useState(false)
+/**
+ * PASO «Vincula tu cuenta de Mercado Pago»: access token de producción +
+ * cuenta de cobro (CLABE) EN UNA pantalla — deben ser la misma cuenta para
+ * que la confirmación automática funcione.
+ */
+function MpLinkPanel({ props, onDone, onSkip }: PanelProps) {
   const [state, formAction, pending] = useActionState<BusinessSetupState, FormData>(
-    saveBusinessMpTokenAction,
+    saveBusinessMpLinkAction,
     INITIAL_ACTION_STATE
   )
-  return (
-    <>
-      {open ? (
-        <form action={formAction} className="flex flex-col gap-2.5">
-          <label htmlFor="mpTokenReplace" className="text-sm font-medium">
-            Nuevo access token de producción
-          </label>
-          <Input
-            id="mpTokenReplace"
-            name="mpToken"
-            type="password"
-            required
-            placeholder="APP-USR-…"
-            className={INPUT_CLASS}
-            aria-invalid={state.error ? true : undefined}
-            autoComplete="off"
-          />
-          {state.error && <p className={FIELD_ERROR_CLASS}>{state.error}</p>}
-          <div className="flex items-center justify-end gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setOpen(false)}
-              className="text-muted-foreground px-3"
-            >
-              Cancelar
-            </Button>
-            <Button type="submit" disabled={pending} size="sm" className="px-3">
-              {pending ? "Validando…" : "Guardar"}
-            </Button>
-          </div>
-        </form>
-      ) : (
-        <p className="text-muted-foreground text-xs">
-          Puedes reemplazarla en cualquier momento pegando otro token de
-          producción.
-        </p>
-      )}
-      {!open && (
-        <div className="flex items-center justify-end gap-2 pt-1">
-          <Button
-            variant="ghost"
-            size="lg"
-            onClick={() => setOpen(true)}
-            className="text-muted-foreground px-3"
-          >
-            Reemplazar token
-          </Button>
-          <Button onClick={onDone} size="lg" className="px-4">
-            Continuar
-            <ArrowRightIcon className="size-4" aria-hidden="true" />
-          </Button>
-        </div>
-      )}
-    </>
-  )
-}
+  const tokenActive = props.token !== null && props.token.status === "active"
 
-function BankingPanel({ props, onDone }: PanelProps) {
-  const [state, formAction, pending] = useActionState<BusinessSetupState, FormData>(
-    saveBusinessBankingAction,
-    INITIAL_ACTION_STATE
-  )
   return (
     <Frame variant="inverse">
       <FramePanel>
         <FrameHeader>
           <FrameTitle className="flex items-center gap-2 text-base">
             <LandmarkIcon className="size-5" aria-hidden="true" />
-            Cuenta donde recibes los pagos
+            Vincula tu cuenta de Mercado Pago
           </FrameTitle>
           <FrameDescription>
-            Esta CLABE es la que les damos a tus clientes para pagarte. Para
-            que la confirmación sea automática, debe ser la CLABE de tu cuenta
-            de Mercado Pago (la encuentras en el perfil de tu app).
+            {tokenActive
+              ? `Token conectado: ${props.token?.nickname ?? "Mercado Pago"} · ····${props.token?.last4}. Puedes cambiarlo pegando otro token de producción.`
+              : props.token && props.token.status === "invalid"
+                ? "El token registrado quedó inválido: vincula uno nuevo."
+                : "Dos datos y queda lista: el access token de producción (para leer los depósitos, solo lectura) y la CLABE donde recibes."}
           </FrameDescription>
         </FrameHeader>
         <form action={formAction} className="flex flex-col gap-3 pb-1">
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="mpToken" className="text-sm font-medium">
+              Access token de producción{" "}
+              {tokenActive && (
+                <span className="text-muted-foreground font-normal">
+                  (opcional: ya tienes uno conectado)
+                </span>
+              )}
+            </label>
+            <Input
+              id="mpToken"
+              name="mpToken"
+              type="password"
+              required={!tokenActive}
+              placeholder={tokenActive ? "Deja vacío para conservar el actual" : "APP-USR-…"}
+              className={INPUT_CLASS}
+              aria-invalid={state.error ? true : undefined}
+              autoComplete="off"
+            />
+            <p className="text-muted-foreground text-xs">
+              En tu cuenta de Mercado Pago → «Tus integraciones» →
+              «Credenciales de producción». Se guarda cifrado y jamás se
+              vuelve a mostrar.
+            </p>
+          </div>
+
           <div className="flex flex-col gap-1.5">
             <label htmlFor="bankName" className="text-sm font-medium">
               Banco
@@ -515,26 +432,41 @@ function BankingPanel({ props, onDone }: PanelProps) {
               className={`${INPUT_CLASS} font-mono tracking-wide`}
               aria-invalid={state.error ? true : undefined}
             />
-            {state.error && <p className={FIELD_ERROR_CLASS}>{state.error}</p>}
             <p className="text-muted-foreground text-xs">
-              Se guarda sin espacios; agrupamos solo mientras escribes.
+              Debe ser la CLABE de tu cuenta de Mercado Pago (en el perfil de
+              tu app): si pones la de otro banco, los depósitos no se pueden
+              conciliar.
             </p>
+            {state.error && <p className={FIELD_ERROR_CLASS}>{state.error}</p>}
           </div>
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onDone}
-              size="lg"
-              className="text-muted-foreground px-3"
-            >
-              Saltar por ahora
-            </Button>
-            <Button type="submit" disabled={pending} size="lg" className="px-4">
-              {pending ? "Guardando…" : "Guardar y continuar"}
-              <ArrowRightIcon className="size-4" aria-hidden="true" />
-            </Button>
-          </div>
+
+          {state.success ? (
+            <div className="flex items-center justify-end gap-2 pt-1">
+              {state.success && (
+                <span className="text-success text-xs font-medium">{state.success}</span>
+              )}
+              <Button type="button" onClick={onDone} size="lg" className="px-4">
+                Continuar
+                <ArrowRightIcon className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={onSkip}
+                size="lg"
+                className="text-muted-foreground px-3"
+              >
+                Saltar por ahora
+              </Button>
+              <Button type="submit" disabled={pending} size="lg" className="px-4">
+                {pending ? "Validando…" : "Vincular y continuar"}
+                <ArrowRightIcon className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
+          )}
         </form>
       </FramePanel>
     </Frame>
@@ -557,7 +489,7 @@ function WhatsappPanel({ props, onDone }: PanelProps) {
           <FrameDescription>
             {declared
               ? `Número declarado: +${props.whatsappNumber}. Vincúlalo por QR o código de emparejamiento en Módulos → WhatsApp.`
-              : "Declara el número de WhatsApp con el que tu negocio avisa a sus clientes. La vinculación por QR vive en Módulos → WhatsApp."}
+              : "Declara el número de WhatsApp Business con el que tu negocio avisa a sus clientes; después vincúlalo por QR en Módulos → WhatsApp (el número queda como dispositivo enlazado, como WhatsApp Web)."}
           </FrameDescription>
         </FrameHeader>
         <form action={formAction} className="flex flex-col gap-3 pb-1">
@@ -598,21 +530,30 @@ function WhatsappPanel({ props, onDone }: PanelProps) {
               después, desvincula primero desde Módulos → WhatsApp.
             </p>
           </div>
-          <div className="flex items-center justify-between gap-2 pt-1">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={onDone}
-              size="lg"
-              className="text-muted-foreground px-3"
-            >
-              Saltar por ahora
-            </Button>
-            <Button type="submit" disabled={pending} size="lg" className="px-4">
-              {pending ? "Guardando…" : "Guardar y continuar"}
-              <ArrowRightIcon className="size-4" aria-hidden="true" />
-            </Button>
-          </div>
+          {state.success ? (
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <Button type="button" onClick={onDone} size="lg" className="px-4">
+                Continuar
+                <ArrowRightIcon className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={onDone}
+                size="lg"
+                className="text-muted-foreground px-3"
+              >
+                Saltar por ahora
+              </Button>
+              <Button type="submit" disabled={pending} size="lg" className="px-4">
+                {pending ? "Guardando…" : "Guardar y continuar"}
+                <ArrowRightIcon className="size-4" aria-hidden="true" />
+              </Button>
+            </div>
+          )}
         </form>
       </FramePanel>
     </Frame>

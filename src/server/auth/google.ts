@@ -1,6 +1,7 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
 import { publicSiteUrl, shortLinkBaseUrl } from "@/server/site-url"
+import { shortHost } from "@/server/tenant/hosts"
 import { AppError } from "@/server/umejson/types"
 import {
   OAUTH_CALLBACK_PATH,
@@ -369,6 +370,98 @@ export function googleLinkCookieOptions() {
     path: "/",
     maxAge: LINK_TTL_SECONDS,
   }
+}
+
+// ---------------------------------------------------------------------------
+// ALTA PÚBLICA POR GOOGLE (§ del plan de onboarding): el formulario del apex
+// recoge nombre del negocio + subdominio + casilla legal ANTES de ir a
+// Google; esos datos viajan en una cookie FIRMADA con el client secret del
+// cliente SPEILink (misma técnica del token de vínculo) y el callback del
+// apex la canjea junto con la identidad verificada de Google.
+// ---------------------------------------------------------------------------
+
+export const GOOGLE_SIGNUP_COOKIE = "reseller_google_signup"
+
+export interface GoogleSignupPending {
+  businessName: string
+  slug: string
+  nonce: string
+}
+
+/** Cookie del alta pendiente: `businessName|slug|nonce|exp` firmados. */
+export function createGoogleSignupCookie(
+  input: GoogleSignupPending,
+  client: GoogleClient
+): string {
+  const key = googleLinkKey(client)
+  if (!key) {
+    throw new AppError(
+      500,
+      "google_signup_unavailable",
+      "Google OAuth is not configured; signup cannot start"
+    )
+  }
+  const exp = Date.now() + STATE_TTL_SECONDS * 1000
+  const payload = `${input.businessName}|${input.slug}|${input.nonce}|${exp}`
+  return `${Buffer.from(payload).toString("base64url")}.${linkHmac(payload, key)}`
+}
+
+/**
+ * Valida la cookie del alta pendiente contra el nonce del `state`: firma +
+ * expiración + nonce coincidente. Cualquier rechazo devuelve null (el alta
+ * empieza de cero desde el formulario).
+ */
+export function verifyGoogleSignupCookie(
+  token: string | undefined,
+  expectedNonce: string,
+  client: GoogleClient
+): GoogleSignupPending | null {
+  const key = googleLinkKey(client)
+  if (!key || !token) return null
+  const dot = token.lastIndexOf(".")
+  if (dot === -1) return null
+  let payload: string
+  try {
+    payload = Buffer.from(token.slice(0, dot), "base64url").toString("utf8")
+  } catch {
+    return null
+  }
+  const signature = token.slice(dot + 1)
+  const expected = Buffer.from(linkHmac(payload, key))
+  const received = Buffer.from(signature)
+  if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
+    return null
+  }
+  const parts = payload.split("|")
+  if (parts.length !== 4) return null
+  const [businessName, slug, nonce, exp] = parts
+  const fresh = /^\d+$/.test(exp) && Number(exp) > Date.now()
+  if (!businessName || !slug || !fresh || nonce !== expectedNonce) return null
+  return { businessName, slug, nonce }
+}
+
+export function googleSignupCookieOptions() {
+  return {
+    httpOnly: true,
+    sameSite: "lax" as const,
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: STATE_TTL_SECONDS,
+  }
+}
+
+/**
+ * El botón «Continuar con Google» del registro público solo aparece cuando
+ * el flujo PUEDE cerrarse: cliente SPEILink configurado Y la URI fija vive
+ * en el MISMO apex donde se muestra el formulario (la cookie del alta es
+ * host-only; un canje en otro host la perdería).
+ */
+export function googleSignupReady(): boolean {
+  const client = speilinkGoogleClient()
+  if (!client) return false
+  const relayHost = speilinkGoogleRelayHost()
+  if (!relayHost) return false
+  return relayHost === shortHost()
 }
 
 /**

@@ -3,13 +3,17 @@ import { NextResponse, connection, type NextRequest } from "next/server"
 import { createSession } from "@/server/auth/session"
 import {
   GOOGLE_LINK_COOKIE,
+  GOOGLE_SIGNUP_COOKIE,
   GOOGLE_STATE_COOKIE,
   createGoogleLinkToken,
   exchangeGoogleCode,
   googleLinkCookieOptions,
   googleStateCookieOptions,
+  googleSignupCookieOptions,
   googleTenantSignupMode,
+  googleClientKit,
   speilinkGoogleRelayHost,
+  verifyGoogleSignupCookie,
   verifyGoogleState,
 } from "@/server/auth/google"
 import { googleKitForFlow, resolveGoogleEntry } from "@/server/auth/google-host"
@@ -20,15 +24,24 @@ import {
 } from "@/server/auth/google-relay"
 import { resolveGoogleUser } from "@/server/auth/google-users"
 import { postLoginPathFor } from "@/server/onboarding/status"
+import {
+  createSignupHandoff,
+} from "@/server/onboarding/handoff"
+import {
+  isSignupRateLimited,
+  selfSignupEnabled,
+} from "@/server/onboarding/signup"
 import { updateUser } from "@/server/auth/users"
 import { populateFullNameFromGoogle } from "@/server/auth/profile"
 import { normalizeEmail } from "@/server/auth/types"
-import { tenantIdOfUser } from "@/server/tenant/context"
+import { findTenantBySlug, tenantIdOfUser } from "@/server/tenant/context"
 import {
   isValidTenantSlug,
   resolveTenantHost,
   tenantHostForSlug,
 } from "@/server/tenant/hosts"
+import { createTenant } from "@/server/tenants/platform"
+import { AppError } from "@/server/umejson/types"
 import { hostTenantIdForRequest, validateSessionHost } from "@/server/tenant/identity"
 import { requestHost } from "@/server/tenant/request-host"
 
@@ -52,6 +65,8 @@ async function relayToTenant(request: NextRequest): Promise<NextResponse | null>
   const landing = () => NextResponse.redirect(new URL("/", `https://${host}`))
   const state = request.nextUrl.searchParams.get("state")
   const parsed = parseOAuthState(state, isValidTenantSlug)
+  // `s.<nonce>` (alta pública por Google) se atiende AQUÍ, no en el relevo.
+  if (parsed?.kind === "signup") return null
   if (parsed?.kind !== "tenant") return landing()
 
   const tenantHost = tenantHostForSlug(parsed.slug)
@@ -70,6 +85,131 @@ async function relayToTenant(request: NextRequest): Promise<NextResponse | null>
 }
 
 /**
+ * ALTA PÚBLICA POR GOOGLE (§4.1 del plan de onboarding): el flujo nació en
+ * `/registro` del apex con `state` `s.<nonce>` y la cookie FIRMADA del alta
+ * pendiente (negocio + subdominio). Este handler corre SOLO en el apex
+ * (host de la URI fija del cliente SPEILink): canjea el código, crea el
+ * negocio + dueño solo-Google en una transacción y entrega la sesión por
+ * ticket en el subdominio — el mismo cierre del alta por correo.
+ */
+async function handleGoogleSignup(request: NextRequest): Promise<NextResponse | null> {
+  const host = await requestHost()
+  if (host !== speilinkGoogleRelayHost()) return null
+  if (resolveTenantHost(host).kind === "legacy") return null
+
+  const state = request.nextUrl.searchParams.get("state")
+  const parsed = parseOAuthState(state, isValidTenantSlug)
+  if (parsed?.kind !== "signup") return null
+
+  const origin = `https://${host}`
+  const kit = googleClientKit("speilink")
+
+  const failSignup = (reason: string, log?: unknown) => {
+    if (log) {
+      console.error(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          error: `google-oauth: signup_${reason}`,
+          detail: log instanceof Error ? log.message : String(log),
+        })
+      )
+    }
+    const url = new URL("/registro", origin)
+    url.searchParams.set("error", reason)
+    const response = NextResponse.redirect(url)
+    response.cookies.set(GOOGLE_STATE_COOKIE, "", {
+      ...googleStateCookieOptions(),
+      maxAge: 0,
+    })
+    response.cookies.set(GOOGLE_SIGNUP_COOKIE, "", {
+      ...googleSignupCookieOptions(),
+      maxAge: 0,
+    })
+    return response
+  }
+
+  // Cliente y cookies ANTES de gastar el canje: sin kit o sin pendiente
+  // válido (firma + nonce + exp) no hay alta que atender.
+  if (!kit) return failSignup("google_signup_unavailable", "speilink client missing")
+  if (!verifyGoogleState(request.cookies.get(GOOGLE_STATE_COOKIE)?.value, state)) {
+    return failSignup("google_signup_state")
+  }
+  const pending = verifyGoogleSignupCookie(
+    request.cookies.get(GOOGLE_SIGNUP_COOKIE)?.value,
+    parsed.nonce,
+    kit.client
+  )
+  if (!pending) return failSignup("google_signup_state", "pending cookie invalid")
+
+  if (request.nextUrl.searchParams.get("error")) {
+    return failSignup("google_signup_cancelled")
+  }
+  const code = request.nextUrl.searchParams.get("code")
+  if (!code) return failSignup("google_signup_invalid")
+
+  if (!selfSignupEnabled()) return failSignup("signup_closed")
+  const ip =
+    request.headers.get("cf-connecting-ip") ??
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    "unknown"
+  if (isSignupRateLimited(ip)) return failSignup("signup_rate")
+
+  let profile: Awaited<ReturnType<typeof exchangeGoogleCode>>
+  try {
+    profile = await exchangeGoogleCode(code, kit.redirectUri, kit.client)
+  } catch (error) {
+    return failSignup("google_signup_failed", error)
+  }
+
+  // La disponibilidad puede haber cambiado durante el consentimiento.
+  const slug = pending.slug
+  const taken = await findTenantBySlug(slug).catch(() => null)
+  if (taken) return failSignup("signup_slug_taken")
+
+  try {
+    const created = await createTenant({
+      name: pending.businessName,
+      slug,
+      ownerEmail: profile.email,
+      ownerFullName: profile.name ?? undefined,
+      ownerGoogleSub: profile.sub,
+    })
+    const handoff = await createSignupHandoff(created.tenantId, created.ownerId)
+    const url = new URL(
+      "/onboarding/continuar",
+      `https://${tenantHostForSlug(created.slug)}`
+    )
+    url.searchParams.set("ticket", handoff.token)
+    const response = NextResponse.redirect(url.toString())
+    response.cookies.set(GOOGLE_STATE_COOKIE, "", {
+      ...googleStateCookieOptions(),
+      maxAge: 0,
+    })
+    response.cookies.set(GOOGLE_SIGNUP_COOKIE, "", {
+      ...googleSignupCookieOptions(),
+      maxAge: 0,
+    })
+    console.info(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        event: "onboarding.google_signup_created",
+        tenant: created.slug,
+      })
+    )
+    return response
+  } catch (error) {
+    if (error instanceof AppError) {
+      if (error.code === "email_taken") return failSignup("google_signup_email_taken")
+      if (error.code === "slug_tomado" || error.code === "slug_invalido") {
+        return failSignup("signup_slug_taken")
+      }
+      return failSignup("google_signup_failed", error)
+    }
+    throw error
+  }
+}
+
+/**
  * Callback de Google OAuth. Valida el estado anti-CSRF, canjea el código y
  * resuelve la cuenta — todo en el MISMO host donde vivirá la sesión, con el
  * cliente de ese host. Cualquier fallo vuelve al /login de este panel con un
@@ -82,6 +222,8 @@ export async function GET(request: NextRequest) {
   await connection()
   const relayed = await relayToTenant(request)
   if (relayed) return relayed
+  const signupHandled = await handleGoogleSignup(request)
+  if (signupHandled) return signupHandled
 
   const entry = await resolveGoogleEntry()
   if (entry.status === "not-found") return neutralNotFound()

@@ -6,6 +6,7 @@ import { requireUser } from "@/server/auth/guards"
 import { isOwnerRole } from "@/server/auth/types"
 import {
   businessTenantIdOfUser,
+  getTenantMpTokenStatus,
   saveTenantBanking,
   saveTenantMpToken,
   saveTenantWhatsappNumber,
@@ -47,41 +48,6 @@ function errorState(error: unknown): BusinessSetupState {
   throw error
 }
 
-/** Paso 1 del asistente: conecta la cuenta de Mercado Pago del negocio. */
-export async function saveBusinessMpTokenAction(
-  _prev: BusinessSetupState,
-  formData: FormData
-): Promise<BusinessSetupState> {
-  try {
-    const sessionUser = await requireUser("core")
-    const tenantId = await businessTenantOfSession(sessionUser.id, sessionUser.role)
-    if (typeof tenantId !== "string") {
-      return { error: tenantId.error, success: null }
-    }
-    const mpToken = String(formData.get("mpToken") ?? "").trim()
-    if (mpToken.length === 0) {
-      return { error: "Pega el access token de producción de tu cuenta de Mercado Pago.", success: null }
-    }
-    // Rechazo temprano de tokens de prueba (el flujo del panel es producción).
-    if (mpToken.startsWith("TEST-")) {
-      return {
-        error: "Es un token de PRUEBA (TEST-). Pega el access token de PRODUCCIÓN de tu cuenta de Mercado Pago.",
-        success: null,
-      }
-    }
-    const tokenStatus = await saveTenantMpToken(tenantId, mpToken)
-    revalidatePath("/onboarding")
-    revalidatePath("/profile")
-    return {
-      error: null,
-      success: "Cuenta de Mercado Pago conectada",
-      tokenStatus,
-    }
-  } catch (error) {
-    return errorState(error)
-  }
-}
-
 /** Paso 2 del asistente: la cuenta donde recibe los pagos (banco/CLABE). */
 export async function saveBusinessBankingAction(
   _prev: BusinessSetupState,
@@ -101,6 +67,58 @@ export async function saveBusinessBankingAction(
     revalidatePath("/onboarding")
     revalidatePath("/profile")
     return { error: null, success: "Cuenta para recibir pagos guardada" }
+  } catch (error) {
+    return errorState(error)
+  }
+}
+
+/**
+ * Paso «Vincula tu cuenta de Mercado Pago» (flujo del dueño: CLABE + access
+ * token JUNTOS): guarda el token y la cuenta de cobro en una sola pantalla.
+ * El token es opcional SI ya hay uno activo (solo cambia la CLABE); con
+ * token nuevo se valida contra Mercado Pago al instante.
+ */
+export async function saveBusinessMpLinkAction(
+  _prev: BusinessSetupState,
+  formData: FormData
+): Promise<BusinessSetupState> {
+  try {
+    const sessionUser = await requireUser("core")
+    const tenantId = await businessTenantOfSession(sessionUser.id, sessionUser.role)
+    if (typeof tenantId !== "string") {
+      return { error: tenantId.error, success: null }
+    }
+    const mpToken = String(formData.get("mpToken") ?? "").trim()
+    if (mpToken.startsWith("TEST-")) {
+      return {
+        error: "Es un token de PRUEBA (TEST-). Pega el access token de PRODUCCIÓN de tu cuenta de Mercado Pago.",
+        success: null,
+      }
+    }
+    await saveTenantBanking(tenantId, {
+      bankName: String(formData.get("bankName") ?? ""),
+      bankHolder: String(formData.get("bankHolder") ?? ""),
+      bankClabe: String(formData.get("bankClabe") ?? ""),
+    })
+    let tokenStatus: TenantMpTokenStatus | null = null
+    if (mpToken.length > 0) {
+      tokenStatus = await saveTenantMpToken(tenantId, mpToken)
+    } else {
+      const existing = await getTenantMpTokenStatus(tenantId)
+      if (!existing || existing.status !== "active") {
+        return {
+          error: "Pega el access token de producción de tu cuenta de Mercado Pago (o conecta uno antes).",
+          success: null,
+        }
+      }
+    }
+    revalidatePath("/onboarding")
+    revalidatePath("/profile")
+    return {
+      error: null,
+      success: "Cuenta de Mercado Pago vinculada",
+      tokenStatus,
+    }
   } catch (error) {
     return errorState(error)
   }
