@@ -99,14 +99,6 @@ export function WhatsAppPhoneDemo() {
             Listo, ya hice la transferencia
           </ChatBubble>
 
-          <ChatBubble side="left" variant="assistant" time="10:34">
-            Envíame la foto del comprobante de tu transferencia para confirmar el pago.
-          </ChatBubble>
-
-          <ChatBubble side="right" time="10:35">
-            Va, ya la envié 📎
-          </ChatBubble>
-
           <ChatBubble side="left" variant="verified" time="10:36">
             ✅ <span className="font-semibold text-[#065F46]">¡Pago verificado en cuenta!</span>{" "}
             Depósito de <span className="font-semibold tabular-nums">$500.00 MXN</span>{" "}

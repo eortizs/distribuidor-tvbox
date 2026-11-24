@@ -1,21 +1,18 @@
 import type { Metadata } from "next"
 import Link from "next/link"
-import type { ReactNode } from "react"
 import {
   ArrowLeftRightIcon,
   CheckIcon,
   CircleCheckIcon,
+  HeadphonesIcon,
   LandmarkIcon,
   LockIcon,
   MessageCircleIcon,
-  MessageSquareHeartIcon,
   QrCodeIcon,
   ShieldCheckIcon,
   TrendingUpIcon,
   WalletIcon,
 } from "lucide-react"
-
-import { cn } from "cn"
 
 import { BrandInline, Wordmark } from "@/components/short/brand"
 import { CustomerDataValue } from "@/components/short/CustomerDataValue"
@@ -57,8 +54,6 @@ export const metadata: Metadata = {
     ],
   },
 }
-
-const MP_REFERRAL_URL: string | null = "https://mpago.li/2KDRFs9"
 
 const COMPATIBLE_BANKS = ["BBVA", "Banorte", "Santander", "Nu", "Citibanamex"] as const
 
@@ -146,14 +141,13 @@ const TRUST_POINTS = [
     showBanks: true,
   },
   {
-    icon: MessageSquareHeartIcon,
-    title: "Convierte cada cobro en un cliente frecuente",
+    icon: HeadphonesIcon,
+    title: "Soporte y control 24/7",
     description: (
       <>
-        A diferencia del efectivo o las terminales tradicionales —donde el cliente
-        paga y se va sin dejar rastro—, con <BrandInline /> es tu cliente quien
-        inicia el chat por WhatsApp. Obtienes su contacto real de forma natural y
-        consensuada para enviarle su recibo, dar seguimiento o invitarlo a volver.
+        Cada venta confirmada y cada depósito quedan registrados en tu panel, disponibles
+        a cualquier hora. Y si necesitas ayuda, nuestro soporte responde por WhatsApp
+        todos los días.
       </>
     ),
     showBanks: false,
@@ -185,11 +179,9 @@ const FAQ_ITEMS: FaqAccordionItem[] = [
     answer: (
       <>
         Solo registrarte gratis en <BrandInline /> y conectar tu cuenta de Mercado
-        Pago (persona física o empresa). Si todavía no tienes una,{" "}
-        <ReferralInlineText>
-          puedes abrirla gratis en 3 minutos desde este enlace
-        </ReferralInlineText>{" "}
-        y empezar a recibir rendimientos diarios por el dinero de tus ventas.
+        Pago (persona física o empresa). Si todavía no tienes una, te guiamos paso
+        a paso dentro de la app para abrirla gratis en 3 minutos y empezar a recibir
+        rendimientos diarios por el dinero de tus ventas.
       </>
     ),
   },
@@ -213,23 +205,6 @@ const FAQ_ITEMS: FaqAccordionItem[] = [
       "No. Pueden transferirte desde BBVA, Banorte, Santander, Nu, Citibanamex o cualquier banco en México por transferencia.",
   },
 ]
-
-function ReferralInlineText({ children }: { children: ReactNode }) {
-  const className =
-    "font-semibold text-[#059669] underline underline-offset-3 hover:text-[#047857]"
-  return MP_REFERRAL_URL ? (
-    <a
-      href={MP_REFERRAL_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      className={className}
-    >
-      {children}
-    </a>
-  ) : (
-    <span className={cn(className, "cursor-not-allowed opacity-70")}>{children}</span>
-  )
-}
 
 export default function ShortLandingPage() {
   return (
@@ -520,7 +495,7 @@ export default function ShortLandingPage() {
                     </span>
                     <p className="text-sm leading-relaxed text-slate-600">
                       <strong className="mb-1 block font-semibold text-[#0F172A]">
-                        {benefit.title}
+                        {benefit.title}:{" "}
                       </strong>
                       {benefit.description}
                     </p>
