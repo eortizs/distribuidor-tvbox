@@ -37,9 +37,13 @@ async function main() {
     const target = res.headers.get("location") ?? ""
     if (res.status === 302 && target) {
       const decoded = decodeURIComponent(target)
+      const code = activeCode.trim().toUpperCase()
       console.log(
         `texto prellenado OK: ${decoded.includes("Solicito un link de pago por")}`
       )
+      // El mensaje lleva el CÓDIGO del link: es lo que identifica la orden
+      // cuando hay varias pendientes del mismo importe.
+      console.log(`código del link en el texto OK: ${decoded.includes(`(código ${code})`)}`)
     }
   }
 

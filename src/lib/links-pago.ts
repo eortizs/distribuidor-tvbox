@@ -195,3 +195,156 @@ export function paymentOrderStatusLabel(status: PaymentOrder["status"]): string 
       return "Cancelada"
   }
 }
+
+/* -------------------------------------------------------------------------- */
+/*    Canal del pagador: solicitud del link y atribución del comprobante      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Códigos de link: 4 caracteres del alfabeto sin ambigüedad (32 símbolos, sin
+ * 0/O/1/I — el mismo de `transfer_concepts`). Fuente única de la FORMA: la
+ * usan el proxy y el shortener para validar el segmento de
+ * `spei.link/<CÓDIGO>` y el canal de WhatsApp para hallar el código dentro de
+ * un mensaje.
+ */
+export function isPaymentLinkCode(code: string): boolean {
+  return /^[A-HJ-NP-Z2-9]{4}$/.test(code)
+}
+
+/**
+ * Tope de tokens con forma de código que se buscan por mensaje: un mensaje
+ * enorme no debe poder sondear el espacio de códigos (los tokens reales de un
+ * link o caption van en las primeras palabras).
+ */
+export const MAX_PAYMENT_ORDER_CODE_TOKENS = 5
+
+const PAYMENT_ORDER_REQUEST_RE =
+  /solicito\s+(?:un[ao]?\s+)?(?:orden|liga|link)\s+de\s+pago\s+por\s+\$?\s*(\d[\d.,]*)/i
+
+/**
+ * Primeros tokens del mensaje con FORMA de código de link, sin duplicados.
+ * El código llega en la solicitud prellenada, pegado o reenviado a mano, y
+ * viaja como una palabra más: aquí se aísla. Un token solo cuenta si además
+ * matchea una orden real (chequeo en BD), así que un «chat» o «test» suelto
+ * nunca secuestra el turno.
+ */
+export function findPaymentOrderCodeTokens(text: string): string[] {
+  // El importe de una solicitud nunca es un código: un monto con forma de
+  // código («$2345.00») no debe poder señalar otra orden.
+  const sinImporte = text.replace(
+    PAYMENT_ORDER_REQUEST_RE,
+    (whole, amount) => whole.replace(amount, " ")
+  )
+  const tokens = sinImporte
+    .toUpperCase()
+    .split(/[^A-Z0-9]+/)
+    .filter((token) => token.length > 0 && isPaymentLinkCode(token))
+  return [...new Set(tokens)].slice(0, MAX_PAYMENT_ORDER_CODE_TOKENS)
+}
+
+/**
+ * Texto prellenado EXACTO: el pagador solicita el link por su monto y su
+ * CÓDIGO. El código viaja en el mensaje para que cada link se solicite y se
+ * pague por separado: la orden se identifica por su código y no por el
+ * importe, así que otros links pendientes del mismo monto no estorban. El
+ * CONCEPTO DE PAGO sigue oculto hasta esta solicitud (no va en el texto).
+ */
+export function paymentOrderRequestText(
+  amountMxn: number,
+  code: string
+): string {
+  return `Solicito un link de pago por ${paymentOrderMoney(
+    amountMxn
+  )} (código ${code})`
+}
+
+/**
+ * Monto de una SOLICITUD de link de pago («Solicito un link de pago por
+ * $500» — el texto prellenado del link corto, a veces editado a mano).
+ * Acepta también las formas antiguas «liga de pago» y «orden de pago» (links
+ * wa.me previos al dominio corto siguen circulando). Acepta $500 / 500 /
+ * 1,500.50 / 500,50 y «MXN» pegado al final. Null = el texto no tiene forma de
+ * solicitud o el monto no se entiende.
+ */
+export function parsePaymentOrderRequestAmount(text: string): number | null {
+  const match = text.trim().match(PAYMENT_ORDER_REQUEST_RE)
+  if (!match) return null
+  const raw = match[1]
+  // «1,500.50» (miles con coma, decimal con punto) vs «500,50» (coma decimal).
+  const normalizado = /^\d{1,3}(,\d{3})+(\.\d+)?$/.test(raw)
+    ? raw.replace(/,/g, "")
+    : raw.replace(/,/g, ".")
+  const amount = Number.parseFloat(normalizado)
+  if (!Number.isFinite(amount) || amount <= 0) return null
+  return Math.round(amount * 100) / 100
+}
+
+/** Importe legible de un texto del comprobante (misma lectura del escaneo). */
+function importeLeido(value: string | null): number | null {
+  if (!value) return null
+  const parsed = Number(value.replace(/[,\s$]/g, ""))
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+}
+
+export interface DesambiguacionComprobante {
+  order: PaymentOrder | null
+  /** Ninguna señal dejó clara la orden: el llamador responde la guía del código. */
+  ambiguo: boolean
+  /** Señal que eligió la orden; null si no hubo elección. */
+  via: "unica" | "codigo" | "importe" | "telefono" | null
+}
+
+/**
+ * Elige la orden entre varias activas cuyo CONCEPTO DE PAGO coincide con el
+ * impreso (la palabra no es única entre órdenes, a diferencia del código):
+ * el código del caption, el importe leído del comprobante y el teléfono del
+ * pagador ya ligado a UNA de ellas desambiguan — en ese orden, sin pedirle
+ * nada al pagador. Orden null sin ambigüedad = sin coincidencias; con
+ * ambigüedad el llamador pide el código (jamás se arriesga la orden
+ * equivocada).
+ */
+export function desambiguarComprobantePorConcepto(input: {
+  /** Órdenes activas cuyo ancla coincide con el concepto impreso. */
+  coincidentes: PaymentOrder[]
+  importeTexto: string | null
+  /** Códigos con forma de código escritos por el pagador (caption). */
+  tokens: string[]
+  /** Teléfono que envía el comprobante. */
+  phone: string
+}): DesambiguacionComprobante {
+  const coincidentes = input.coincidentes
+  if (coincidentes.length === 0) return { order: null, ambiguo: false, via: null }
+  if (coincidentes.length === 1) {
+    return { order: coincidentes[0], ambiguo: false, via: "unica" }
+  }
+
+  const importe = importeLeido(input.importeTexto)
+  const porImporte =
+    importe === null
+      ? coincidentes
+      : coincidentes.filter((order) =>
+          amountsEqualCents(order.amountMxn, importe)
+        )
+
+  // El código del caption es la palabra EXPLÍCITA del pagador: manda sobre
+  // el importe (si luego no calza, la revisión lo rechaza con el motivo).
+  const porCodigo = coincidentes.find((order) =>
+    input.tokens.includes(order.code)
+  )
+  if (porCodigo) return { order: porCodigo, ambiguo: false, via: "codigo" }
+
+  if (porImporte.length === 1) {
+    return { order: porImporte[0], ambiguo: false, via: "importe" }
+  }
+
+  // Teléfono ligado: el sistema ya entregó el concepto de ESA orden a este
+  // mismo chat (solicitud con el código de su link).
+  const delTelefono = porImporte.filter(
+    (order) => order.payerPhone === input.phone
+  )
+  if (delTelefono.length === 1) {
+    return { order: delTelefono[0], ambiguo: false, via: "telefono" }
+  }
+
+  return { order: null, ambiguo: true, via: null }
+}

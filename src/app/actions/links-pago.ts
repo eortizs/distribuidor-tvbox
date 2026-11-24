@@ -107,7 +107,7 @@ export async function createPaymentOrderAction(input: {
       clientId: input.clientId || null,
     })
 
-    const waUrl = buildPaymentOrderWaLink(created.amountMxn)
+    const waUrl = buildPaymentOrderWaLink(created)
     if (!waUrl) {
       // El canal WhatsApp es la vía de entrega y cobro del módulo: sin
       // número del agente la orden no sirve — se revierte y se explica.
@@ -170,7 +170,7 @@ export async function getPaymentOrderLinkAction(input: {
     return { error: "El link ya está resuelto.", order: null }
   }
 
-  const waUrl = buildPaymentOrderWaLink(order.amountMxn)
+  const waUrl = buildPaymentOrderWaLink(order)
   if (!waUrl) {
     return {
       error: "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar el link de pago.",

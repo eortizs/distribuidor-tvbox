@@ -1,7 +1,7 @@
 import { NextResponse, connection, type NextRequest } from "next/server"
 import { runWithTenant } from "@/server/tenant/context"
 
-import { paymentOrderMoney } from "@/lib/links-pago"
+import { paymentOrderMoney, isPaymentLinkCode } from "@/lib/links-pago"
 import { buildPaymentOrderOgHtml, isPreviewCrawler } from "@/lib/links-pago-og"
 import {
   findPendingPaymentOrderByAnyCode,
@@ -12,7 +12,6 @@ import { shortLinkBaseUrl } from "@/server/site-url"
 import {
   buildPaymentOrderShortLink,
   buildPaymentOrderWaLink,
-  isPaymentLinkCode,
 } from "@/server/links-pago/wa-link"
 
 /*
@@ -22,8 +21,10 @@ import {
  * que esta ruta no requiere sesión y solo se alcanza por ese host.
  *
  *   - código ACTIVO (pending | verifying) → 302 a wa.me con la SOLICITUD
- *     prellenada (el pagador aterriza en el chat del agente, igual que con
- *     el link wa.me de siempre). Los lookups reusan las puertas del canal
+ *     prellenada (importe + CÓDIGO del link: el agente identifica esa orden
+ *     aunque haya otras pendientes del mismo importe; el pagador aterriza
+ *     en el chat del agente, igual que con el link wa.me de siempre). Los
+ *     lookups reusan las puertas del canal
  *     WhatsApp (activas primero, resueltas después): los códigos son
  *     reciclables y un código que hoy tiene orden viva NUNCA debe responder
  *     con el estado de una orden resuelta vieja que lo tuvo antes.
@@ -236,7 +237,7 @@ export async function GET(
     () => null
   )
   if (order) {
-    const target = buildPaymentOrderWaLink(order.amountMxn)
+    const target = buildPaymentOrderWaLink(order)
     if (!target) {
       return htmlResponse(
         503,

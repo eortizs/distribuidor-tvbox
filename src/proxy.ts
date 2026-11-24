@@ -3,8 +3,8 @@ import { NextResponse, type NextRequest } from "next/server"
 
 import { findSessionUser } from "@/server/auth/session-lookup"
 import { systemPool } from "@/server/db"
-import { isPaymentLinkCode } from "@/server/links-pago/wa-link"
 import { shortLinkHost } from "@/server/site-url"
+import { isPaymentLinkCode } from "@/lib/links-pago"
 import {
   modulesForKind,
   routeModuleForPath,

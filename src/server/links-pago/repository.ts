@@ -412,9 +412,10 @@ export async function findResolvedPaymentOrderByAnyCode(
 /**
  * TODAS las órdenes ACTIVAS (pending + verifying) de UN monto exacto (del
  * más viejo al más nuevo, con tope de seguridad). Es la puerta del canal
- * WhatsApp para la SOLICITUD prellenada del link («Solicito una orden de
- * pago por $X»), que viaja sin código: la orden se descubre por el importe
- * que el cobrador definió.
+ * WhatsApp para las SOLICITUDES prellenadas SIN código (las formas antiguas
+ * «Solicito una orden de pago por $X», anteriores a que el mensaje llevara
+ * el código del link): la orden se descubre por el importe que definió el
+ * cobrador y, con varias pendientes, el canal pide el código.
  */
 export async function listPendingPaymentOrdersByAmount(
   amountMxn: number,
