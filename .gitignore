@@ -59,3 +59,7 @@ client_secret_*.json
 
 # credenciales OAuth entregadas por el dueño (nunca al repo)
 assets/OAuth_*.txt
+
+# Credenciales OAuth del cliente SPEILink (nunca al repo)
+/assets/OAuth_SPEILink.txt
+/assets/client_secret_*.json
