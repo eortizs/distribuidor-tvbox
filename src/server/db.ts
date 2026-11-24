@@ -12,9 +12,8 @@ import type { TenantContext } from "@/server/tenant/context"
 
 /**
  * El contexto de tenant se importa DINÁMICAMENTE: eve evalúa los módulos
- * authored (agent/hooks) con el loader de Node fuera del bundle de Next y
- * `node:async_hooks` no existe en ese sandbox; context.ts (AsyncLocalStorage)
- * debe quedar fuera de la cadena de evaluación estática.
+ * authored (agent/) con su loader fuera del bundle de Next y context.ts
+ * debe quedar fuera de la cadena de evaluación estática de esos módulos.
  */
 async function tenantDbContext(): Promise<TenantContext | null> {
   const { effectiveDbContext } = await import("@/server/tenant/context")

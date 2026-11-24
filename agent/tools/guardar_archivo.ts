@@ -65,6 +65,22 @@ export default defineTool({
       );
     }
 
+    // Contexto de tenancy para este realm (eve corre fuera del request de
+    // Next: no hay ALS ni headers() que lo resuelvan). La sesión ya validó
+    // host ↔ tenant en el canal. Import dinámico: context.ts debe quedar
+    // fuera de la cadena estática de los módulos authored (patrón de db.ts).
+    const { runWithTenant, tenantIdOfUser } = await import(
+      "../../src/server/tenant/context"
+    );
+    const tenantId = await tenantIdOfUser(principalId);
+    if (!tenantId) {
+      throw new AppError(
+        403,
+        "missing_tenant",
+        "La cuenta no pertenece a un panel de negocio"
+      );
+    }
+
     const sandbox = await ctx.getSandbox();
     const bytes = await sandbox.readBinaryFile({ path: ruta });
     if (!bytes || bytes.byteLength === 0) {
@@ -85,32 +101,36 @@ export default defineTool({
     const fileName = sanitizeFileName(
       nombre ?? ruta.split("/").pop() ?? "archivo"
     );
-    const file = await saveUserFile({
-      userId: principalId,
-      kind: "generated",
-      fileName,
-      mimeType,
-      bytes,
-      maxBytes: MAX_SAVE_BYTES,
-    });
+    const file = await runWithTenant(tenantId, () =>
+      saveUserFile({
+        userId: principalId,
+        kind: "generated",
+        fileName,
+        mimeType,
+        bytes,
+        maxBytes: MAX_SAVE_BYTES,
+      })
+    );
 
     // Index the delivery for the gallery. Best effort: a metering/indexing
     // failure must never break a delivery the user already paid for.
     try {
-      await pool.query(
-        `INSERT INTO animation_deliverables
+      await runWithTenant(tenantId, () =>
+        pool.query(
+          `INSERT INTO animation_deliverables
            (id, user_id, file_id, session_id, turn_id, file_name, mime_type, size_bytes)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [
-          crypto.randomUUID(),
-          principalId,
-          file.id,
-          ctx.session.id,
-          ctx.session.turn.id,
-          file.fileName,
-          file.mimeType,
-          file.sizeBytes,
-        ]
+          [
+            crypto.randomUUID(),
+            principalId,
+            file.id,
+            ctx.session.id,
+            ctx.session.turn.id,
+            file.fileName,
+            file.mimeType,
+            file.sizeBytes,
+          ]
+        )
       );
     } catch (error) {
       console.error(

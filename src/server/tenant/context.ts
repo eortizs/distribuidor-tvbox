@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks"
+
 import { readRequestCookies, readRequestHeaders } from "./request-store"
 
 async function systemDb() {
@@ -45,6 +47,10 @@ export interface TenantContext {
   source: "explicit" | "session" | "host" | "fallback"
 }
 
+// Import explícito de node:async_hooks y NO el global AsyncLocalStorage: ese
+// global lo crea Next de forma perezosa en su propio runtime, y en el runtime
+// de eve (agent/channels, agent/tools) este módulo llegaba a evaluarse antes
+// de que existiera y reventaba con ReferenceError.
 const als = new AsyncLocalStorage<TenantContext>()
 
 /** Devuelve el store actual SIN fallback (lecturas crudas). */

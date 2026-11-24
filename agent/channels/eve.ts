@@ -1,4 +1,3 @@
-import { Pool } from "pg";
 import { localDev, type AuthFn } from "eve/channels/auth";
 import { defaultEveAuth, eveChannel } from "eve/channels/eve";
 
@@ -6,29 +5,21 @@ import {
   findSessionUser,
   readSessionCookie,
 } from "../../src/server/auth/session-lookup";
+import { pool, systemPool } from "../../src/server/db";
+import { validateSessionHost } from "../../src/server/tenant/identity";
 
 const MESSAGE_WINDOW_MS = 60_000;
 const MESSAGE_LIMIT = 20;
 
-const globalForEveAuth = globalThis as typeof globalThis & {
-  __eveAuthPool?: Pool;
-};
-
 const messageBuckets = new Map<string, { count: number; resetAt: number }>();
 
-function getPool(): Pool {
-  if (!globalForEveAuth.__eveAuthPool) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error("DATABASE_URL is not set");
-    }
-    const pool = new Pool({ connectionString, max: 2 });
-    pool.on("error", (error) => {
-      console.error("[eve] session pool error", error);
-    });
-    globalForEveAuth.__eveAuthPool = pool;
-  }
-  return globalForEveAuth.__eveAuthPool;
+/** Host de la petición (x-forwarded-host del borde o host), sin puerto. */
+function requestHostOf(request: Request): string {
+  const raw =
+    request.headers.get("x-forwarded-host")?.split(",")[0] ??
+    request.headers.get("host") ??
+    "";
+  return raw.split(":")[0]?.trim().toLowerCase() ?? "";
 }
 
 function sessionIdFromRequest(request: Request): string | null {
@@ -46,16 +37,31 @@ function sessionIdFromRequest(request: Request): string | null {
 
 async function isSessionOwner(
   sessionId: string,
+  tenantId: string,
   userId: string
 ): Promise<boolean> {
-  const result = await getPool().query(
-    `INSERT INTO eve_sessions (session_id, user_id)
-     VALUES ($1, $2)
-     ON CONFLICT (session_id) DO UPDATE SET user_id = eve_sessions.user_id
-     RETURNING user_id`,
-    [sessionId, userId]
-  );
-  return result.rows[0]?.user_id === userId;
+  // Import dinámico de runWithTenant (misma disciplina que src/server/db.ts:
+  // context.ts fuera de la cadena estática de los módulos authored). El
+  // upsert corre bajo el tenant del usuario: el trigger app_set_tenant_id
+  // rellena tenant_id y RLS exige ese mismo contexto.
+  const { runWithTenant } = await import("../../src/server/tenant/context");
+  try {
+    const result = await runWithTenant(tenantId, () =>
+      pool.query(
+        `INSERT INTO eve_sessions (session_id, user_id)
+         VALUES ($1, $2)
+         ON CONFLICT (session_id) DO UPDATE SET user_id = eve_sessions.user_id
+         RETURNING user_id`,
+        [sessionId, userId]
+      )
+    );
+    return result.rows[0]?.user_id === userId;
+  } catch (error) {
+    // La fila de otro tenant es invisible bajo RLS: el upsert falla con
+    // 42501 en vez de devolver "no es dueño".
+    if ((error as { code?: string }).code === "42501") return false;
+    throw error;
+  }
 }
 
 function enforceMessageRateLimit(principalId: string): void {
@@ -89,12 +95,28 @@ function appSession(): AuthFn<Request> {
     const token = readSessionCookie(request.headers.get("cookie"));
     if (!token) return null;
 
-    const user = await findSessionUser(getPool(), token);
+    // Lookup de sesión por token sobre systemPool (lista blanca del
+    // tenancy): el rol de la app tiene RLS efectivo y sin contexto vería
+    // 0 filas — el contexto viene DE la sesión.
+    const user = await findSessionUser(systemPool, token);
     if (!user) return null;
 
-    const sessionId = sessionIdFromRequest(request);
-    if (sessionId && !(await isSessionOwner(sessionId, user.id))) {
+    // Tenant suspendido: sin acceso al agente (igual que getSessionUser).
+    if (user.tenantStatus === "suspended") return null;
+
+    // Host ↔ tenant: la cookie de A en el host de B NO vale.
+    if (!validateSessionHost(user.tenantId, requestHostOf(request))) {
       return null;
+    }
+
+    // Cuentas de plataforma no usan el agente del panel (creación incluida).
+    if (!user.tenantId) return null;
+
+    const sessionId = sessionIdFromRequest(request);
+    if (sessionId) {
+      if (!(await isSessionOwner(sessionId, user.tenantId, user.id))) {
+        return null;
+      }
     }
 
     return {
