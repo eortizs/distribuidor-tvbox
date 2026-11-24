@@ -281,6 +281,18 @@ function pruneTenantCaches(): void {
   }
 }
 
+/**
+ * Invalida la entrada negativa/positiva de la cache (§4.2): el alta de un
+ * tenant y sus cambios de estado/WhatsApp deben verse AL INSTANTE — la
+ * cache de 30 s envenenada con el «no existe» previo al INSERT rompía el
+ * canje del ticket y el primer login del dueño (TENANT_STRICT ⇒ contexto
+ * null ⇒ 0 filas). Los escritores de `tenants` la llaman tras el COMMIT.
+ */
+export function invalidateTenantCache(input: { slug?: string; id?: string }): void {
+  if (input.slug !== undefined) cacheTenantBySlug.delete(input.slug.trim().toLowerCase())
+  if (input.id !== undefined) cacheTenantById.delete(input.id)
+}
+
 const TENANT_SELECT = `
   SELECT id, slug, name, kind, status, modules, use_platform_mp_account,
          whatsapp_number, whatsapp_linked_at, whatsapp_last_seen_at,

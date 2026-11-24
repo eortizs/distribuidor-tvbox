@@ -104,6 +104,10 @@ export async function saveTenantBanking(
       [tenantId, bankName, bankHolder, bankClabe]
     )
   )
+  // El estado derivado del onboarding lee la fila cacheada (30 s): los
+  // pasos guardados deben verse al instante en el asistente y la tarjeta.
+  const { invalidateTenantCache } = await import("@/server/tenant/context")
+  invalidateTenantCache({ id: tenantId })
   const row = result.rows[0]
   if (!row) {
     throw new AppError(404, "tenant_no_encontrado", "El tenant no existe.")
@@ -333,6 +337,8 @@ export async function saveTenantWhatsappNumber(
       "Ese número ya está vinculado a otro negocio."
     )
   }
+  const { invalidateTenantCache } = await import("@/server/tenant/context")
+  invalidateTenantCache({ id: tenantId })
   return canonical
 }
 

@@ -247,16 +247,26 @@ BEGIN
 END $$;
 
 -- tenants: lectura de la fila propia (branding/resolución) + plataforma ve
--- todo; escritura SOLO plataforma.
+-- todo; escritura SOLO plataforma. La lectura es FOR SELECT a propósito:
+-- una política FOR ALL se combina con OR con `tenants_write` y permitiría a
+-- un tenant ACTUALIZAR su propia fila (slug, status, modules,
+-- use_platform_mp_account). INSERT va en política aparte (el alta de
+-- platform.ts corre con app.platform=on bajo el rol de la app).
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenants_read ON tenants;
 CREATE POLICY tenants_read ON tenants
+  FOR SELECT
   USING (
     id::text = NULLIF(current_setting('app.tenant_id', true), '')
     OR COALESCE(NULLIF(current_setting('app.platform', true), ''), 'off') = 'on'
   );
+DROP POLICY IF EXISTS tenants_insert ON tenants;
+CREATE POLICY tenants_insert ON tenants
+  FOR INSERT
+  WITH CHECK (COALESCE(NULLIF(current_setting('app.platform', true), ''), 'off') = 'on');
 DROP POLICY IF EXISTS tenants_write ON tenants;
 CREATE POLICY tenants_write ON tenants
+  FOR UPDATE
   USING (COALESCE(NULLIF(current_setting('app.platform', true), ''), 'off') = 'on')
   WITH CHECK (COALESCE(NULLIF(current_setting('app.platform', true), ''), 'off') = 'on');
 

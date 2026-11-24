@@ -16,12 +16,26 @@ import { redeemSignupHandoff } from "@/server/onboarding/handoff"
  *   expires_at > now()); sin fila → /login?error=handoff_invalid.
  * - Cache-Control no-store + noindex: el token viaja en la URL (historial).
  */
+
+/** Origen público de la petición (tras Cloudflare/Caddy: host reenviado). */
+async function publicOrigin(request: NextRequest): Promise<string> {
+  const forwardedHost =
+    request.headers.get("x-forwarded-host")?.split(",")[0]?.trim() ??
+    request.headers.get("host") ??
+    request.nextUrl.host
+  const proto =
+    request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() ??
+    (forwardedHost.startsWith("localhost") ? "http" : "https")
+  return `${proto}://${forwardedHost.split(":")[0].toLowerCase()}`
+}
+
 export async function GET(request: NextRequest) {
   await connection()
+  const origin = await publicOrigin(request)
 
   const fail = () => {
     const response = NextResponse.redirect(
-      new URL("/login?error=handoff_invalid", request.nextUrl.origin),
+      new URL("/login?error=handoff_invalid", origin),
       303
     )
     response.headers.set("cache-control", "no-store")
@@ -54,7 +68,7 @@ export async function GET(request: NextRequest) {
   })
 
   const response = NextResponse.redirect(
-    new URL("/onboarding", request.nextUrl.origin),
+    new URL("/onboarding", origin),
     303
   )
   response.headers.set("cache-control", "no-store")

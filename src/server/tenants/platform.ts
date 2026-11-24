@@ -4,6 +4,7 @@ import { withTransaction } from "@/server/db"
 import {
   findTenantBySlug,
   findTenantById,
+  invalidateTenantCache,
   runAsPlatform,
   runWithPlatformTenant,
 } from "@/server/tenant/context"
@@ -168,6 +169,9 @@ export async function createTenant(
       })
     )
   })
+  // El alta debe verse AL INSTANTE (canje del ticket y primer login del
+  // dueño): sin invalidar, la cache de 30 s sirvió el «no existe» previo.
+  invalidateTenantCache({ slug, id: tenantId })
 
   return {
     tenantId,
@@ -196,6 +200,7 @@ export async function setTenantStatus(
       throw new AppError(404, "tenant_no_encontrado", "El tenant no existe o no es de negocio.")
     }
   })
+  invalidateTenantCache({ id: tenantId })
   try {
     const gateway = await import("@/server/whatsapp/gateway")
     if (status === "suspended") {
