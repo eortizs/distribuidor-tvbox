@@ -7,11 +7,11 @@ import {
   unauthorizedResponse,
 } from "@/server/auth/api"
 import { errorResponse } from "@/server/http"
-import { getWhatsAppStatus } from "@/server/whatsapp/socket"
+import { getWhatsAppStatus } from "@/server/whatsapp/gateway"
 
 /**
- * Estado del gateway WhatsApp (solo admin): conexión del socket, QR vigente
- * y último corte. Fuente en vivo del módulo `/modulos/whatsapp`.
+ * Estado del gateway WhatsApp del tenant (solo admin): conexión del socket,
+ * QR vigente y último corte. Fuente en vivo del módulo `/modulos/whatsapp`.
  */
 export async function GET() {
   try {
@@ -24,7 +24,7 @@ export async function GET() {
     }
 
     return Response.json(
-      { ok: true, data: getWhatsAppStatus() },
+      { ok: true, data: await getWhatsAppStatus(admin.tenantId ?? "") },
       { headers: { "Cache-Control": "private, no-store" } }
     )
   } catch (error) {

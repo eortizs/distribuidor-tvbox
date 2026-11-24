@@ -36,7 +36,7 @@ import type {
   WhatsAppLogRow,
   WhatsAppOutboxRow,
 } from "@/server/whatsapp/service"
-import type { WhatsAppStatusInfo } from "@/server/whatsapp/socket"
+import type { WhatsAppStatusInfo } from "@/server/whatsapp/gateway"
 
 /*
  * Módulo admin del canal WhatsApp: estado del gateway, vinculación del

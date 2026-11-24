@@ -60,7 +60,7 @@ export async function register(): Promise<void> {
   // El gateway es opcional: un fallo (auth corrupta, red caída) jamás debe
   // impedir que el servidor arranque — se registra y el panel sigue arriba.
   try {
-    const { startWhatsAppGateway } = await import("@/server/whatsapp/socket")
+    const { startWhatsAppGateway } = await import("@/server/whatsapp/gateway")
     await startWhatsAppGateway()
   } catch (error) {
     console.error(

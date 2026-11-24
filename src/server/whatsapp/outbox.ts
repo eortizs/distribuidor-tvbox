@@ -1,14 +1,14 @@
 import { pool, withTransaction } from "@/server/db"
 import { publicSiteUrl } from "@/server/site-url"
+import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
+import { runAsPlatform, runWithTenant } from "@/server/tenant/context"
 
 import {
   WHATSAPP_KIND_CLIENT_RENEWAL,
   WHATSAPP_KIND_PAYMENT_ORDER,
   logWhatsAppMessageDetached,
 } from "./service"
-import { getWhatsAppStatus, sendWhatsAppText } from "./socket"
-import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
-import { runWithTenant } from "@/server/tenant/context"
+import { getWhatsAppStatus, sendWhatsAppText } from "./gateway"
 
 /*
  * Dispatcher de la cola de salida de WhatsApp: cada notificación de campana
@@ -111,7 +111,9 @@ const SEND_TIMEOUT_MS = 60_000
 
 async function sendOne(row: OutboxClaimRow): Promise<void> {
   try {
-    const send = sendWhatsAppText(row.phone, mirrorMessage(row))
+    // El envío sale por el socket del tenant propietario de la fila (2A:
+    // solo el legado tiene sesión; 2B despacha por tenant).
+    const send = sendWhatsAppText(LEGACY_TENANT_ID, row.phone, mirrorMessage(row))
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(
         () => reject(new Error("whatsapp_send_timeout")),
@@ -156,36 +158,41 @@ async function sendOne(row: OutboxClaimRow): Promise<void> {
 }
 
 async function tick(): Promise<void> {
-  // Choques y poda no dependen del socket: corren aunque esté desconectado
-  // (una revocación larga no debe dejar la bitácora sin poda ni el estado
-  // `sending` sin recuperación).
-  await pool.query(
-    `UPDATE wa_outbox
-        SET status = 'pending', next_attempt_at = now()
-      WHERE status = 'sending'
-        AND next_attempt_at < now() - ($1::int * interval '1 minute')`,
-    [STUCK_SENDING_MINUTES]
-  )
-
-  if (Date.now() - lastPruneAt > PRUNE_EVERY_MS) {
-    lastPruneAt = Date.now()
+  // Mantenimiento (choques y poda) SIN contexto de tenant (§4.5 2A: con
+  // TENANT_STRICT=on RLS le devolvía 0 filas al dispatcher sin wrapper):
+  // es trabajo cross-tenant de la cola, corre como plataforma.
+  await runAsPlatform(async () => {
     await pool.query(
-      `DELETE FROM wa_message_log
-        WHERE created_at < now() - ($1::int * interval '1 day')`,
-      [LOG_RETENTION_DAYS]
+      `UPDATE wa_outbox
+          SET status = 'pending', next_attempt_at = now()
+        WHERE status = 'sending'
+          AND next_attempt_at < now() - ($1::int * interval '1 minute')`,
+      [STUCK_SENDING_MINUTES]
     )
-    await pool.query(
-      `DELETE FROM wa_outbox
-        WHERE status = 'sent'
-          AND sent_at < now() - ($1::int * interval '1 day')`,
-      [OUTBOX_SENT_RETENTION_DAYS]
-    )
-  }
 
-  if (getWhatsAppStatus().status !== "open") return
+    if (Date.now() - lastPruneAt > PRUNE_EVERY_MS) {
+      lastPruneAt = Date.now()
+      await pool.query(
+        `DELETE FROM wa_message_log
+          WHERE created_at < now() - ($1::int * interval '1 day')`,
+        [LOG_RETENTION_DAYS]
+      )
+      await pool.query(
+        `DELETE FROM wa_outbox
+          WHERE status = 'sent'
+            AND sent_at < now() - ($1::int * interval '1 day')`,
+        [OUTBOX_SENT_RETENTION_DAYS]
+      )
+    }
+  })
+
+  // El despacho SOLO reclama con el socket del legado abierto: los mensajes
+  // quedan `pending` y salen al reconectar (deploy, corte de red). 2B
+  // añade el bucle por tenant con sesión abierta.
+  if ((await getWhatsAppStatus(LEGACY_TENANT_ID)).status !== "open") return
 
   // Tenancy (§4.2, caso explícito): el dispatcher legado corre bajo el
-  // tenant tvbox (una sola sesión en Fase 1; Fase 4 agrupa por tenant).
+  // tenant tvbox.
   await runWithTenant(LEGACY_TENANT_ID, async () => {
     const batch = await claimBatch()
     for (const row of batch) {

@@ -7,7 +7,7 @@ import {
   unauthorizedResponse,
 } from "@/server/auth/api"
 import { errorResponse } from "@/server/http"
-import { resetWhatsAppSession } from "@/server/whatsapp/socket"
+import { resetWhatsAppSession } from "@/server/whatsapp/gateway"
 import { AppError } from "@/server/umejson/types"
 
 /**
@@ -26,7 +26,7 @@ export async function POST() {
     }
 
     try {
-      await resetWhatsAppSession()
+      await resetWhatsAppSession(admin.tenantId ?? "")
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error)
       if (raw === "whatsapp_not_revoked") {

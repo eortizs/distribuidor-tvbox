@@ -7,7 +7,7 @@ import {
   unauthorizedResponse,
 } from "@/server/auth/api"
 import { errorResponse } from "@/server/http"
-import { getWhatsAppQrDataUrl } from "@/server/whatsapp/socket"
+import { getWhatsAppQrDataUrl } from "@/server/whatsapp/gateway"
 
 /**
  * QR vigente para vincular el número del agente (solo admin), como data URL
@@ -24,7 +24,7 @@ export async function GET() {
       return forbiddenResponse()
     }
 
-    const dataUrl = await getWhatsAppQrDataUrl()
+    const dataUrl = await getWhatsAppQrDataUrl(admin.tenantId ?? "")
     if (!dataUrl) {
       return Response.json(
         {

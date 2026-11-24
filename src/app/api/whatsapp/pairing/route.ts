@@ -7,7 +7,7 @@ import {
   unauthorizedResponse,
 } from "@/server/auth/api"
 import { errorResponse } from "@/server/http"
-import { requestWhatsAppPairing } from "@/server/whatsapp/socket"
+import { requestWhatsAppPairing } from "@/server/whatsapp/gateway"
 import { AppError } from "@/server/umejson/types"
 
 /** Mapea los fallos conocidos del emparejamiento a mensajes operables. */
@@ -57,7 +57,7 @@ export async function POST() {
 
     let code: string
     try {
-      code = await requestWhatsAppPairing()
+      code = await requestWhatsAppPairing(admin.tenantId ?? "")
     } catch (error) {
       return pairingError(error)
     }

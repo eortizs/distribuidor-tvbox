@@ -8,7 +8,8 @@ import {
   whatsappAgentNumber,
 } from "@/server/whatsapp/config"
 import { listWhatsAppLog, listWhatsAppOutbox } from "@/server/whatsapp/service"
-import { getWhatsAppStatus } from "@/server/whatsapp/socket"
+import { getWhatsAppStatus } from "@/server/whatsapp/gateway"
+import { currentTenantContext } from "@/server/tenant/context"
 
 export const metadata: Metadata = {
   title: "WhatsApp",
@@ -35,7 +36,9 @@ export default async function WhatsAppPage() {
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
       <h1 className="sr-only">WhatsApp</h1>
       <WhatsAppView
-        initialStatus={getWhatsAppStatus()}
+        initialStatus={await getWhatsAppStatus(
+          currentTenantContext()?.tenantId ?? ""
+        )}
         agentNumber={whatsappAgentNumber()}
         llmConfigured={whatsappAgentLlmConfigured()}
         initialOutbox={outbox}

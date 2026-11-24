@@ -1,5 +1,6 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
+import { runWithTenant } from "@/server/tenant/context"
 import { paymentOrderConceptAnchor } from "@/lib/links-pago"
 
 import type { PaymentOrder } from "./repository"
@@ -69,8 +70,28 @@ export function notifyPayerContacted(order: PaymentOrder, phone: string): void {
  * Depósito confirmado CON comprobante validado (chequeo inmediato del
  * turno, verificador del carril 'verifying' y barrido/webhook — toda
  * confirmación pasa por el comprobante): los textos lo mencionan.
+ *
+ * El aviso corre bajo el tenant de la ORDEN (§4.5 2A): desde el barrido
+ * cross-tenant llega bajo `runAsPlatform`, donde el GUC de tenant no existe
+ * — el trigger dejaría `tenant_id` NULL y los INSERTs en `notifications`/
+ * `wa_outbox` fallarían en silencio.
  */
 export function notifyDepositConfirmed(order: PaymentOrder): void {
+  void runWithTenant(order.tenantId, async () => {
+    notifyDepositConfirmedInTenant(order)
+  }).catch((error: unknown) => {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `links_pago: notify_deposit_confirmed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      })
+    )
+  })
+}
+
+function notifyDepositConfirmedInTenant(order: PaymentOrder): void {
   const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
   const deposito = order.mpDepositAt
     ? ` acreditado el ${new Date(order.mpDepositAt).toLocaleString("es-MX")}`

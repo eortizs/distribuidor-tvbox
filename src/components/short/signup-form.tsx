@@ -71,7 +71,7 @@ export function SignupForm({
   useEffect(() => {
     const current = slugTouched ? slug : slugify(businessName)
     const local = current ? slugAvailabilityShape(current) : null
-    if (!current || !local.available) return
+    if (!current || !local || !local.available) return
     const seq = ++checkSeq.current
     const timer = setTimeout(() => {
       void (async () => {
