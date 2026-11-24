@@ -1,8 +1,10 @@
 import { isOwnerRole } from "@/server/auth/types"
 import { ClientesAccordion } from "@/components/entities/clientes-accordion"
 import { ClientesRegistry } from "@/components/clientes/clientes-registry"
+import { GettingStartedCard } from "@/components/onboarding/getting-started-card"
 import { requireUser } from "@/server/auth/guards"
 import { effectiveDbContext, findTenantById } from "@/server/tenant/context"
+import { getOnboardingStatus } from "@/server/onboarding/status"
 import { resolveClientScope } from "@/server/flujotv/scope"
 import {
   isCouponQaEnabled,
@@ -41,12 +43,27 @@ export default async function EntitiesPage({
 
   // RAMA POR TIPO DE TENANT (§3.5): un negocio solo-núcleo NO tiene FlujoTV
   // — su /clientes es el registro local (nombre, WhatsApp, notas y links).
-  // El legado conserva el acordeón FlujoTV intacto.
+  // El legado conserva el acordeón FlujoTV intacto. Con onboarding
+  // incompleto, el propietario ve la tarjeta «Primeros pasos» (sin rebote:
+  // «Saltar» tiene que funcionar).
   const context = await effectiveDbContext()
   const tenant = context?.tenantId ? await findTenantById(context.tenantId) : null
   if (tenant && tenant.kind === "business") {
+    const status =
+      isOwnerRole(user.role) && tenant.status === "active"
+        ? await getOnboardingStatus(tenant.id).catch(() => null)
+        : null
     return (
-      <div className="flex flex-1 flex-col p-4 md:p-6">
+      <div className="flex flex-1 flex-col gap-4 p-4 md:p-6">
+        {status && !status.complete && (
+          <GettingStartedCard
+            steps={{
+              mpToken: status.mpToken.done,
+              banking: status.business.done,
+              whatsapp: status.whatsapp.done,
+            }}
+          />
+        )}
         <ClientesRegistry />
       </div>
     )

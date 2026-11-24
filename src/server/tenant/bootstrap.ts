@@ -34,8 +34,8 @@ export async function assertTenantRlsEffective(): Promise<void> {
     }
 
     // El rol no debe ser dueño de las tablas (owner bypass).
-    const ownership = await systemPool.query<{ owned: string }>(
-      `SELECT tablename AS owned
+    const ownership = await systemPool.query<{ role: string; owned: string }>(
+      `SELECT current_user AS role, tablename AS owned
          FROM pg_tables
         WHERE schemaname = 'public'
           AND tablename IN ('users','payment_orders')
@@ -43,7 +43,9 @@ export async function assertTenantRlsEffective(): Promise<void> {
         LIMIT 1`
     )
     if (ownership.rowCount && ownership.rows[0]?.owned) {
-      logRlsError(`el rol ${String(ownership.rows[0].owned)} es dueño de tablas`)
+      logRlsError(
+        `el rol ${String(ownership.rows[0].role)} es dueño de tablas (${String(ownership.rows[0].owned)})`
+      )
       return
     }
 

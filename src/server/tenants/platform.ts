@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto"
 
 import { withTransaction } from "@/server/db"
-import { publishRealtime } from "@/server/realtime/bus"
 import {
   findTenantBySlug,
   findTenantById,
@@ -9,7 +8,8 @@ import {
   runWithPlatformTenant,
 } from "@/server/tenant/context"
 import { isValidTenantSlug } from "@/server/tenant/hosts"
-import { insertUser } from "@/server/auth/users"
+import { createAccount } from "@/server/auth/accounts"
+import { ensureUserStorage } from "@/server/storage/user-files"
 import { hashPassword } from "@/server/auth/password"
 import { AppError } from "@/server/umejson/types"
 
@@ -73,18 +73,23 @@ export interface CreateTenantInput {
   ownerEmail: string
   /** Contraseña temporal del propietario; si falta se genera. */
   ownerPassword?: string
+  /** Nombre completo del propietario (entidad Cuenta); opcional. */
+  ownerFullName?: string
 }
 
 export interface CreatedTenant {
   tenantId: string
   slug: string
   ownerEmail: string
+  /** Id del propietario (ticket de entrega del registro, §4.2). */
+  ownerId: string
   /** Contraseña temporal en claro: la consola la muestra UNA vez. */
   temporaryPassword: string
 }
 
 /**
- * Alta de tenant de negocio: catálogo + propietario, atómicos. El propietario
+ * Alta de tenant de negocio: catálogo + propietario, ATÓMICOS en una sola
+ * transacción (el alta a medias dejaba un tenant sin dueño). El propietario
  * inicia sesión en su subdominio con la contraseña temporal.
  */
 export async function createTenant(
@@ -110,66 +115,67 @@ export async function createTenant(
     throw new AppError(409, "slug_tomado", `El slug '${slug}' ya existe.`)
   }
   const temporaryPassword = input.ownerPassword ?? randomBytes(9).toString("base64url")
-  const passwordHash = await hashPassword(temporaryPassword)
   const tenantId = crypto.randomUUID()
 
-  await withTransaction(async (tx) => {
-    await tx.query(
-      `INSERT INTO tenants (id, slug, name, kind, status, modules, use_platform_mp_account)
-       VALUES ($1, $2, $3, 'business', 'active', ARRAY['core']::text[], false)`,
-      [tenantId, slug, name]
-    )
-  })
-
-  // El propietario y su entidad Cuenta viven en el tenant nuevo (dual GUC).
-  await runWithPlatformTenant(tenantId, () =>
+  const owner = await runWithPlatformTenant(tenantId, () =>
     withTransaction(async (tx) => {
-      const user = await insertUser(
-        {
-          username: email,
-          passwordHash,
-          role: "propietario",
-          tenantId,
-        },
-        tx
-      )
-      const doc = {
-        id: user.id,
-        entityName: "Cuenta",
-        dynamicProperties: {
-          email,
-          userId: user.id,
-          role: "propietario",
-          distribuidorId: user.id,
-          ...(input.ownerEmail ? {} : {}),
-        },
-        lifecycle: {
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          version: 1,
-        },
-        state: {
-          current: "active",
-          statusLog: [
-            {
-              status: "active",
-              timestamp: new Date().toISOString(),
-              reason: "Tenant owner created",
-            },
-          ],
-        },
-        markdownDocumentation: `### Cuenta — ${email}\nCuenta con perfil 'propietario'.`,
+      try {
+        await tx.query(
+          `INSERT INTO tenants (id, slug, name, kind, status, modules, use_platform_mp_account)
+           VALUES ($1, $2, $3, 'business', 'active', ARRAY['core']::text[], false)`,
+          [tenantId, slug, name]
+        )
+        // El propietario y su entidad Cuenta viven en la MISMA transacción
+        // (dual GUC): valida el documento umeJSON y crea el usuario con rol
+        // propietario del tenant nuevo.
+        return await createAccount(
+          {
+            email,
+            password: temporaryPassword,
+            role: "propietario",
+            tenantId,
+            fullName: input.ownerFullName,
+            actor: "platform",
+            source: "platform",
+          },
+          tx
+        )
+      } catch (error) {
+        if ((error as { code?: string }).code === "23505") {
+          const constraint = String(
+            (error as { constraint?: string }).constraint ?? ""
+          )
+          if (constraint.includes("tenants")) {
+            throw new AppError(409, "slug_tomado", `El slug '${slug}' ya existe.`)
+          }
+          throw new AppError(
+            409,
+            "email_taken",
+            `An account with email '${email}' already exists`
+          )
+        }
+        throw error
       }
-      await tx.query(
-        `INSERT INTO entities (id, entity_name, doc, version)
-         VALUES ($1, 'Cuenta', $2::jsonb, 1)`,
-        [crypto.randomUUID(), JSON.stringify(doc)]
-      )
-      await publishRealtime(tx, { kind: "users", entityId: user.id })
     })
   )
 
-  return { tenantId, slug, ownerEmail: email, temporaryPassword }
+  // Tras el COMMIT (el almacenamiento no puede quedar dentro de la tx).
+  await ensureUserStorage(owner.id).catch((error) => {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `storage: ensure folder for ${owner.id} failed: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    )
+  })
+
+  return {
+    tenantId,
+    slug,
+    ownerEmail: email,
+    ownerId: owner.id,
+    temporaryPassword,
+  }
 }
 
 /** Suspende o reactiva un tenant. Suspendido ⇒ sus sesiones quedan rechazadas. */

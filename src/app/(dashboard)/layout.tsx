@@ -23,7 +23,7 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  const user = await requireUser("general")
+  const user = await requireUser("core")
   const context = await effectiveDbContext()
   const tenant = context?.tenantId ? await findTenantById(context.tenantId) : null
   const [visibleSections, saldos] = await Promise.all([

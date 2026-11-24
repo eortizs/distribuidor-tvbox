@@ -25,7 +25,7 @@ import {
   getTenantBanking,
   getTenantMpTokenStatus,
 } from "@/server/tenants/business"
-import { effectiveDbContext } from "@/server/tenant/context"
+import { effectiveDbContext, findTenantById } from "@/server/tenant/context"
 
 export const instant = false
 
@@ -73,15 +73,18 @@ export default async function ProfilePage() {
   const { email, role, createdAt, account } = profile
 
   // Datos del NEGOCIO del tenant de la cuenta (Fase 3 §3.4): propietario
-  // edita; sucursal ve en modo lectura. Plataforma (sin tenant): sin tarjeta.
+  // edita; sucursal ve en modo lectura. La tarjeta SOLO existe en tenants
+  // de negocio: el legado TVBox y la plataforma no la muestran.
   const context = await effectiveDbContext()
   const tenantId = context?.tenantId ?? null
-  const [business, businessMpToken] = tenantId
-    ? await Promise.all([
-        getTenantBanking(tenantId).catch(() => null),
-        getTenantMpTokenStatus(tenantId).catch(() => null),
-      ])
-    : [null, null]
+  const tenant = tenantId ? await findTenantById(tenantId) : null
+  const [business, businessMpToken] =
+    tenantId && tenant?.kind === "business"
+      ? await Promise.all([
+          getTenantBanking(tenantId).catch(() => null),
+          getTenantMpTokenStatus(tenantId).catch(() => null),
+        ])
+      : [null, null]
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
@@ -152,7 +155,7 @@ export default async function ProfilePage() {
               }
               businessMpToken={businessMpToken}
               canEditBusiness={isOwnerRole(role)}
-              showBusinessCard={tenantId !== null}
+              showBusinessCard={tenant?.kind === "business"}
             />
           </div>
         </TabsContent>

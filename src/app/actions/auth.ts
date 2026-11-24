@@ -27,6 +27,7 @@ import {
 import { findTenantBySlug, setRequestContext } from "@/server/tenant/context"
 import { resolveTenantHost } from "@/server/tenant/hosts"
 import { requestHost } from "@/server/tenant/request-host"
+import { postLoginPathFor } from "@/server/onboarding/status"
 import { systemPool } from "@/server/db"
 
 export interface LoginState {
@@ -166,7 +167,9 @@ export async function loginAction(
     tenantId: tenantIdOfUser,
   })
 
-  redirect("/clientes")
+  // Destino tras entrar (§4.4): propietario de un negocio con onboarding
+  // incompleto vuelve al asistente; el resto a su pantalla de inicio.
+  redirect(await postLoginPathFor(user.id))
 }
 
 /** Tenant del usuario por id (systemPool: no depende del contexto actual). */

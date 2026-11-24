@@ -1,6 +1,7 @@
 import { pool } from "@/server/db"
 import { AppError } from "@/server/umejson/types"
 import { cifrarToken, descifrarToken, isTokensCryptoReady } from "@/server/conectores/crypto"
+import { runWithPlatformTenant } from "@/server/tenant/context"
 
 import { mercadoPagoRequestAs } from "@/server/mercadopago/client"
 import { MercadoPagoError } from "@/server/mercadopago/errors"
@@ -45,8 +46,31 @@ export async function getTenantBanking(
 const CLABE_RE = /^[0-9]{18}$/
 
 /**
+ * Tenant de negocio de una cuenta (fuente única para las acciones de
+ * propietario): null si la cuenta no pertenece a un tenant de negocio
+ * (plataforma, legado TVBox). El tipo de tenant lo resuelve systemPool
+ * (cache 30 s), no el contexto de la petición.
+ */
+export async function businessTenantIdOfUser(userId: string): Promise<string | null> {
+  const result = await pool.query<{ tenant_id: string | null }>(
+    `SELECT tenant_id FROM users WHERE id = $1::uuid LIMIT 1`,
+    [userId]
+  )
+  const tenantId = result.rows[0]?.tenant_id ?? null
+  if (!tenantId) return null
+  const { findTenantById } = await import("@/server/tenant/context")
+  const tenant = await findTenantById(tenantId)
+  return tenant?.kind === "business" ? tenantId : null
+}
+
+/**
  * Guarda los datos bancarios del negocio (propietario). Vaciar un campo lo
  * limpia: la cuenta del negocio puede quedar «sin datos» a propósito.
+ *
+ * El UPDATE corre bajo `runWithPlatformTenant`: `tenants_write` SOLO deja
+ * escribir a plataforma (RLS, db/tenants-schema.sql) y bajo el contexto del
+ * tenant la fila no es actualizable (0 filas → 404). Columnas fijas y
+ * `kind = 'business'`: el tenant legado jamás se toca desde aquí.
  */
 export async function saveTenantBanking(
   tenantId: string,
@@ -64,19 +88,21 @@ export async function saveTenantBanking(
   if (bankClabe.length > 0 && !CLABE_RE.test(bankClabe)) {
     throw new AppError(422, "clabe_invalida", "La CLABE debe tener exactamente 18 dígitos.")
   }
-  const result = await pool.query<{
-    bank_name: string | null
-    bank_holder: string | null
-    bank_clabe: string | null
-  }>(
-    `UPDATE tenants
-        SET bank_name = NULLIF($2, ''),
-            bank_holder = NULLIF($3, ''),
-            bank_clabe = NULLIF($4, ''),
-            updated_at = now()
-      WHERE id = $1::uuid
-      RETURNING bank_name, bank_holder, bank_clabe`,
-    [tenantId, bankName, bankHolder, bankClabe]
+  const result = await runWithPlatformTenant(tenantId, () =>
+    pool.query<{
+      bank_name: string | null
+      bank_holder: string | null
+      bank_clabe: string | null
+    }>(
+      `UPDATE tenants
+          SET bank_name = NULLIF($2, ''),
+              bank_holder = NULLIF($3, ''),
+              bank_clabe = NULLIF($4, ''),
+              updated_at = now()
+        WHERE id = $1::uuid AND kind = 'business'
+        RETURNING bank_name, bank_holder, bank_clabe`,
+      [tenantId, bankName, bankHolder, bankClabe]
+    )
   )
   const row = result.rows[0]
   if (!row) {
@@ -232,6 +258,54 @@ export async function clearTenantMpToken(tenantId: string): Promise<void> {
   await pool.query(`DELETE FROM tenant_mp_tokens WHERE tenant_id = $1::uuid`, [
     tenantId,
   ])
+}
+
+/**
+ * Declara el WhatsApp del negocio (§4.5 del plan): dígitos canónicos con
+ * código de país. El índice único parcial `tenants_whatsapp_number_uidx`
+ * garantiza UNA sesión por número: un número tomado por otro negocio
+ * responde 409. La escritura corre bajo `runWithPlatformTenant` (la política
+ * `tenants_write` solo deja escribir a plataforma) con columnas fijas y
+ * `kind = 'business'`.
+ */
+export async function saveTenantWhatsappNumber(
+  tenantId: string,
+  rawNumber: string
+): Promise<string> {
+  const { normalizeWhatsAppDigits, canonicalWhatsAppDigits, isValidWhatsAppNumber } =
+    await import("@/server/whatsapp/config")
+  const canonical = canonicalWhatsAppDigits(normalizeWhatsAppDigits(rawNumber))
+  if (!isValidWhatsAppNumber(canonical)) {
+    throw new AppError(
+      422,
+      "whatsapp_invalido",
+      "Escribe el número con código de país (52 para México) sin espacios ni guiones."
+    )
+  }
+  try {
+    const result = await runWithPlatformTenant(tenantId, () =>
+      pool.query<{ id: string }>(
+        `UPDATE tenants
+            SET whatsapp_number = $2,
+                updated_at = now()
+          WHERE id = $1::uuid AND kind = 'business'
+          RETURNING id`,
+        [tenantId, canonical]
+      )
+    )
+    if (!result.rows[0]) {
+      throw new AppError(404, "tenant_no_encontrado", "El tenant no existe.")
+    }
+  } catch (error) {
+    if (error instanceof AppError) throw error
+    if ((error as { code?: string }).code !== "23505") throw error
+    throw new AppError(
+      409,
+      "whatsapp_ocupado",
+      "Ese número ya está vinculado a otro negocio."
+    )
+  }
+  return canonical
 }
 
 /**

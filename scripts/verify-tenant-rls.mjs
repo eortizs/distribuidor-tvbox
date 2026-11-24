@@ -52,6 +52,7 @@ const TABLES = [
   "animation_deliverables","expenses","user_settings",
   "user_section_permissions","user_module_permissions","user_module_prefs",
   "connector_connections","user_mp_tokens","clients","tenant_mp_tokens",
+  "signup_handoffs",
   "tenants",
 ]
 
@@ -148,6 +149,40 @@ try {
   // Limpieza del probe (dueño de la fila: el contexto legado).
   await client.query("SELECT set_config('app.tenant_id', $1, false)", [probeTenant])
   await client.query("DELETE FROM notes WHERE id = $1", [probeId])
+
+  // 5. tenants: el contexto de un tenant NO puede cambiar columnas de
+  // control (slug, status, modules, use_platform_mp_account) — solo lectura
+  // + plataforma escribe. El legado existe siempre (migración).
+  const legacyRow = await client.query(
+    "SELECT id, slug, status, modules, use_platform_mp_account FROM tenants WHERE id = $1",
+    [LEGACY]
+  )
+  if (!legacyRow.rowCount) {
+    fail("tenants", "el tenant legado no existe")
+  } else {
+    const tenantRow = legacyRow.rows[0]
+    await client.query("SELECT set_config('app.tenant_id', $1, false)", [LEGACY])
+    // RLS filtra por USING: la fila queda invisible y el UPDATE toca 0 filas
+    // (no lanza). La afirmación es rowCount === 0.
+    const tenantWrite = await client.query(
+      `UPDATE tenants SET status = 'suspended' WHERE id = $1`,
+      [tenantRow.id]
+    ).then((r) => r.rowCount ?? 0).catch(() => -1)
+    if (tenantWrite !== 0) {
+      fail("tenants", `un contexto de tenant escribió en tenants (rowCount=${tenantWrite}; tenants_write roto)`)
+    }
+
+    // Plataforma SÍ puede escribir (toggle real de status de vuelta).
+    await client.query("SELECT set_config('app.platform','on',false), set_config('app.tenant_id','',false)")
+    const platformWrite = await client.query(
+      `UPDATE tenants SET status = $2, updated_at = now() WHERE id = $1 RETURNING id`,
+      [tenantRow.id, tenantRow.status]
+    )
+    if (!platformWrite.rowCount) {
+      fail("tenants", "la plataforma NO pudo escribir en tenants")
+    }
+    await client.query("SELECT set_config('app.platform','',false)")
+  }
 
   if (failures.length > 0) {
     console.error(`\n${failures.length} fallos de aislamiento`)

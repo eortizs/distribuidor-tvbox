@@ -27,6 +27,8 @@ const OAUTH_ERRORS: Record<string, string> = {
     "No hay una cuenta con ese correo en este panel. Pide al propietario que te dé de alta.",
   google_link_required:
     "Para usar Google con tu cuenta, inicia sesión con tu contraseña: quedará vinculada para las próximas veces.",
+  handoff_invalid:
+    "El enlace de bienvenida ya se usó o expiró. Inicia sesión con tu correo y contraseña.",
 }
 
 const OAUTH_NOTICES: Record<string, string> = {

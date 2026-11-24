@@ -1,7 +1,6 @@
 "use server"
 
 import { revalidatePath } from "next/cache"
-import { pool } from "@/server/db"
 import { requireUser } from "@/server/auth/guards"
 import { isOwnerRole } from "@/server/auth/types"
 import { hashPassword, verifyPassword } from "@/server/auth/password"
@@ -12,6 +11,7 @@ import {
   saveUserMpToken,
 } from "@/server/mercadopago/tokens"
 import {
+  businessTenantIdOfUser,
   clearTenantMpToken,
   saveTenantBanking,
   saveTenantMpToken,
@@ -222,15 +222,6 @@ export async function changePasswordAction(
 }
 
 
-/** Tenant de la sesión (null = plataforma sin negocio que editar). */
-async function tenantIdOfSessionUser(userId: string): Promise<string | null> {
-  const result = await pool.query<{ tenant_id: string | null }>(
-    `SELECT tenant_id FROM users WHERE id = $1::uuid LIMIT 1`,
-    [userId]
-  )
-  return result.rows[0]?.tenant_id ?? null
-}
-
 export interface BusinessBankingState {
   error: null | string
   success: null | string
@@ -239,7 +230,8 @@ export interface BusinessBankingState {
 /**
  * Guarda los DATOS DEL NEGOCIO (Fase 3 §3.4): propietario edita; la
  * sucursal ve la tarjeta en modo lectura (la UI no envía el form).
- * Vaciar un campo lo limpia a propósito.
+ * Vaciar un campo lo limpia a propósito. REUSA las acciones del asistente
+ * de configuración (§4.3) para que la validación no se duplique.
  */
 export async function updateBusinessBankingAction(
   _prev: BusinessBankingState,
@@ -247,7 +239,7 @@ export async function updateBusinessBankingAction(
 ): Promise<BusinessBankingState> {
   try {
     const sessionUser = await requireUser("core")
-    const tenantId = await tenantIdOfSessionUser(sessionUser.id)
+    const tenantId = await businessTenantIdOfUser(sessionUser.id)
     if (!tenantId) {
       return { error: "Tu cuenta no pertenece a un negocio.", success: null }
     }
@@ -283,7 +275,7 @@ export async function updateBusinessBankingAction(
 export async function clearBusinessMpToken(): Promise<BusinessBankingState> {
   try {
     const sessionUser = await requireUser("core")
-    const tenantId = await tenantIdOfSessionUser(sessionUser.id)
+    const tenantId = await businessTenantIdOfUser(sessionUser.id)
     if (!tenantId) {
       return { error: "Tu cuenta no pertenece a un negocio.", success: null }
     }

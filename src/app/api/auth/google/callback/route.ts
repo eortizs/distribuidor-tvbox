@@ -19,6 +19,7 @@ import {
   parseOAuthState,
 } from "@/server/auth/google-relay"
 import { resolveGoogleUser } from "@/server/auth/google-users"
+import { postLoginPathFor } from "@/server/onboarding/status"
 import { updateUser } from "@/server/auth/users"
 import { populateFullNameFromGoogle } from "@/server/auth/profile"
 import { normalizeEmail } from "@/server/auth/types"
@@ -143,9 +144,7 @@ export async function GET(request: NextRequest) {
 
   if (!code) {
     return fail("google_invalid")
-  }
-
-  let profile: Awaited<ReturnType<typeof exchangeGoogleCode>>
+  }  let profile: Awaited<ReturnType<typeof exchangeGoogleCode>>
   try {
     profile = await exchangeGoogleCode(code, kit.redirectUri, kit.client)
   } catch (error) {
@@ -223,5 +222,12 @@ export async function GET(request: NextRequest) {
   // El tenant de la sesión va explícito: el INSERT corre por systemPool, sin
   // el GUC del contexto, y el trigger no tendría de dónde tomarlo.
   await createSession({ ...resolution.user, tenantId: resolvedTenantId })
+  // Destino tras entrar: propietario de un negocio sin configurar →
+  // asistente. La respuesta conserva la limpieza de la cookie de estado.
+  const destination = await postLoginPathFor(resolution.user.id)
+  response.headers.set(
+    "location",
+    new URL(destination, origin).toString()
+  )
   return response
 }

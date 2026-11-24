@@ -13,7 +13,8 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 
 /** Página/ruta → módulo (regla §4.5). El resto de /modulos → general. */
 const PAGE_MODULES = [
-  ["/clientes", "flujo"],
+  ["/clientes", "core"],
+  ["/onboarding", "core"],
   ["/modulos/abonar-saldo", "flujo"],
   ["/modulos/actualizacion-flujotv", "flujo"],
   ["/modulos/paquetes-flujotv", "flujo"],
@@ -24,7 +25,7 @@ const PAGE_MODULES = [
   ["/modulos/whatsapp", "core"],
   ["/users", "core"],
   ["/profile", "core"],
-  ["/(dashboard)/layout", "general"],
+  ["/(dashboard)/layout", "core"],
   ["/soporte/lab/flujotv", "flujo"],
   ["/modulos", "general"],
   ["/modulos/alertas", "general"],
@@ -44,6 +45,8 @@ const ACTION_MODULES = [
   ["src/app/actions/licencias.ts", "flujo"],
   ["src/app/actions/links-pago.ts", "core"],
   ["src/app/actions/modulos.ts", "general"],
+  ["src/app/actions/onboarding.ts", "core"],
+  ["src/app/actions/onboarding-signup.ts", "core"],
   ["src/app/actions/profile.ts", "core"],
 ]
 

@@ -82,9 +82,14 @@ export interface CreateAccountInput {
  * The login is always an email account (validated and normalized here) and
  * the entity carries dynamicProperties.distribuidorId so ownership scoping
  * treats the account as owned by its own user.
+ *
+ * Con `executor` (transacción ajena, p. ej. el alta atómica de tenant) el
+ * bloque corre DENTRO de esa transacción sin abrir la propia: el caller
+ * decide commit/rollback y se encarga del almacenamiento tras el commit.
  */
 export async function createAccount(
-  input: CreateAccountInput
+  input: CreateAccountInput,
+  executor?: PoolClientLike
 ): Promise<AuthUser> {
   const email = normalizeEmail(input.email)
   if (!isValidEmail(email)) {
@@ -97,54 +102,59 @@ export async function createAccount(
   const role: UserRole = input.role ?? "sucursal"
   let created: AuthUser | null = null
 
+  const insertWith = async (tx: PoolClientLike): Promise<AuthUser> => {
+    const user = await insertUser(
+      {
+        username: email,
+        passwordHash: input.password
+          ? await hashPassword(input.password)
+          : null,
+        role,
+        googleSub: input.googleSub ?? null,
+        googlePicture: input.googlePicture ?? null,
+        tenantId: input.tenantId ?? null,
+      },
+      tx
+    )
+
+    const draft = buildAccountDraft(user, input.fullName)
+
+    const validation = validateDocument(draft)
+    if (!validation.valid) {
+      throw new AppError(
+        422,
+        "schema_violation",
+        "Account entity does not comply with the umeJSON schema",
+        validation.errors
+      )
+    }
+    const sentinelErrors = validateSentinels(draft)
+    if (sentinelErrors.length > 0) {
+      throw new AppError(
+        422,
+        "sentinel_violation",
+        "Account entity has invalid sentinels",
+        sentinelErrors
+      )
+    }
+
+    await createEntity(
+      finalizeDocument(draft),
+      {
+        actor: input.actor ?? "system",
+        source: input.source ?? "register",
+      },
+      tx
+    )
+
+    return { id: user.id, username: user.username, role: user.role }
+  }
+
   try {
-    created = await withTransaction(async (tx) => {
-      const user = await insertUser(
-        {
-          username: email,
-          passwordHash: input.password
-            ? await hashPassword(input.password)
-            : null,
-          role,
-          googleSub: input.googleSub ?? null,
-          googlePicture: input.googlePicture ?? null,
-          tenantId: input.tenantId ?? null,
-        },
-        tx
-      )
-
-      const draft = buildAccountDraft(user, input.fullName)
-
-      const validation = validateDocument(draft)
-      if (!validation.valid) {
-        throw new AppError(
-          422,
-          "schema_violation",
-          "Account entity does not comply with the umeJSON schema",
-          validation.errors
-        )
-      }
-      const sentinelErrors = validateSentinels(draft)
-      if (sentinelErrors.length > 0) {
-        throw new AppError(
-          422,
-          "sentinel_violation",
-          "Account entity has invalid sentinels",
-          sentinelErrors
-        )
-      }
-
-      await createEntity(
-        finalizeDocument(draft),
-        {
-          actor: input.actor ?? "system",
-          source: input.source ?? "register",
-        },
-        tx
-      )
-
-      return { id: user.id, username: user.username, role: user.role }
-    })
+    created =
+      executor !== undefined
+        ? await insertWith(executor)
+        : await withTransaction(insertWith)
     return created
   } catch (error) {
     if ((error as { code?: string }).code === "23505") {
@@ -157,7 +167,9 @@ export async function createAccount(
     throw error
   } finally {
     const ensured = created
-    if (ensured) {
+    // Con executor ajeno, el almacenamiento lo gestiona el caller tras SU
+    // commit (aquí la transacción todavía no cerró).
+    if (ensured && executor === undefined) {
       await ensureUserStorage(ensured.id).catch((error) => {
         console.error(
           JSON.stringify({

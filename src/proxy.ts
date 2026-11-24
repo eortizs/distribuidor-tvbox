@@ -15,7 +15,13 @@ import { findTenantBySlug } from "@/server/tenant/context"
 import { resolveTenantHost, type TenantHost } from "@/server/tenant/hosts"
 
 const SESSION_COOKIE = "reseller_session"
-const PUBLIC_PATHS = new Set(["/login", "/register"])
+const PUBLIC_PATHS = new Set(["/login", "/register", "/onboarding/continuar"])
+/**
+ * Rutas públicas del APEX (spei.link, §4.1): registro, legal y acceso se
+ * reescriben a /short/<ruta> ANTES de validar el código de link y sin gate
+ * de sesión (el visitante del registro no tiene cuenta).
+ */
+const SHORT_HOST_PUBLIC_PATHS = new Set(["/registro", "/privacidad", "/terminos", "/acceder"])
 const RATE_LIMIT_WINDOW_MS = 60_000
 const RATE_LIMIT_MAX_POSTS = 10
 const rateBuckets = new Map<string, { count: number; resetAt: number }>()
@@ -31,7 +37,7 @@ function clientIp(request: NextRequest): string {
 function isRateLimited(request: NextRequest): boolean {
   if (request.method !== "POST") return false
   const { pathname } = request.nextUrl
-  if (pathname !== "/login" && pathname !== "/register") return false
+  if (pathname !== "/login" && pathname !== "/register" && pathname !== "/registro") return false
 
   const now = Date.now()
   if (rateBuckets.size > 1000) {
@@ -104,6 +110,14 @@ export async function proxy(request: NextRequest) {
         ? url.pathname.slice(0, -1)
         : url.pathname
     const segment = trimmed.slice(1)
+
+    // Rutas públicas del apex (registro/legal/acceso): sin gate de sesión y
+    // antes de la validación de código de link.
+    if (SHORT_HOST_PUBLIC_PATHS.has(trimmed)) {
+      url.pathname = `/short${trimmed}`
+      return NextResponse.rewrite(url)
+    }
+
     if (segment.length > 0 && !isPaymentLinkCode(segment.toUpperCase())) {
       return new NextResponse("Link no encontrado", {
         status: 404,
