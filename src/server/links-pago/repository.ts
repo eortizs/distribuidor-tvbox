@@ -247,14 +247,14 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
 }
 
 const SELECT_COLUMNS = `
-  SELECT o.id, o.code, o.creator_user_id, u.username AS creator_username,
+  SELECT o.id, o.code, o.tenant_id, o.creator_user_id,
+         u.username AS creator_username,
          o.amount_mxn, o.note, o.status, o.bank_name, o.bank_account,
          o.bank_holder, o.payer_phone, o.link_opened_at, o.payer_bound_at,
          o.payer_nudged_at, o.ticket_file_id, o.ticket_sha256,
          o.scan_status, o.scan_result, o.resolved_at, o.rejection_reason,
          o.created_at, o.mp_payment_id, o.mp_deposit_at, o.verifying_since,
          o.deposit_next_check_at, o.deposit_checks, o.deposit_escalated_at,
-         o.client_id, cl.name AS client_name,
          o.client_id, cl.name AS client_name
     FROM payment_orders o
     LEFT JOIN clients cl ON cl.id = o.client_id
