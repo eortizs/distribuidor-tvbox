@@ -13,6 +13,7 @@ import {
   platformNavSections,
 } from "@/components/plataforma/platform-nav-config"
 import { PLATFORM_MODULOS } from "@/lib/platform-modulos"
+import { SpeilinkLogoS } from "@/components/speilink-logo"
 import { shellLayout } from "@/components/dashboard/nav-layout"
 import { Button } from "@/components/ui/button"
 import {
@@ -118,13 +119,10 @@ export function PlatformShell({
           aria-label="Inicio"
           className="flex shrink-0 items-center rounded-lg focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/speilink-logo-s.svg"
-            alt=""
-            aria-hidden="true"
-            className="h-7 w-auto"
-          />
+          {/* Isotipo inline con fills sobre variables CSS: en el modo oscuro
+              de plataforma las variables lo pintan blanco (el bitono azul se
+              pierde sobre el fondo oscuro); en claro conserva la marca. */}
+          <SpeilinkLogoS className="h-7 w-auto" />
         </Link>
         {back ? (
           <h1 className="text-base font-semibold tracking-tight">

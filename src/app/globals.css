@@ -158,6 +158,77 @@
   --mascota-ink: #fcfcfb;
 }
 
+/*
+ * Paleta del HOST DE PLATAFORMA (platform.spei.link): acento primario VERDE
+ * #085C34 (botones, enlaces, foco) y AZUL TÉCNICO #0F172A como tinta de texto
+ * y superficies invertidas, con neutros de matiz slate. La clase
+ * `.theme-platform` la colocan el layout del panel (rama plataforma) y el
+ * AuthShell en ese host; el selector `body:has(...)` proyecta los tokens al
+ * <body> para que los portales (diálogos, sheets, dropdowns, toasts) montados
+ * fuera del contenedor hereden la MISMA paleta. El legado y los negocios
+ * jamás montan la clase y conservan la paleta neutra intacta.
+ */
+body:has(.theme-platform) {
+  --background: #fcfcfd;
+  --foreground: #0f172a;
+  --card-foreground: #0f172a;
+  --popover-foreground: #0f172a;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #f1f5f9;
+  --accent-foreground: #0f172a;
+  --primary: #085c34;
+  --primary-foreground: #ffffff;
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #085c34;
+  --invert: #0f172a;
+  --chart-1: #085c34;
+  --chart-2: #10b981;
+  --chart-3: #0f766e;
+  --chart-4: #64748b;
+  --chart-5: #0f172a;
+}
+
+.dark body:has(.theme-platform) {
+  /* Rampa slate azulada completa: el `.dark` base trae superficies neutras y
+     bordes al 10% de blanco — sobre esa base los elementos del panel se
+     pierden. Superficies escalonadas + bordes sólidos devuelven la
+     definición (fondo < tarjeta < chips) sin perder la tinta técnica. */
+  --background: #0a101c;
+  --foreground: #f1f5f9;
+  --card: #121b2e;
+  --card-foreground: #f1f5f9;
+  --popover: #121b2e;
+  --popover-foreground: #f1f5f9;
+  --primary: #047857;
+  --primary-foreground: #ffffff;
+  --secondary: #1e293b;
+  --secondary-foreground: #f1f5f9;
+  --muted: #1e293b;
+  --muted-foreground: #94a3b8;
+  --accent: #1e293b;
+  --accent-foreground: #f1f5f9;
+  --border: #24334d;
+  --input: #24334d;
+  --ring: #34d399;
+  --invert: #334155;
+  --invert-foreground: #f8fafc;
+  /* Logo monócromo blanco en oscuro: el bitono azul del isotipo cae a
+     1.59:1 sobre el fondo oscuro y se lee roto (ver speilink-logo.tsx). */
+  --speilink-logo-a: #f1f5f9;
+  --speilink-logo-b: #f1f5f9;
+  --speilink-logo-c: #f1f5f9;
+  --speilink-logo-ink: #f1f5f9;
+  --chart-1: #10b981;
+  --chart-2: #34d399;
+  --chart-3: #0d9488;
+  --chart-4: #94a3b8;
+  --chart-5: #e2e8f0;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

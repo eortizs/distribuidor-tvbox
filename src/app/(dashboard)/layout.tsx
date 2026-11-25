@@ -58,13 +58,18 @@ export default async function DashboardLayout({
     user.tenantId === null &&
     (isPlatformRole(user.role) || isAffiliateRole(user.role))
   ) {
+    // Paleta del host de plataforma (verde #085C34 / azul técnico #0F172A):
+    // la clase alimenta los selectores `body:has(.theme-platform)` de
+    // globals.css; `contents` evita alterar el flex del body.
     return (
-      <RealtimeProvider>
-        <AppSplash logo="speilink" />
-        <PlatformShell user={{ username: user.username, role: user.role }}>
-          {children}
-        </PlatformShell>
-      </RealtimeProvider>
+      <div className="theme-platform contents">
+        <RealtimeProvider>
+          <AppSplash logo="speilink" />
+          <PlatformShell user={{ username: user.username, role: user.role }}>
+            {children}
+          </PlatformShell>
+        </RealtimeProvider>
+      </div>
     )
   }
   const context = await effectiveDbContext()
