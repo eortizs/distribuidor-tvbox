@@ -31,6 +31,8 @@ export async function POST(request: NextRequest) {
       password: String(body.password ?? ""),
       legal: body.legal === true,
       website: String(body.website ?? ""),
+      // Afiliado del formulario (campo oculto af): revalidado en el núcleo.
+      affiliateCode: String(body.affiliateCode ?? "") || null,
     },
     ip
   )

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react"
 
 import { cn } from "cn"
 import { Spinner } from "@/components/ui/spinner"
+import { SpeilinkLogo } from "@/components/speilink-logo"
 import { TvboxWordmark } from "@/components/tvbox-wordmark"
 
 /** Tiempo mínimo en pantalla: evita que el splash parpadee en cargas rápidas. */
@@ -13,7 +14,12 @@ const FADE_MS = 300
 /** Red de seguridad: si nada confirma que la app está lista, el splash se retira solo. */
 const MAX_VISIBLE_MS = 5000
 
-export function AppSplash() {
+/**
+ * Marca del splash (reestructura de bloques 2026-11-24): en el HOST DE
+ * PLATAFORMA el panel viste SPEILink; el legado y los negocios conservan la
+ * marca TVBOX. El layout resuelve el host y pasa la variante.
+ */
+export function AppSplash({ logo = "tvbox" }: { logo?: "tvbox" | "speilink" }) {
   const [phase, setPhase] = useState<"visible" | "leaving" | "hidden">("visible")
 
   useEffect(() => {
@@ -69,7 +75,11 @@ export function AppSplash() {
       )}
     >
       <div className="splash-enter flex flex-col items-center">
-        <TvboxWordmark className="h-32 w-auto" />
+        {logo === "speilink" ? (
+          <SpeilinkLogo className="h-32 w-auto" />
+        ) : (
+          <TvboxWordmark className="h-32 w-auto" />
+        )}
       </div>
       <div className="flex flex-col items-center gap-2">
         <Spinner className="size-5 opacity-60" aria-hidden="true" />

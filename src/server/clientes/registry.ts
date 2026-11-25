@@ -24,10 +24,25 @@ export interface ClientRow {
   notes: string | null
   status: "active" | "archived"
   createdBy: string | null
+  /** Correo del usuario dueño (quien lo creó); null si el alta quedó huérfana. */
+  ownerEmail: string | null
   createdAt: Date
   updatedAt: Date
   /** Cantidad de links de pago asociados (para la vista). */
   linkCount: number
+}
+
+/**
+ * Alcance del VISOR sobre el registro (fase 2 de la segmentación de
+ * clientes, 2026-11-24): la sucursal solo ve/gestiona SUS clientes (dueño =
+ * quien lo crea); el propietario ve todos los del negocio, agrupados por
+ * sucursal. El aislamiento por tenant sigue en RLS: esto es la capa de
+ * perfil encima.
+ */
+export interface ClientScope {
+  userId: string
+  /** true para sucursal: filtra por sus propios clientes y acota escritura. */
+  branchScoped: boolean
 }
 
 function normalizeWhatsappPhone(raw: string): string {
@@ -78,9 +93,11 @@ function validarNotas(notes: string | null): string | null {
 const SELECT_COLUMNS = `
   SELECT c.id, c.name, c.whatsapp_phone, c.notes, c.status, c.created_by,
          c.created_at, c.updated_at,
+         owner.username AS owner_email,
          (SELECT count(*)::int FROM payment_orders po
-           WHERE po.client_id = c.id) AS link_count
-    FROM clients c`
+            WHERE po.client_id = c.id) AS link_count
+    FROM clients c
+    LEFT JOIN users owner ON owner.id = c.created_by`
 
 function mapRow(row: Record<string, unknown>): ClientRow {
   return {
@@ -90,6 +107,7 @@ function mapRow(row: Record<string, unknown>): ClientRow {
     notes: (row.notes as string | null) ?? null,
     status: row.status === "archived" ? "archived" : "active",
     createdBy: (row.created_by as string | null) ?? null,
+    ownerEmail: (row.owner_email as string | null) ?? null,
     createdAt: row.created_at as Date,
     updatedAt: row.updated_at as Date,
     linkCount: Number(row.link_count ?? 0),
@@ -100,10 +118,11 @@ function escapeLike(term: string): string {
   return term.replace(/[\\%_]/g, (c) => `\\${c}`)
 }
 
-/** Clientes ACTIVOS del tenant (RLS), búsqueda opcional por nombre/WhatsApp. */
+/** Clientes ACTIVOS visibles para el visor (RLS tenant + filtro por perfil). */
 export async function listClients(
   query: string | undefined,
-  includeArchived = false
+  includeArchived = false,
+  scope?: ClientScope
 ): Promise<ClientRow[]> {
   const trimmed = query?.trim() ?? ""
   const params: unknown[] = []
@@ -111,6 +130,11 @@ export async function listClients(
   if (!includeArchived) {
     params.push("active")
     conditions.push(`c.status = $${params.length}`)
+  }
+  if (scope?.branchScoped) {
+    // Sucursal: solo SUS clientes (dueño = quien lo crea).
+    params.push(scope.userId)
+    conditions.push(`c.created_by = $${params.length}::uuid`)
   }
   if (trimmed.length >= 2) {
     params.push(`%${escapeLike(trimmed)}%`)
@@ -127,8 +151,18 @@ export async function listClients(
   return result.rows.map(mapRow)
 }
 
-export async function getClient(id: string): Promise<ClientRow | null> {
-  const result = await pool.query(`${SELECT_COLUMNS} WHERE c.id = $1::uuid`, [id])
+export async function getClient(
+  id: string,
+  scope?: ClientScope
+): Promise<ClientRow | null> {
+  let where = "c.id = $1::uuid"
+  const params: unknown[] = [id]
+  if (scope?.branchScoped) {
+    // Sucursal: un cliente ajeno NO existe para ella (sin oráculo).
+    params.push(scope.userId)
+    where += " AND c.created_by = $2::uuid"
+  }
+  const result = await pool.query(`${SELECT_COLUMNS} WHERE ${where}`, params)
   return result.rows[0] ? mapRow(result.rows[0]) : null
 }
 
@@ -164,7 +198,8 @@ export interface UpdateClientInput {
 /** PATCH compare-and-swap libre (sin versión: dominio simple). */
 export async function updateClient(
   id: string,
-  input: UpdateClientInput
+  input: UpdateClientInput,
+  scope?: ClientScope
 ): Promise<ClientRow> {
   const sets: string[] = []
   const values: unknown[] = []
@@ -181,14 +216,23 @@ export async function updateClient(
     sets.push(`notes = $${values.length}`)
   }
   if (sets.length === 0) {
-    const current = await getClient(id)
+    // Sin campos que tocar, la guarda de dueño sigue aplicando para la
+    // sucursal (el id ajeno responde 404 igual que uno inexistente).
+    const current = await getClient(id, scope)
     if (!current) throw new AppError(404, "cliente_no_encontrado", "El cliente no existe.")
     return current
   }
+  // El dueño jamás cambia en un PATCH. Sucursal: solo puede editar SUS
+  // clientes — un id ajeno responde 404 sin oráculo.
   sets.push("updated_at = now()")
   values.push(id)
+  let where = `id = $${values.length}::uuid`
+  if (scope?.branchScoped) {
+    values.push(scope.userId)
+    where += ` AND created_by = $${values.length}::uuid`
+  }
   const result = await pool.query(
-    `UPDATE clients SET ${sets.join(", ")} WHERE id = $${values.length}::uuid RETURNING id`,
+    `UPDATE clients SET ${sets.join(", ")} WHERE ${where} RETURNING id`,
     values
   )
   if ((result.rowCount ?? 0) === 0) {
@@ -201,11 +245,18 @@ export async function updateClient(
 }
 
 /** Archivar (borrado suave): los links asociados conservan el histórico. */
-export async function archiveClient(id: string): Promise<void> {
+export async function archiveClient(id: string, scope?: ClientScope): Promise<void> {
+  // Sucursal: solo archiva SUS clientes (id ajeno responde 404 sin oráculo).
+  let where = "id = $1::uuid AND status = 'active'"
+  const params: unknown[] = [id]
+  if (scope?.branchScoped) {
+    params.push(scope.userId)
+    where += " AND created_by = $2::uuid"
+  }
   const result = await pool.query(
     `UPDATE clients SET status = 'archived', updated_at = now()
-      WHERE id = $1::uuid AND status = 'active' RETURNING id`,
-    [id]
+      WHERE ${where} RETURNING id`,
+    params
   )
   if ((result.rowCount ?? 0) === 0) {
     throw new AppError(404, "cliente_no_encontrado", "El cliente no existe o ya está archivado.")

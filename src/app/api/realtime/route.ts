@@ -60,6 +60,13 @@ function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
   ) {
     return event.distribuidorId === scope.userId
   }
+  // Cuentas SIN tenant (§6.9 del plan de afiliados): solo sus eventos
+  // personales. clients/mp_order/payment_order publicados desde plataforma
+  // llevan ids de órdenes de cualquier negocio — la consola y el portal no
+  // usan este stream y una sesión afiliada jamás debe recibirlos.
+  if (scope.tenantId === null) {
+    return false
+  }
   if (scope.isAdmin) return true
   switch (event.kind) {
     // Entidades: la propia cuenta del usuario (distribuidorId) o los datos

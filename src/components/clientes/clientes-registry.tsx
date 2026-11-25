@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/reui/badge"
@@ -42,6 +42,8 @@ interface RegistryClient {
   whatsappPhone: string | null
   notes: string | null
   status: "active" | "archived"
+  /** Correo de la sucursal dueña (quien lo creó); visible para el propietario. */
+  ownerEmail: string | null
   linkCount: number
   createdAt: string
 }
@@ -62,7 +64,12 @@ function waHref(phone: string | null): string | null {
   return digits.length >= 8 ? `https://wa.me/${digits}` : null
 }
 
-export function ClientesRegistry() {
+/**
+ * @param groupByOwner Propietario: los clientes se agrupan por sucursal
+ *   (dueño = quien lo crea) con un rótulo por grupo. Sucursal: lista plana
+ *   de SUS clientes (el servidor ya filtra).
+ */
+export function ClientesRegistry({ groupByOwner = false }: { groupByOwner?: boolean }) {
   const [clients, setClients] = useState<RegistryClient[]>([])
   const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
@@ -111,6 +118,78 @@ export function ClientesRegistry() {
   const [notes, setNotes] = useState("")
   const [saving, setSaving] = useState(false)
   const [archiveTarget, setArchiveTarget] = useState<RegistryClient | null>(null)
+
+  // Propietario: los clientes agrupados por sucursal (dueño = quien lo
+  // crea), orden alfabético por grupo. Sin agrupación (sucursal) la lista
+  // es plana — ya viene filtrada a las suyas desde el servidor.
+  const groups = useMemo(() => {
+    if (!groupByOwner) return null
+    const sorted = [...clients].sort(
+      (a, b) =>
+        (a.ownerEmail ?? "").localeCompare(b.ownerEmail ?? "") ||
+        a.name.localeCompare(b.name)
+    )
+    const result: { owner: string | null; clients: RegistryClient[] }[] = []
+    for (const client of sorted) {
+      const last = result[result.length - 1]
+      if (last && (last.owner ?? "") === (client.ownerEmail ?? "")) {
+        last.clients.push(client)
+      } else {
+        result.push({ owner: client.ownerEmail, clients: [client] })
+      }
+    }
+    return result
+  }, [clients, groupByOwner])
+
+  const renderClientCard = (client: RegistryClient) => {
+    const href = waHref(client.whatsappPhone)
+    return (
+      <Card key={client.id}>
+        <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium">{client.name}</span>
+              {client.linkCount > 0 ? (
+                <Badge variant="secondary" size="sm">
+                  {client.linkCount} {client.linkCount === 1 ? "link" : "links"}
+                </Badge>
+              ) : null}
+            </div>
+            <div className="text-muted-foreground text-sm">
+              {client.whatsappPhone ?? "Sin WhatsApp"}
+            </div>
+            {client.notes ? (
+              <p className="text-muted-foreground line-clamp-2 text-xs">
+                {client.notes}
+              </p>
+            ) : null}
+            <div className="text-muted-foreground text-xs">
+              {dateFormat.format(new Date(client.createdAt))}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {href ? (
+              <Button variant="outline" size="sm" render={<a href={href} target="_blank" rel="noopener noreferrer" />}>
+                WhatsApp
+              </Button>
+            ) : null}
+            <Button variant="outline" size="sm" onClick={() => openEdit(client)}>
+              Editar
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground"
+              aria-label={`Archivar ${client.name}`}
+              onClick={() => setArchiveTarget(client)}
+            >
+              <Trash2Icon aria-hidden="true" />
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    )
+  }
 
   const openCreate = () => {
     setEditing(null)
@@ -231,59 +310,27 @@ export function ClientesRegistry() {
             <CardContent className="text-muted-foreground py-8 text-center text-sm">
               {search.trim().length >= SEARCH_MIN_CHARS
                 ? "Sin resultados para la búsqueda."
-                : "Aún no tienes clientes. Crea el primero con «Nuevo cliente»."}
+                : groupByOwner
+                  ? "Aún no hay clientes en el negocio. Crea el primero con «Nuevo cliente»."
+                  : "Aún no tienes clientes. Crea el primero con «Nuevo cliente»."}
             </CardContent>
           </Card>
+        ) : groups ? (
+          groups.map((group) => (
+            <div key={group.owner ?? "sin-asignar"} className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">
+                  {group.owner ?? "Sin asignar"}
+                </span>
+                <Badge variant="outline" size="xs">
+                  {group.clients.length}
+                </Badge>
+              </div>
+              {group.clients.map(renderClientCard)}
+            </div>
+          ))
         ) : (
-          clients.map((client) => {
-            const href = waHref(client.whatsappPhone)
-            return (
-              <Card key={client.id}>
-                <CardContent className="flex flex-wrap items-center justify-between gap-2 py-3">
-                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-medium">{client.name}</span>
-                      {client.linkCount > 0 ? (
-                        <Badge variant="secondary" size="sm">
-                          {client.linkCount} {client.linkCount === 1 ? "link" : "links"}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="text-muted-foreground text-sm">
-                      {client.whatsappPhone ?? "Sin WhatsApp"}
-                    </div>
-                    {client.notes ? (
-                      <p className="text-muted-foreground line-clamp-2 text-xs">
-                        {client.notes}
-                      </p>
-                    ) : null}
-                    <div className="text-muted-foreground text-xs">
-                      {dateFormat.format(new Date(client.createdAt))}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {href ? (
-                      <Button variant="outline" size="sm" render={<a href={href} target="_blank" rel="noopener noreferrer" />}>
-                        WhatsApp
-                      </Button>
-                    ) : null}
-                    <Button variant="outline" size="sm" onClick={() => openEdit(client)}>
-                      Editar
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="text-muted-foreground"
-                      aria-label={`Archivar ${client.name}`}
-                      onClick={() => setArchiveTarget(client)}
-                    >
-                      <Trash2Icon aria-hidden="true" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            )
-          })
+          clients.map(renderClientCard)
         )}
       </div>
 

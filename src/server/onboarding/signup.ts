@@ -6,6 +6,8 @@ import { createTenant } from "@/server/tenants/platform"
 import { createSignupHandoff } from "@/server/onboarding/handoff"
 import { tenantHostForSlug } from "@/server/tenant/hosts"
 import { findTenantBySlug } from "@/server/tenant/context"
+import { findActiveAffiliateByCode } from "@/server/afiliados/repository"
+import { normalizeAffiliateCode } from "@/lib/afiliados"
 import {
   PUBLIC_RESERVED_SLUGS,
   slugAvailabilityShape,
@@ -17,7 +19,9 @@ import {
  * consumen la acción de servidor (formulario del apex) y el fallback
  * `POST /api/onboarding/signup` — MISMA validación, topes y alta para los dos
  * caminos. El interruptor `SELF_SIGNUP_ENABLED` (default off) mantiene el
- * registro apagado hasta que el dueño lo abra.
+ * registro apagado hasta que el dueño lo abra; una INVITACIÓN de afiliado
+ * válida abre el registro aunque la variable siga apagada (plan
+ * speilink-afiliados §6.6).
  */
 
 export interface BusinessSignupInput {
@@ -30,6 +34,8 @@ export interface BusinessSignupInput {
   legal: boolean
   /** Honeypot: con contenido se rechaza en silencio. */
   website?: string
+  /** Código de afiliado (?af= o cookie de atribución); se revalida AQUÍ. */
+  affiliateCode?: string | null
 }
 
 export type BusinessSignupResult =
@@ -115,6 +121,20 @@ export async function signupCallerIp(): Promise<string> {
 }
 
 /**
+ * Resuelve y REVALIDA el afiliado de la petición (§5.4 del plan de
+ * afiliados: el código del formulario nunca se da por bueno — se comprueba
+ * que exista y esté activo en el momento del alta). null = sin afiliado o
+ * código inválido/suspendido (la puerta cae al interruptor público).
+ */
+export async function resolveSignupAffiliate(
+  code: string | null | undefined
+): Promise<Awaited<ReturnType<typeof findActiveAffiliateByCode>>> {
+  const normalized = normalizeAffiliateCode(code)
+  if (!normalized) return null
+  return findActiveAffiliateByCode(normalized).catch(() => null)
+}
+
+/**
  * Alta completa: validación → topes → honeypot → createTenant (atómico) →
  * ticket de entrega. Devuelve la URL de canje en el subdominio (el llamador
  * hace redirect; en acciones Next exige redirect() fuera del try/catch).
@@ -123,7 +143,12 @@ export async function performBusinessSignup(
   input: BusinessSignupInput,
   ip: string
 ): Promise<BusinessSignupResult> {
-  if (!selfSignupEnabled()) {
+  // Puerta del registro (§6.6): afiliado válido O registro público abierto.
+  // La comprobación de la invitación va ANTES de consumir la cuota por IP
+  // (§5.7) y una invitación inválida devuelve el MISMO mensaje de cerrado
+  // (sin oráculo: no se revela si el código existió).
+  const affiliate = await resolveSignupAffiliate(input.affiliateCode)
+  if (!affiliate && !selfSignupEnabled()) {
     return { ok: false, error: "El registro aún no está abierto. Vuelve pronto." }
   }
   if (ipRateLimited(ip)) {
@@ -185,6 +210,8 @@ export async function performBusinessSignup(
       ownerEmail: email,
       ownerPassword: password,
       ownerFullName: fullName,
+      // Atribución única y para siempre, en la MISMA transacción del alta.
+      referredByAffiliateId: affiliate?.id ?? null,
     })
     const handoff = await createSignupHandoff(created.tenantId, created.ownerId)
     const url = new URL(

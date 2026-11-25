@@ -1,16 +1,19 @@
 import { ArrowRightIcon } from "lucide-react"
 
+import { affiliateCtaEnabled, affiliateRegisterPath } from "@/lib/afiliados"
+
 /*
- * Lanzamiento (§4.6 del plan): `LAUNCH_ENABLED = false` mantiene TODOS los
- * CTAs deshabilitados en preventa (ningún enlace a /registro, /acceder ni
- * wa.me). Al abrir el servicio: activar `LAUNCH_ENABLED = true` + build para
- * publicar los CTAs (alta → /registro, sesión → /acceder) y definir
- * `SPEILINK_SUPPORT_WHATSAPP` (número del soporte, solo dígitos) para el CTA
- * del pie; sin ella el soporte sigue deshabilitado aunque el resto abra.
+ * CTAs de la landing (§6.5 del plan de afiliados). `LAUNCH_ENABLED = false`
+ * los mantiene deshabilitados en preventa (ningún enlace a /registro,
+ * /acceder ni wa.me) SALVO que la petición venga de un enlace de afiliado:
+ * `affiliateCode` habilita los botones y el alta apunta a
+ * `/registro?af=CODE` — la invitación abre el registro aunque
+ * `SELF_SIGNUP_ENABLED` siga apagado.
  *
- * NOTA: el alta REAL exige además `SELF_SIGNUP_ENABLED=on` en el servidor
- * (interruptor independiente del build; con la página de /registro apagada
- * muestra «Muy pronto»).
+ * Al abrir el servicio: `LAUNCH_ENABLED = true` + build publica los CTAs
+ * para todo el mundo y `SPEILINK_SUPPORT_WHATSAPP` (número del soporte, solo
+ * dígitos) deja vivo el CTA del pie. El alta REAL exige además
+ * `SELF_SIGNUP_ENABLED=on` (o un enlace de afiliado válido).
  */
 export const LAUNCH_ENABLED = false
 
@@ -52,17 +55,21 @@ function CtaInner({ variant }: { variant: keyof typeof VARIANT_CLASSES }) {
 }
 
 /**
- * CTA de alta. En preventa es `<button disabled>` SIN destino (cero /registro
- * en el HTML); al lanzar enlaza a la página de registro del apex.
+ * CTA de alta. Sin lanzamiento y sin afiliado es `<button disabled>` SIN
+ * destino (cero /registro en el HTML); con afiliado enlaza a la página de
+ * registro con la atribución (`/registro?af=CODE`).
  */
 export function PrimarySignupCta({
   variant,
   className,
+  affiliateCode = null,
 }: {
   variant: "navbar" | "hero" | "section" | "banner"
   className?: string
+  /** Código del afiliado que trajo la visita; null en la landing común. */
+  affiliateCode?: string | null
 }) {
-  if (!LAUNCH_ENABLED) {
+  if (!affiliateCtaEnabled(LAUNCH_ENABLED, affiliateCode)) {
     return (
       <button
         type="button"
@@ -83,7 +90,7 @@ export function PrimarySignupCta({
   }
   return (
     <a
-      href="/registro"
+      href={affiliateCode ? affiliateRegisterPath(affiliateCode) : "/registro"}
       className={[
         BASE_CTA_CLASS,
         VARIANT_CLASSES[variant],
@@ -98,9 +105,13 @@ export function PrimarySignupCta({
   )
 }
 
-/** «Iniciar sesión»: al lanzar lleva a /acceder (buscador de subdominio). */
-export function NavbarLoginButton() {
-  if (!LAUNCH_ENABLED) {
+/** «Iniciar sesión»: al lanzar (o con afiliado) lleva a /acceder. */
+export function NavbarLoginButton({
+  affiliateCode = null,
+}: {
+  affiliateCode?: string | null
+}) {
+  if (!affiliateCtaEnabled(LAUNCH_ENABLED, affiliateCode)) {
     return (
       <button
         type="button"
@@ -123,8 +134,12 @@ export function NavbarLoginButton() {
 }
 
 /** Soporte del pie: solo vivo con `SPEILINK_SUPPORT_WHATSAPP` definida. */
-export function FooterSupportButton() {
-  if (!LAUNCH_ENABLED || !SUPPORT_WHATSAPP) {
+export function FooterSupportButton({
+  affiliateCode = null,
+}: {
+  affiliateCode?: string | null
+}) {
+  if (!SUPPORT_WHATSAPP || !affiliateCtaEnabled(LAUNCH_ENABLED, affiliateCode)) {
     return (
       <button
         type="button"
@@ -148,8 +163,13 @@ export function FooterSupportButton() {
   )
 }
 
-export function FloatingSignupCta() {
-  if (!LAUNCH_ENABLED) {
+export function FloatingSignupCta({
+  affiliateCode = null,
+}: {
+  /** Prop serializable (string): la isla cliente no recibe objetos. */
+  affiliateCode?: string | null
+}) {
+  if (!affiliateCtaEnabled(LAUNCH_ENABLED, affiliateCode)) {
     return (
       <button
         type="button"
@@ -163,7 +183,7 @@ export function FloatingSignupCta() {
   }
   return (
     <a
-      href="/registro"
+      href={affiliateCode ? affiliateRegisterPath(affiliateCode) : "/registro"}
       className="relative hidden shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-1 text-xs font-bold text-emerald-300 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 after:absolute after:inset-0 after:-m-2 after:content-[''] sm:inline-flex sm:text-sm"
     >
       Empezar gratis <span aria-hidden="true">→</span>

@@ -53,6 +53,7 @@ const TABLES = [
   "user_section_permissions","user_module_permissions","user_module_prefs",
   "connector_connections","user_mp_tokens","clients","tenant_mp_tokens",
   "signup_handoffs",
+  "affiliates",
   "tenants",
 ]
 
@@ -183,6 +184,31 @@ try {
     }
     await client.query("SELECT set_config('app.platform','',false)")
   }
+
+  // 6. affiliates (plan speilink-afiliados): con RLS (arriba) y solo visible
+  // por SU afiliado o plataforma — sin contexto y bajo un contexto de
+  // tenant la tabla está VACÍA para el rol de la app (lecturas puras: el
+  // chequeo de fila propia/ajena lo ejercita scripts/verify-afiliados.mjs).
+  await client.query(
+    "SELECT set_config('app.tenant_id','',false), set_config('app.platform','',false), set_config('app.affiliate_id','',false)"
+  )
+  const anonAffiliates = await client.query(
+    "SELECT count(*)::int AS n FROM affiliates"
+  )
+  if (anonAffiliates.rows[0].n !== 0) {
+    fail("affiliates", `sin contexto se ven ${anonAffiliates.rows[0].n} filas (debe ser 0)`)
+  }
+  await client.query("SELECT set_config('app.tenant_id', $1, false)", [LEGACY])
+  const tenantCtxAffiliates = await client.query(
+    "SELECT count(*)::int AS n FROM affiliates"
+  )
+  if (tenantCtxAffiliates.rows[0].n !== 0) {
+    fail(
+      "affiliates",
+      `un contexto de tenant ve ${tenantCtxAffiliates.rows[0].n} filas (debe ser 0)`
+    )
+  }
+  await client.query("SELECT set_config('app.tenant_id','',false)")
 
   if (failures.length > 0) {
     console.error(`\n${failures.length} fallos de aislamiento`)

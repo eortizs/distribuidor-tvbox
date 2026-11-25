@@ -1,12 +1,17 @@
 import type { Metadata } from "next"
 import Link from "next/link"
+import { cookies } from "next/headers"
 import { LockIcon } from "lucide-react"
 
 import { Wordmark } from "@/components/short/brand"
 import { SignupForm } from "@/components/short/signup-form"
 import { googleSignupReady } from "@/server/auth/google"
-import { selfSignupEnabled } from "@/server/onboarding/signup"
+import {
+  resolveSignupAffiliate,
+  selfSignupEnabled,
+} from "@/server/onboarding/signup"
 import { hostSlugPrefix, tenantBaseHost } from "@/server/tenant/hosts"
+import { AFFILIATE_COOKIE, normalizeAffiliateCode } from "@/lib/afiliados"
 import { connection } from "next/server"
 
 /**
@@ -15,6 +20,12 @@ import { connection } from "next/server"
  * gate de sesión. `connection()` lee el interruptor en CADA petición (sin
  * eso el «abierto/cerrado» se hornearía con el valor del build) y con
  * `instant = false` la página jamás se prerenderiza.
+ *
+ * Afiliados (§6.6): el código viene de `?af=` (gana) o de la cookie de
+ * atribución del enlace; se REVALIDA contra BD (exista + activo) en cada
+ * petición. Con invitación válida el formulario se muestra aunque
+ * `SELF_SIGNUP_ENABLED` siga apagado; con código inválido se muestra el
+ * MISMO estado cerrado de siempre (sin oráculo).
  */
 export const instant = false
 
@@ -50,14 +61,22 @@ const SIGNUP_ERRORS: Record<string, string> = {
 export default async function SignupPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; businessName?: string; slug?: string }>
+  searchParams: Promise<{ error?: string; businessName?: string; slug?: string; af?: string }>
 }) {
   await connection()
-  const enabled = selfSignupEnabled()
   const baseHost = tenantBaseHost()
   const prefix = hostSlugPrefix()
   const params = await searchParams
   const oauthError = params.error ? SIGNUP_ERRORS[params.error] ?? null : null
+
+  // Afiliado de la visita: query (?af=) gana sobre cookie de atribución; el
+  // código se revalida contra BD en CADA petición (suspendido = cerrado).
+  const cookieStore = await cookies()
+  const cookieCode = normalizeAffiliateCode(
+    cookieStore.get(AFFILIATE_COOKIE)?.value
+  )
+  const affiliate = await resolveSignupAffiliate(params.af ?? cookieCode)
+  const enabled = selfSignupEnabled() || affiliate !== null
 
   return (
     <div className="flex min-h-svh flex-col bg-white text-[#0F172A]">
@@ -131,6 +150,7 @@ export default async function SignupPage({
                   oauthError={oauthError}
                   initialBusinessName={params.businessName ?? ""}
                   initialSlug={params.slug ?? ""}
+                  affiliateCode={affiliate?.code ?? null}
                 />
               ) : (
                 <div className="flex flex-col items-center gap-3 py-10 text-center">

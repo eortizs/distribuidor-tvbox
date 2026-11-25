@@ -3,9 +3,13 @@ import type { Metadata } from "next"
 import { DashboardShell } from "@/components/dashboard/dashboard-shell"
 import { AppSplash } from "@/components/app-splash"
 import { RealtimeProvider } from "@/components/realtime/realtime-provider"
+import { PlatformShell } from "@/components/plataforma/platform-shell"
+import { isAffiliateRole, isPlatformRole } from "@/server/auth/types"
 import { requireUser } from "@/server/auth/guards"
 import { getVisibleSectionKeys } from "@/server/auth/permissions"
 import { getSaldosActual } from "@/server/saldo/service"
+import { resolveTenantHost } from "@/server/tenant/hosts"
+import { requestHost } from "@/server/tenant/request-host"
 import { effectiveDbContext, findTenantById } from "@/server/tenant/context"
 
 export const instant = false
@@ -18,12 +22,35 @@ export async function generateMetadata(): Promise<Metadata> {
   return tenant ? { title: { default: tenant.name, template: `%s · ${tenant.name}` } } : {}
 }
 
+/**
+ * Layout del grupo del PANEL: sirve TODOS los hosts con panel (legado
+ * `tvbox`, negocios `<slug>.spei.link` y plataforma). La rama del HOST DE
+ * PLATAFORMA (2026-11-24) monta `PlatformShell` con los cinco bloques
+ * (inicio, módulos, clientes, finanzas, ayuda) y SIN saldos ni branding de
+ * tenant — las cuentas de plataforma y afiliado no tienen tenant; el legado
+ * y los negocios conservan el DashboardShell intacto.
+ */
 export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode
 }) {
   const user = await requireUser("core")
+  const hostKind = resolveTenantHost(await requestHost()).kind
+  if (
+    hostKind === "platform" &&
+    user.tenantId === null &&
+    (isPlatformRole(user.role) || isAffiliateRole(user.role))
+  ) {
+    return (
+      <RealtimeProvider>
+        <AppSplash logo="speilink" />
+        <PlatformShell user={{ username: user.username, role: user.role }}>
+          {children}
+        </PlatformShell>
+      </RealtimeProvider>
+    )
+  }
   const context = await effectiveDbContext()
   const tenant = context?.tenantId ? await findTenantById(context.tenantId) : null
   const [visibleSections, saldos] = await Promise.all([

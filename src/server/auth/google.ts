@@ -386,9 +386,18 @@ export interface GoogleSignupPending {
   businessName: string
   slug: string
   nonce: string
+  /**
+   * Código de afiliado validado al ARRANCAR el alta (plan speilink-afiliados
+   * §6.6); el callback lo REVALIDA contra BD antes de crear el negocio.
+   */
+  affiliateCode?: string | null
 }
 
-/** Cookie del alta pendiente: `businessName|slug|nonce|exp` firmados. */
+/**
+ * Cookie del alta pendiente: JSON en base64url + firma HMAC. Fue `|`-separado;
+ * un nombre de negocio con `|` (o con el separador en cualquier campo) rompía
+ * el parseo y el flujo moría a mitad del consentimiento.
+ */
 export function createGoogleSignupCookie(
   input: GoogleSignupPending,
   client: GoogleClient
@@ -402,7 +411,13 @@ export function createGoogleSignupCookie(
     )
   }
   const exp = Date.now() + STATE_TTL_SECONDS * 1000
-  const payload = `${input.businessName}|${input.slug}|${input.nonce}|${exp}`
+  const payload = JSON.stringify({
+    businessName: input.businessName,
+    slug: input.slug,
+    nonce: input.nonce,
+    affiliateCode: input.affiliateCode ?? null,
+    exp,
+  })
   return `${Buffer.from(payload).toString("base64url")}.${linkHmac(payload, key)}`
 }
 
@@ -432,12 +447,35 @@ export function verifyGoogleSignupCookie(
   if (expected.length !== received.length || !timingSafeEqual(expected, received)) {
     return null
   }
-  const parts = payload.split("|")
-  if (parts.length !== 4) return null
-  const [businessName, slug, nonce, exp] = parts
-  const fresh = /^\d+$/.test(exp) && Number(exp) > Date.now()
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(payload)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== "object" || parsed === null) return null
+  const { businessName, slug, nonce, affiliateCode, exp } = parsed as {
+    businessName?: unknown
+    slug?: unknown
+    nonce?: unknown
+    affiliateCode?: unknown
+    exp?: unknown
+  }
+  if (
+    typeof businessName !== "string" ||
+    typeof slug !== "string" ||
+    typeof nonce !== "string" ||
+    typeof exp !== "number"
+  ) {
+    return null
+  }
+  const fresh = exp > Date.now()
+  const code =
+    typeof affiliateCode === "string" && affiliateCode.length > 0
+      ? affiliateCode
+      : null
   if (!businessName || !slug || !fresh || nonce !== expectedNonce) return null
-  return { businessName, slug, nonce }
+  return { businessName, slug, nonce, affiliateCode: code }
 }
 
 export function googleSignupCookieOptions() {

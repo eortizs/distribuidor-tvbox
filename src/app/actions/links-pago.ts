@@ -1,10 +1,11 @@
 "use server"
 
-import { isOwnerRole } from "@/server/auth/types"
+import { isOwnerRole, isBranchRole } from "@/server/auth/types"
 import { revalidatePath } from "next/cache"
 import QRCode from "qrcode"
 
 import { requireUser } from "@/server/auth/guards"
+import { getClient } from "@/server/clientes/registry"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
@@ -100,6 +101,19 @@ export async function createPaymentOrderAction(input: {
     return {
       error: "Demasiadas órdenes creadas en un minuto; espera unos segundos e inténtalo de nuevo.",
       order: null,
+    }
+  }
+
+  // Cliente del registro local (fase 2 de la segmentación): la sucursal solo
+  // puede asociar SUS clientes (dueño = quien lo crea); el propietario, todos
+  // los del negocio. Un id ajeno o de otro tenant responde 422 sin crear.
+  if (input.clientId) {
+    const client = await getClient(input.clientId)
+    if (!client || (isBranchRole(user.role) && client.createdBy !== user.id)) {
+      return {
+        error: "El cliente seleccionado no existe o no pertenece a tu negocio.",
+        order: null,
+      }
     }
   }
 

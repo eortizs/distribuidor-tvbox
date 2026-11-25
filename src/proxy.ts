@@ -1,10 +1,11 @@
-import { isOwnerRole } from "@/server/auth/types"
+import { isOwnerRole, homePathForUser } from "@/server/auth/types"
 import { NextResponse, type NextRequest } from "next/server"
 
 import { findSessionUser } from "@/server/auth/session-lookup"
 import { systemPool } from "@/server/db"
 import { shortLinkHost } from "@/server/site-url"
 import { isPaymentLinkCode } from "@/lib/links-pago"
+import { handleAffiliateShortRequest } from "@/server/afiliados/proxy"
 import {
   modulesForKind,
   routeModuleForPath,
@@ -118,6 +119,13 @@ export async function proxy(request: NextRequest) {
       return NextResponse.rewrite(url)
     }
 
+    // Afiliados (plan speilink-afiliados §6.4): raíz con cookie de
+    // atribución, /afiliado y /afiliado/CÓDIGO — ANTES de la validación de
+    // código de link (ese espacio `spei.link/<4>` es de links de pago).
+    // El módulo devuelve null cuando la petición no es de afiliados.
+    const affiliateResponse = await handleAffiliateShortRequest(request)
+    if (affiliateResponse) return affiliateResponse
+
     if (segment.length > 0 && !isPaymentLinkCode(segment.toUpperCase())) {
       return new NextResponse("Link no encontrado", {
         status: 404,
@@ -204,8 +212,10 @@ export async function proxy(request: NextRequest) {
   }
 
   if (session && PUBLIC_PATHS.has(pathname)) {
+    // Destino por perfil (reestructura de bloques 2026-11-24): plataforma y
+    // afiliado → /inicio del host de plataforma, negocios → /clientes.
     const url = request.nextUrl.clone()
-    url.pathname = "/clientes"
+    url.pathname = homePathForUser(session)
     return NextResponse.redirect(url)
   }
 

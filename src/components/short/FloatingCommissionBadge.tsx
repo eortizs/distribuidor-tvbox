@@ -6,7 +6,12 @@ import { FloatingSignupCta } from "@/components/short/landing-cta"
 
 const SHOW_AFTER_SCROLL_PX = 450
 
-export function FloatingCommissionBadge() {
+export function FloatingCommissionBadge({
+  affiliateCode = null,
+}: {
+  /** Prop serializable (string) desde la landing; null en la común. */
+  affiliateCode?: string | null
+}) {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
@@ -47,7 +52,7 @@ export function FloatingCommissionBadge() {
       <span className="min-w-0 truncate text-[11px] font-medium sm:text-sm">
         Confirmación automática en todas tus transferencias, siempre
       </span>
-      <FloatingSignupCta />
+      <FloatingSignupCta affiliateCode={affiliateCode} />
     </div>
   )
 }

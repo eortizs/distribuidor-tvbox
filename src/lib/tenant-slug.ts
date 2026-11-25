@@ -30,6 +30,10 @@ export const PUBLIC_RESERVED_SLUGS = new Set([
   "mercadopago",
   "mercado-pago",
   "banxico",
+  // Namespace de afiliados (plan speilink-afiliados): nadie registra ese
+  // subdominio (el enlace público vive en la ruta /afiliado del apex).
+  "afiliado",
+  "afiliados",
 ])
 
 export type SlugAvailability =

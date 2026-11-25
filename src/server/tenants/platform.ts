@@ -31,6 +31,8 @@ export interface PlatformTenantRow {
   whatsappNumber: string | null
   ownerEmail: string | null
   userCount: number
+  /** Código del afiliado que trajo el negocio; null si llegó sin enlace. */
+  affiliateCode: string | null
   createdAt: Date
 }
 
@@ -46,10 +48,13 @@ export async function listPlatformTenants(): Promise<PlatformTenantRow[]> {
         `SELECT t.id, t.slug, t.name, t.kind, t.status, t.modules,
                 t.whatsapp_number, t.created_at,
                 owner.username AS owner_email,
+                ref.code AS affiliate_code,
                 (SELECT count(*)::int FROM users u2 WHERE u2.tenant_id = t.id) AS user_count
            FROM tenants t
            LEFT JOIN users owner
              ON owner.tenant_id = t.id AND owner.role = 'propietario'
+           LEFT JOIN affiliates ref
+             ON ref.id = t.referred_by_affiliate_id
           ORDER BY t.created_at`
       )
       return result.rows.map((row) => ({
@@ -62,6 +67,7 @@ export async function listPlatformTenants(): Promise<PlatformTenantRow[]> {
         whatsappNumber: (row.whatsapp_number as string | null) ?? null,
         ownerEmail: (row.owner_email as string | null) ?? null,
         userCount: Number(row.user_count ?? 0),
+        affiliateCode: (row.affiliate_code as string | null) ?? null,
         createdAt: row.created_at as Date,
       }))
     })
@@ -81,6 +87,12 @@ export interface CreateTenantInput {
    * (sin contraseña local) que entra por «Continuar con Google».
    */
   ownerGoogleSub?: string | null
+  /**
+   * Afiliado que trajo el negocio (plan speilink-afiliados §6.6): la
+   * atribución se escribe en la MISMA transacción que el alta y es única y
+   * para siempre. null/omitido = alta sin afiliado.
+   */
+  referredByAffiliateId?: string | null
 }
 
 export interface CreatedTenant {
@@ -129,9 +141,14 @@ export async function createTenant(
     withTransaction(async (tx) => {
       try {
         await tx.query(
-          `INSERT INTO tenants (id, slug, name, kind, status, modules, use_platform_mp_account)
-           VALUES ($1, $2, $3, 'business', 'active', ARRAY['core']::text[], false)`,
-          [tenantId, slug, name]
+          `INSERT INTO tenants (id, slug, name, kind, status, modules, use_platform_mp_account, referred_by_affiliate_id)
+           VALUES ($1, $2, $3, 'business', 'active', ARRAY['core']::text[], false, $4)`,
+          [
+            tenantId,
+            slug,
+            name,
+            input.referredByAffiliateId ?? null,
+          ]
         )
         // El propietario y su entidad Cuenta viven en la MISMA transacción
         // (dual GUC): valida el documento umeJSON y crea el usuario con rol

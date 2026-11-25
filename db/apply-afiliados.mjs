@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+// Aplica db/afiliados-schema.sql (plan speilink-afiliados). AL FINAL de la
+// cadena de despliegue: después de apply-onboarding-signup y ANTES de
+// verify-tenant-rls. Migraciones con el dueño (DATABASE_URL_ADMIN).
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+import { Client } from "pg";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+if (!process.env.DATABASE_URL_ADMIN && !process.env.DATABASE_URL) {
+  const envPath = path.join(root, ".env");
+  try {
+    const env = readFileSync(envPath, "utf8");
+    for (const key of ["DATABASE_URL_ADMIN", "DATABASE_URL"]) {
+      const line = env.split("\n").find((row) => row.startsWith(`${key}=`));
+      if (line) process.env[key] ??= line.slice(`${key}=`.length).trim();
+      if (process.env[key]) break;
+    }
+  } catch {
+    // Sin .env legible: se valida abajo.
+  }
+}
+
+const url = process.env.DATABASE_URL_ADMIN || process.env.DATABASE_URL;
+if (!url) {
+  console.error("DATABASE_URL_ADMIN (o DATABASE_URL) is required");
+  process.exit(1);
+}
+
+const sql = readFileSync(path.join(root, "db", "afiliados-schema.sql"), "utf8");
+
+const client = new Client({ connectionString: url });
+await client.connect();
+try {
+  await client.query(sql);
+  const affiliates = await client.query("SELECT count(*)::int AS n FROM affiliates");
+  const roles = await client.query(
+    `SELECT role, count(*)::int AS n FROM users GROUP BY role ORDER BY role`
+  );
+  console.log(
+    "afiliados-schema.sql aplicado. Afiliados:",
+    affiliates.rows[0].n,
+    "Roles:",
+    JSON.stringify(roles.rows)
+  );
+} finally {
+  await client.end();
+}

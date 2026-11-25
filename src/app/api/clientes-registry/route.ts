@@ -1,20 +1,27 @@
 import { forbiddenResponse, requireApiUser } from "@/server/auth/api"
-import { createClient, listClients } from "@/server/clientes/registry"
+import { isBranchRole } from "@/server/auth/types"
+import { createClient, listClients, type ClientScope } from "@/server/clientes/registry"
 
 export const instant = false
 
 /**
  * Registro local de clientes (Fase 3): CORE — solo tenants de negocio lo
- * usan (el legado gestiona clientes FlujoTV en /clientes). El listado es
- * del tenant (RLS); la alta exige sesión.
+ * usan (el legado gestiona clientes FlujoTV en /clientes). El listado es del
+ * tenant (RLS) SEGMENTADO por perfil (fase 2, 2026-11-24): la sucursal solo
+ * ve SUS clientes (dueño = quien lo crea); el propietario, todos. La alta
+ * exige sesión.
  */
+function scopeOf(userId: string, role: string): ClientScope {
+  return { userId, branchScoped: isBranchRole(role) }
+}
+
 export async function GET(request: Request) {
   const user = await requireApiUser("core")
   if (!user) return forbiddenResponse()
 
   const params = new URL(request.url).searchParams
   const q = params.get("q")?.trim() || undefined
-  const clients = await listClients(q)
+  const clients = await listClients(q, false, scopeOf(user.id, user.role))
   return Response.json({
     ok: true,
     data: clients.map((client) => ({
@@ -23,6 +30,7 @@ export async function GET(request: Request) {
       whatsappPhone: client.whatsappPhone,
       notes: client.notes,
       status: client.status,
+      ownerEmail: client.ownerEmail,
       linkCount: client.linkCount,
       createdAt: client.createdAt.toISOString(),
       updatedAt: client.updatedAt.toISOString(),

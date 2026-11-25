@@ -24,7 +24,11 @@ import {
   hostTenantIdForRequest,
   validateSessionHost,
 } from "@/server/tenant/identity"
-import { findTenantBySlug, setRequestContext } from "@/server/tenant/context"
+import {
+  findTenantBySlug,
+  runAsPlatform,
+  setRequestContext,
+} from "@/server/tenant/context"
 import { resolveTenantHost } from "@/server/tenant/hosts"
 import { requestHost } from "@/server/tenant/request-host"
 import { postLoginPathFor } from "@/server/onboarding/status"
@@ -103,7 +107,15 @@ export async function loginAction(
     return { error: "Esta cuenta de negocio está suspendida. Contacta a soporte." }
   }
 
-  const user = await findUserByUsername(email)
+  // La búsqueda corre bajo contexto EXPLÍCITO (als.run sí cruza los awaits;
+  // enterWith no — hallazgo 2026-11-24): en el host de plataforma el
+  // fallback por headers resuelve null ⇒ TENANT_STRICT ⇒ 0 filas ⇒
+  // «Credenciales incorrectas» con credenciales válidas. En hosts de
+  // tenant/legado el fallback por headers ya resuelve el tenant del host.
+  const user =
+    entry.hostKind === "platform"
+      ? await runAsPlatform(() => findUserByUsername(email))
+      : await findUserByUsername(email)
   if (
     !user ||
     !user.passwordHash ||

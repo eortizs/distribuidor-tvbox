@@ -37,6 +37,7 @@ export function SignupForm({
   oauthError,
   initialBusinessName = "",
   initialSlug = "",
+  affiliateCode = null,
 }: {
   baseHost: string
   slugPrefix: string
@@ -46,6 +47,8 @@ export function SignupForm({
   oauthError: string | null
   initialBusinessName?: string
   initialSlug?: string
+  /** Afiliado REVALIDADO por la página; null en el registro público. */
+  affiliateCode?: string | null
 }) {
   const [state, formAction, pending] = useActionState<SignupBusinessState, FormData>(
     signupBusinessAction,
@@ -141,6 +144,7 @@ export function SignupForm({
             password: String(fd.get("password") ?? ""),
             legal: fd.get("legal") === "on",
             website: String(fd.get("website") ?? ""),
+            affiliateCode: String(fd.get("af") ?? "") || null,
           }),
         })
         const data = (await response.json()) as {
@@ -183,6 +187,21 @@ export function SignupForm({
           autoComplete="off"
         />
       </div>
+
+      {/* Atribución del afiliado: la página ya la revalidó; el servidor la
+          revalida OTRA VEZ al momento del alta (nunca se confía en el
+          formulario). Viaja también en el fallback POST. */}
+      {affiliateCode ? (
+        <input type="hidden" name="af" value={affiliateCode} />
+      ) : null}
+
+      {affiliateCode ? (
+        <p className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 text-xs leading-relaxed text-[#065F46]">
+          Llegaste desde el enlace de <span className="font-semibold">afiliado {affiliateCode}</span>: tu
+          registro quedará vinculado a quien te invitó. No cambia nada en tu
+          panel ni en tus pagos.
+        </p>
+      ) : null}
 
       {(state.error !== null || fallbackError !== null || oauthError !== null) && (
         <p

@@ -104,10 +104,14 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id uuid REFERENCES tenants(id)
 
 -- ---------------------------------------------------------------------------
 -- Backfill: todo lo existente pertenece al tenant legado (hoy no hay otros).
--- Se hace ANTES de añadir el NOT NULL. Idempotente: solo toca NULLs.
+-- Se hace ANTES de añadir el NOT NULL. Idempotente: solo toca NULLs —
+-- EXCEPTO las cuentas SIN tenant por diseño (plataforma y afiliado, §Fase 2
+-- y plan speilink-afiliados): una re-ejecución de esta migración jamás debe
+-- rebasarlas al legado (rompería validateSessionHost en el host de
+-- plataforma).
 -- ---------------------------------------------------------------------------
-UPDATE users                SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL;
-UPDATE sessions             SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL;
+UPDATE users                SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL AND role NOT IN ('plataforma','afiliado');
+UPDATE sessions             SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL AND user_id IN (SELECT id FROM users WHERE role NOT IN ('plataforma','afiliado'));
 UPDATE eve_sessions         SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL;
 UPDATE entities             SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL;
 UPDATE entity_events        SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL;
@@ -147,9 +151,12 @@ UPDATE connector_connections SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090
 UPDATE user_mp_tokens       SET tenant_id = '8e83b5cc-9f43-28b2-a8f3-2882fef090a8' WHERE tenant_id IS NULL;
 
 -- ---------------------------------------------------------------------------
--- NOT NULL tras el backfill
+-- NOT NULL tras el backfill. OJO sessions.tenant_id NO lleva SET NOT NULL:
+-- su estado FINAL es nullable (sesiones de plataforma y afiliado, §Fase 2 y
+-- plan speilink-afiliados; apply-roles-rename lo relaja con DROP NOT NULL).
+-- Ponerlo aquí rompería toda re-ejecución de la cadena en cuanto exista una
+-- sesión sin tenant (23502 en el ALTER).
 -- ---------------------------------------------------------------------------
-ALTER TABLE sessions             ALTER COLUMN tenant_id SET NOT NULL;
 ALTER TABLE eve_sessions         ALTER COLUMN tenant_id SET NOT NULL;
 ALTER TABLE entities             ALTER COLUMN tenant_id SET NOT NULL;
 ALTER TABLE entity_events        ALTER COLUMN tenant_id SET NOT NULL;

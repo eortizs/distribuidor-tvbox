@@ -1,8 +1,15 @@
 import { forbiddenResponse, requireApiUser } from "@/server/auth/api"
-import { archiveClient, updateClient } from "@/server/clientes/registry"
+import { isBranchRole } from "@/server/auth/types"
+import { archiveClient, updateClient, type ClientScope } from "@/server/clientes/registry"
 import { AppError } from "@/server/umejson/types"
 
 export const instant = false
+
+function scopeOf(userId: string, role: string): ClientScope {
+  // Sucursal: solo puede editar/archivar SUS clientes (un id ajeno responde
+  // 404 sin oráculo, igual que uno inexistente).
+  return { userId, branchScoped: isBranchRole(role) }
+}
 
 function errorResponse(error: unknown): Response {
   if (error instanceof AppError) {
@@ -32,18 +39,22 @@ export async function PATCH(
     )
   }
   try {
-    const client = await updateClient(id, {
-      ...(body.name !== undefined ? { name: String(body.name) } : {}),
-      ...(body.whatsappPhone !== undefined
-        ? {
-            whatsappPhone:
-              body.whatsappPhone == null ? null : String(body.whatsappPhone),
-          }
-        : {}),
-      ...(body.notes !== undefined
-        ? { notes: body.notes == null ? null : String(body.notes) }
-        : {}),
-    })
+    const client = await updateClient(
+      id,
+      {
+        ...(body.name !== undefined ? { name: String(body.name) } : {}),
+        ...(body.whatsappPhone !== undefined
+          ? {
+              whatsappPhone:
+                body.whatsappPhone == null ? null : String(body.whatsappPhone),
+            }
+          : {}),
+        ...(body.notes !== undefined
+          ? { notes: body.notes == null ? null : String(body.notes) }
+          : {}),
+      },
+      scopeOf(user.id, user.role)
+    )
     return Response.json({ ok: true, data: client })
   } catch (error) {
     return errorResponse(error)
@@ -58,7 +69,7 @@ export async function DELETE(
   if (!user) return forbiddenResponse()
   const { id } = await params
   try {
-    await archiveClient(id)
+    await archiveClient(id, scopeOf(user.id, user.role))
     return Response.json({ ok: true })
   } catch (error) {
     return errorResponse(error)

@@ -44,6 +44,27 @@ export async function requirePlatformUser(): Promise<AuthUser> {
   return user
 }
 
+/**
+ * Portal del afiliado (plan speilink-afiliados §6.8): host de plataforma Y
+ * rol `afiliado` — mismo host que la consola (la cookie de cuentas sin
+ * tenant solo vale ahí). Matriz de acceso: afiliado entra, plataforma 404,
+ * propietario/sucursal → /login (su sesión no vale en este host), sin
+ * sesión → /login.
+ */
+export async function requireAffiliateUser(): Promise<AuthUser> {
+  const { resolveTenantHost } = await import("@/server/tenant/hosts")
+  const { requestHost } = await import("@/server/tenant/request-host")
+  const { isAffiliateRole } = await import("./types")
+  if (resolveTenantHost(await requestHost()).kind !== "platform") {
+    notFound()
+  }
+  const user = await requireUser("core")
+  if (!isAffiliateRole(user.role)) {
+    notFound()
+  }
+  return user
+}
+
 export async function requireRole(
   role: UserRole,
   module: TenantModule

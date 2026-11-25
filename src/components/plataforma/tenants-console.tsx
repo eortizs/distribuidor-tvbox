@@ -41,15 +41,22 @@ export interface PlatformTenantItem {
   whatsappNumber: string | null
   ownerEmail: string | null
   userCount: number
+  /** Código del afiliado que trajo el negocio; null si llegó sin enlace. */
+  affiliateCode: string | null
   createdAtLabel: string
 }
 
 /**
- * Consola de plataforma (§2.4): lista de tenants, alta con propietario
- * (contraseña temporal mostrada UNA vez), suspender/reactivar y
- * restablecimiento de contraseña del propietario.
+ * Módulo «Tenants» de la consola de plataforma (§2.4): lista de negocios,
+ * alta con propietario (contraseña temporal mostrada UNA vez),
+ * suspender/reactivar y restablecimiento de contraseña del propietario.
+ * Vive en `/platform/tenants` desde que la consola se volvió hub de módulos.
  */
-export function PlatformConsole({ tenants }: { tenants: PlatformTenantItem[] }) {
+export function TenantsConsole({
+  tenants,
+}: {
+  tenants: PlatformTenantItem[]
+}) {
   const [altaOpen, setAltaOpen] = useState(false)
   const [created, setCreated] = useState<{
     slug: string
@@ -71,21 +78,21 @@ export function PlatformConsole({ tenants }: { tenants: PlatformTenantItem[] }) 
     setAltaError(null)
     setHandleCreatePending(true)
     try {
-    const state = await createTenantAction(
-      { error: null, created: null, temporaryPassword: null },
-      formData
-    )
-    if (state.error || !state.created || !state.temporaryPassword) {
-      setAltaError(state.error ?? "No fue posible crear el tenant.")
-      return
-    }
-    setCreated({
-      slug: state.created.slug,
-      ownerEmail: state.created.ownerEmail,
-      password: state.temporaryPassword,
-    })
-    setAltaOpen(false)
-    toast("Tenant creado")
+      const state = await createTenantAction(
+        { error: null, created: null, temporaryPassword: null },
+        formData
+      )
+      if (state.error || !state.created || !state.temporaryPassword) {
+        setAltaError(state.error ?? "No fue posible crear el tenant.")
+        return
+      }
+      setCreated({
+        slug: state.created.slug,
+        ownerEmail: state.created.ownerEmail,
+        password: state.temporaryPassword,
+      })
+      setAltaOpen(false)
+      toast("Tenant creado")
     } finally {
       setHandleCreatePending(false)
     }
@@ -133,6 +140,7 @@ export function PlatformConsole({ tenants }: { tenants: PlatformTenantItem[] }) 
               <th className="px-3 py-2 font-medium">Tenant</th>
               <th className="px-3 py-2 font-medium">Estado</th>
               <th className="px-3 py-2 font-medium">Propietario</th>
+              <th className="px-3 py-2 font-medium">Afiliado</th>
               <th className="px-3 py-2 font-medium">Cuentas</th>
               <th className="px-3 py-2 font-medium">WhatsApp</th>
               <th className="px-3 py-2 font-medium">Creado</th>
@@ -158,6 +166,13 @@ export function PlatformConsole({ tenants }: { tenants: PlatformTenantItem[] }) 
                   )}
                 </td>
                 <td className="px-3 py-2">{tenant.ownerEmail ?? "—"}</td>
+                <td className="px-3 py-2">
+                  {tenant.affiliateCode ? (
+                    <span className="font-mono text-xs">{tenant.affiliateCode}</span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">{tenant.userCount}</td>
                 <td className="px-3 py-2">
                   {tenant.whatsappNumber ? (

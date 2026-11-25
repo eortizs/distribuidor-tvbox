@@ -43,6 +43,12 @@ export interface TenantContext {
   tenantId: string | null
   /** Contexto de consola de plataforma (ve todo). */
   platform: boolean
+  /**
+   * Contexto de PORTAL DE AFILIADO (plan speilink-afiliados §6.2): fija
+   * `app.affiliate_id` para que RLS deje ver SOLO su fila y sus negocios
+   * referidos. Es el único caso con tenantId null y platform false.
+   */
+  affiliateId?: string
   /** Origen del contexto, para trazabilidad en logs. */
   source: "explicit" | "session" | "host" | "fallback"
 }
@@ -76,6 +82,25 @@ export async function runAsPlatform<T>(fn: () => Promise<T>): Promise<T> {
   const context: TenantContext = {
     tenantId: null,
     platform: true,
+    source: "explicit",
+  }
+  return als.run(context, fn)
+}
+
+/**
+ * Corre `fn` como PORTAL DE AFILIADO (plan speilink-afiliados §6.2): fija
+ * `app.affiliate_id` y NADA más — RLS deja ver su propia fila y los negocios
+ * que llegaron con su enlace. El portal jamás corre con contexto de
+ * plataforma ni con systemPool (mínimo privilegio, §5.8 del plan).
+ */
+export async function runAsAffiliate<T>(
+  affiliateId: string,
+  fn: () => Promise<T>
+): Promise<T> {
+  const context: TenantContext = {
+    tenantId: null,
+    platform: false,
+    affiliateId,
     source: "explicit",
   }
   return als.run(context, fn)

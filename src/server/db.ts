@@ -62,6 +62,13 @@ export async function setTenantContextInTx(
       effective.tenantId,
     ])
   }
+  // Portal de afiliado (runAsAffiliate): su GUC propio para que RLS deje
+  // ver su fila y sus negocios referidos (plan speilink-afiliados §6.2).
+  if (isValidTenantId(effective.affiliateId)) {
+    await client.query("SELECT set_config('app.affiliate_id', $1, true)", [
+      effective.affiliateId,
+    ])
+  }
 }
 
 async function setContextInTx(
@@ -85,11 +92,16 @@ async function setContextInSession(
       context.tenantId,
     ])
   }
+  if (isValidTenantId(context.affiliateId)) {
+    await client.query("SELECT set_config('app.affiliate_id', $1, false)", [
+      context.affiliateId,
+    ])
+  }
 }
 
 async function resetContextSession(client: PoolClient): Promise<void> {
   await client.query(
-    "SELECT set_config('app.tenant_id', '', false), set_config('app.platform', '', false)"
+    "SELECT set_config('app.tenant_id', '', false), set_config('app.platform', '', false), set_config('app.affiliate_id', '', false)"
   )
 }
 

@@ -21,9 +21,11 @@ import {
   checkSlugAvailability,
   isSignupRateLimited,
   performBusinessSignup,
+  resolveSignupAffiliate,
   selfSignupEnabled,
   signupCallerIp,
 } from "@/server/onboarding/signup"
+import { normalizeAffiliateCode } from "@/lib/afiliados"
 import { shortHost } from "@/server/tenant/hosts"
 
 /**
@@ -61,6 +63,7 @@ export async function startGoogleSignupAction(formData: FormData): Promise<void>
   const slug = String(formData.get("slug") ?? "").trim().toLowerCase()
   const legal = formData.get("legal") === "on" || formData.get("legal") === "true"
   const honeypot = String(formData.get("website") ?? "").trim()
+  const rawAffiliate = String(formData.get("af") ?? "")
 
   // URL de regreso al formulario (con el error y los campos conservados).
   // redirect() es never (Next): envolver aquí no rompe el análisis de TS.
@@ -69,10 +72,16 @@ export async function startGoogleSignupAction(formData: FormData): Promise<void>
     url.searchParams.set("error", error)
     if (businessName) url.searchParams.set("businessName", businessName)
     if (slug) url.searchParams.set("slug", slug)
+    // Los retornos conservan &af= para que el reintento siga atribuido.
+    const affiliateQuery = normalizeAffiliateCode(rawAffiliate)
+    if (affiliateQuery) url.searchParams.set("af", affiliateQuery)
     return url.toString()
   }
 
-  if (!selfSignupEnabled()) {
+  // Puerta (§6.6): afiliado válido O registro abierto. La revalidación de la
+  // invitación va ANTES de la cuota por IP; inválida = mismo «cerrado».
+  const affiliate = await resolveSignupAffiliate(rawAffiliate)
+  if (!affiliate && !selfSignupEnabled()) {
     redirect(backUrl("signup_closed"))
   }
   if (!googleSignupReady()) {
@@ -114,7 +123,10 @@ export async function startGoogleSignupAction(formData: FormData): Promise<void>
   const cookieStore = await cookies()
   cookieStore.set(
     GOOGLE_SIGNUP_COOKIE,
-    createGoogleSignupCookie({ businessName, slug, nonce }, kit.client),
+    createGoogleSignupCookie(
+      { businessName, slug, nonce, affiliateCode: affiliate?.code ?? null },
+      kit.client
+    ),
     googleSignupCookieOptions()
   )
   // Estado anti-CSRF del flujo: la misma técnica de /api/auth/google/start.
@@ -146,6 +158,8 @@ export async function signupBusinessAction(
       password: String(formData.get("password") ?? ""),
       legal: formData.get("legal") === "on" || formData.get("legal") === "true",
       website: String(formData.get("website") ?? ""),
+      // Afiliado del campo oculto: revalidado en el núcleo del alta.
+      affiliateCode: String(formData.get("af") ?? "") || null,
     },
     ip
   )

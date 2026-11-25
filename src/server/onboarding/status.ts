@@ -1,5 +1,6 @@
 import { systemPool } from "@/server/db"
 import { findTenantById, tenantIdOfUser } from "@/server/tenant/context"
+import { homePathForUser } from "@/server/auth/types"
 
 /**
  * Estado derivado del onboarding del negocio (Fase 1, §4.4 del plan): SIN
@@ -55,15 +56,25 @@ async function mpTokenActive(tenantId: string): Promise<boolean> {
 export const ONBOARDING_PATH = "/onboarding"
 
 /**
- * Destino tras iniciar sesión: el propietario de un negocio CON onboarding
- * incompleto vuelve al asistente (sin rebote desde /clientes: «Saltar» tiene
- * que funcionar y el siguiente login vuelve a sugerirlo). El resto va a su
+ * Destino tras iniciar sesión (§6.9; reestructura de bloques 2026-11-24):
+ * cuentas SIN tenant van a `/inicio` del host de plataforma (su shell de
+ * cinco bloques); el propietario de un negocio CON onboarding incompleto
+ * vuelve al asistente (sin rebote desde /clientes: «Saltar» tiene que
+ * funcionar y el siguiente login vuelve a sugerirlo). El resto va a su
  * pantalla de inicio de siempre.
  */
 export async function postLoginPathFor(userId: string): Promise<string> {
   try {
     const tenantId = await tenantIdOfUser(userId)
-    if (!tenantId) return "/clientes"
+    if (!tenantId) {
+      // Cuenta de plataforma o afiliado: el destino sale del PERFIL (el
+      // shell del panel con todo vacío jamás les toca).
+      const row = await systemPool.query<{ role: string }>(
+        "SELECT role FROM users WHERE id = $1",
+        [userId]
+      )
+      return homePathForUser({ role: row.rows[0]?.role ?? "" })
+    }
     const tenant = await findTenantById(tenantId)
     if (!tenant || tenant.kind !== "business") return "/clientes"
     if (tenant.status !== "active") return "/clientes"

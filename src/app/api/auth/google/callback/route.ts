@@ -29,6 +29,7 @@ import {
 } from "@/server/onboarding/handoff"
 import {
   isSignupRateLimited,
+  resolveSignupAffiliate,
   selfSignupEnabled,
 } from "@/server/onboarding/signup"
 import { updateUser } from "@/server/auth/users"
@@ -104,7 +105,9 @@ async function handleGoogleSignup(request: NextRequest): Promise<NextResponse | 
   const origin = `https://${host}`
   const kit = googleClientKit("speilink")
 
-  const failSignup = (reason: string, log?: unknown) => {
+  // Los retornos conservan &af= (código validado al ARRANCAR el alta; el
+  // error pudo ser ajeno a la invitación y el reintento sigue atribuido).
+  const failSignup = (reason: string, log?: unknown, keepAffiliateCode?: string | null) => {
     if (log) {
       console.error(
         JSON.stringify({
@@ -116,6 +119,7 @@ async function handleGoogleSignup(request: NextRequest): Promise<NextResponse | 
     }
     const url = new URL("/registro", origin)
     url.searchParams.set("error", reason)
+    if (keepAffiliateCode) url.searchParams.set("af", keepAffiliateCode)
     const response = NextResponse.redirect(url)
     response.cookies.set(GOOGLE_STATE_COOKIE, "", {
       ...googleStateCookieOptions(),
@@ -140,31 +144,37 @@ async function handleGoogleSignup(request: NextRequest): Promise<NextResponse | 
     kit.client
   )
   if (!pending) return failSignup("google_signup_state", "pending cookie invalid")
+  const keepAf = pending.affiliateCode ?? null
 
   if (request.nextUrl.searchParams.get("error")) {
-    return failSignup("google_signup_cancelled")
+    return failSignup("google_signup_cancelled", undefined, keepAf)
   }
   const code = request.nextUrl.searchParams.get("code")
-  if (!code) return failSignup("google_signup_invalid")
+  if (!code) return failSignup("google_signup_invalid", undefined, keepAf)
 
-  if (!selfSignupEnabled()) return failSignup("signup_closed")
+  // Puerta revalidada EN el canje (§6.6): la invitación pudo vencer o
+  // suspenderse durante el consentimiento; inválida = mismo «cerrado».
+  const affiliate = await resolveSignupAffiliate(pending.affiliateCode)
+  if (!affiliate && !selfSignupEnabled()) {
+    return failSignup("signup_closed")
+  }
   const ip =
     request.headers.get("cf-connecting-ip") ??
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
     "unknown"
-  if (isSignupRateLimited(ip)) return failSignup("signup_rate")
+  if (isSignupRateLimited(ip)) return failSignup("signup_rate", undefined, keepAf)
 
   let profile: Awaited<ReturnType<typeof exchangeGoogleCode>>
   try {
     profile = await exchangeGoogleCode(code, kit.redirectUri, kit.client)
   } catch (error) {
-    return failSignup("google_signup_failed", error)
+    return failSignup("google_signup_failed", error, keepAf)
   }
 
   // La disponibilidad puede haber cambiado durante el consentimiento.
   const slug = pending.slug
   const taken = await findTenantBySlug(slug).catch(() => null)
-  if (taken) return failSignup("signup_slug_taken")
+  if (taken) return failSignup("signup_slug_taken", undefined, keepAf)
 
   try {
     const created = await createTenant({
@@ -173,6 +183,8 @@ async function handleGoogleSignup(request: NextRequest): Promise<NextResponse | 
       ownerEmail: profile.email,
       ownerFullName: profile.name ?? undefined,
       ownerGoogleSub: profile.sub,
+      // Atribución única, en la misma transacción del alta.
+      referredByAffiliateId: affiliate?.id ?? null,
     })
     const handoff = await createSignupHandoff(created.tenantId, created.ownerId)
     const url = new URL(
@@ -194,16 +206,19 @@ async function handleGoogleSignup(request: NextRequest): Promise<NextResponse | 
         ts: new Date().toISOString(),
         event: "onboarding.google_signup_created",
         tenant: created.slug,
+        affiliate: affiliate?.code ?? null,
       })
     )
     return response
   } catch (error) {
     if (error instanceof AppError) {
-      if (error.code === "email_taken") return failSignup("google_signup_email_taken")
-      if (error.code === "slug_tomado" || error.code === "slug_invalido") {
-        return failSignup("signup_slug_taken")
+      if (error.code === "email_taken") {
+        return failSignup("google_signup_email_taken", undefined, keepAf)
       }
-      return failSignup("google_signup_failed", error)
+      if (error.code === "slug_tomado" || error.code === "slug_invalido") {
+        return failSignup("signup_slug_taken", undefined, keepAf)
+      }
+      return failSignup("google_signup_failed", error, keepAf)
     }
     throw error
   }

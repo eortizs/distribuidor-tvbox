@@ -4,12 +4,13 @@ import { redirect } from "next/navigation"
 import { connection } from "next/server"
 
 import { Wordmark } from "@/components/short/brand"
-import { findTenantBySlug } from "@/server/tenant/context"
 import {
   hostSlugPrefix,
+  platformHost,
   tenantBaseHost,
   tenantHostForSlug,
 } from "@/server/tenant/hosts"
+import { findTenantBySlug } from "@/server/tenant/context"
 import { slugAvailabilityShape } from "@/lib/tenant-slug"
 
 /**
@@ -154,6 +155,15 @@ function renderForm(
           >
             Crea la de tu negocio
           </Link>
+        </p>
+        <p className="mt-2 text-center text-xs text-slate-500">
+          ¿Eres afiliado?{" "}
+          <a
+            href={`https://${platformHost()}/login`}
+            className="font-semibold text-[#059669] underline underline-offset-2"
+          >
+            Entra a tu portal
+          </a>
         </p>
       </main>
     </div>

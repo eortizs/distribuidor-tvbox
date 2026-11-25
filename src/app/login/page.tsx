@@ -2,6 +2,7 @@ import { redirect } from "next/navigation"
 
 import { AuthShell } from "@/components/auth/auth-shell"
 import { LoginForm } from "@/components/auth/login-form"
+import { homePathForUser } from "@/server/auth/types"
 import { googleFlowForRequest } from "@/server/auth/google-host"
 import { getSessionUser } from "@/server/auth/session"
 
@@ -42,7 +43,8 @@ export default async function LoginPage({
 }) {
   const [user, params] = await Promise.all([getSessionUser(), searchParams])
   if (user) {
-    redirect("/clientes")
+    // Destino por perfil (§6.9): plataforma → consola, afiliado → portal.
+    redirect(homePathForUser(user))
   }
 
   const oauthCode = params.error

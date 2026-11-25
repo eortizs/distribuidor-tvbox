@@ -38,7 +38,7 @@ UPDATE entities
 
 ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE users ADD CONSTRAINT users_role_check
-  CHECK (role IN ('plataforma', 'propietario', 'sucursal'));
+  CHECK (role IN ('plataforma', 'propietario', 'sucursal', 'afiliado'));
 
 -- La sesión de un usuario de plataforma no tiene tenant (NULL): la cookie
 -- solo vale en el host de plataforma (validateSessionHost).
