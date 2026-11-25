@@ -148,14 +148,14 @@ export function PlatformShell({
                 <Button
                   type="button"
                   variant="ghost"
-                  className="relative size-9 rounded-full after:content-[''] after:absolute after:-inset-2"
+                  className="relative size-9 rounded-full p-0 after:content-[''] after:absolute after:-inset-2"
                   aria-label="Menú de cuenta"
                 />
               }
             >
               <span
                 aria-hidden="true"
-                className="bg-primary text-primary-foreground flex size-8 items-center justify-center rounded-full text-xs font-semibold select-none"
+                className="bg-primary text-primary-foreground flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold select-none"
               >
                 {user.username.slice(0, 2).toUpperCase()}
               </span>
