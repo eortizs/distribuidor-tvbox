@@ -12,10 +12,12 @@ import assert from "node:assert/strict"
 
 import {
   amountsEqualCents,
+  conceptoPagoDeOrden,
   depositWithinOrderWindow,
   isDepositLikePayment,
   normalizePaymentOrderConcepto,
   paymentOrderConceptAnchor,
+  paymentOrderConceptoVisible,
   PAYMENT_ORDER_CONCEPTO_ERROR,
   PAYMENT_ORDER_DEPOSIT_SLACK_MS,
 } from "../src/lib/links-pago.ts"
@@ -237,6 +239,54 @@ check("el ancla de una orden previa (sin palabra) sigue siendo el código", () =
       note: "Instalación de Juan",
       code: "P36E",
     }),
+    "P36E"
+  )
+})
+
+/* --------------- concepto respetando el caseo del creador ---------------- */
+
+check("la palabra se guarda tal cual (mayúsculas/minúsculas del creador)", () => {
+  assert.equal(conceptoPagoDeOrden("VentaJuana"), "VentaJuana")
+  assert.equal(conceptoPagoDeOrden("  Elda  "), "Elda")
+  assert.equal(conceptoPagoDeOrden("pago350"), "pago350")
+})
+
+check("los acentos se quitan, el caseo se conserva", () => {
+  assert.equal(conceptoPagoDeOrden("Instalación"), "Instalacion")
+  assert.equal(conceptoPagoDeOrden("España"), "Espana")
+})
+
+check("inválidos siguen rechazados (espacios, especiales, longitud)", () => {
+  assert.equal(conceptoPagoDeOrden("Venta Juana"), null)
+  assert.equal(conceptoPagoDeOrden("pago-juan"), null)
+  assert.equal(conceptoPagoDeOrden("pago!"), null)
+  assert.equal(conceptoPagoDeOrden(""), null)
+  assert.equal(conceptoPagoDeOrden("AB"), null)
+  assert.equal(conceptoPagoDeOrden("A".repeat(21)), null)
+})
+
+check("la ancla de match normaliza la palabra con caseo", () => {
+  assert.equal(
+    paymentOrderConceptAnchor({ note: "VentaJuana", code: "P36E" }),
+    "VENTAJUANA"
+  )
+})
+
+check("el concepto visible es la palabra original del creador", () => {
+  assert.equal(
+    paymentOrderConceptoVisible({ note: "VentaJuana", code: "P36E" }),
+    "VentaJuana"
+  )
+  assert.equal(
+    paymentOrderConceptoVisible({ note: "ELDA", code: "P36E" }),
+    "ELDA"
+  )
+})
+
+check("el concepto visible cae al código en órdenes de la era previa", () => {
+  assert.equal(paymentOrderConceptoVisible({ note: null, code: "P36E" }), "P36E")
+  assert.equal(
+    paymentOrderConceptoVisible({ note: "Instalación de Juan", code: "P36E" }),
     "P36E"
   )
 })

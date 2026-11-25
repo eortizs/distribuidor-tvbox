@@ -34,11 +34,11 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import {
-  paymentOrderConceptAnchor,
+  conceptoPagoDeOrden,
+  paymentOrderConceptoVisible,
   paymentOrderMoney,
   paymentOrderStatusLabel,
   PAYMENT_ORDER_CONCEPTO_ERROR,
-  normalizePaymentOrderConcepto,
   type PaymentOrderListItem,
 } from "@/lib/links-pago"
 import {
@@ -180,9 +180,10 @@ export function LinksPagoView({
       setFormError("Escribe el importe en pesos (ej. 350.00).")
       return
     }
-    // El concepto de pago es obligatorio y viaja normalizado (mayúsculas,
-    // sin acentos): es la palabra que el pagador escribe en su SPEI.
-    if (!normalizePaymentOrderConcepto(note)) {
+    // El concepto de pago es obligatorio y se guarda TAL CUAL la escribe el
+    // creador (mayúsculas/minúsculas respetadas): es la palabra que el
+    // pagador recibe por WhatsApp; el escaneo matchea normalizado.
+    if (!conceptoPagoDeOrden(note)) {
       setFormError(PAYMENT_ORDER_CONCEPTO_ERROR)
       return
     }
@@ -366,7 +367,7 @@ export function LinksPagoView({
                     id="orden-nota"
                     autoComplete="off"
                     maxLength={20}
-                    placeholder="Ej. PAGOJUAN"
+                    placeholder="Ej. VentaJuana"
                     value={note}
                     onChange={(event) => setNote(event.target.value)}
                     disabled={creating || !whatsappConfigured}
@@ -508,7 +509,7 @@ export function LinksPagoView({
                           <div className="flex flex-col gap-0.5">
                             <dt className="text-muted-foreground text-xs">Concepto de pago</dt>
                             <dd className="font-mono">
-                              {paymentOrderConceptAnchor(order)}
+                              {paymentOrderConceptoVisible(order)}
                             </dd>
                             <dd className="text-muted-foreground text-xs">
                               El pagador lo recibe al solicitar el pago por WhatsApp.

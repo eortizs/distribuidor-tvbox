@@ -1074,9 +1074,12 @@ export async function findPaymentOrdersByMpPaymentIds(
 
 /**
  * Última orden RESUELTA cuyo CONCEPTO DE PAGO matchee cualquiera de las
- * palabras dadas (ya normalizadas por el llamador; la más recientemente
- * resuelta). Replay honesto del comprobante/código de una orden de palabra
- * ya resuelta — espejo de `findResolvedPaymentOrderByAnyCode`.
+ * palabras dadas (forma NORMALIZADA: mayúsculas y sin acentos, como las
+ * produce `wordTokensDe`). Compara contra `upper(o.note)` porque `note`
+ * guarda la palabra con las MAYÚSCULAS/minúsculas originales del creador
+ * (el acento ya se quitó al validar); la más recientemente resuelta. Replay
+ * honesto del comprobante/código de una orden de palabra ya resuelta —
+ * espejo de `findResolvedPaymentOrderByAnyCode`.
  */
 export async function findResolvedPaymentOrderByAnyConcepto(
   words: string[]
@@ -1089,7 +1092,7 @@ export async function findResolvedPaymentOrderByAnyConcepto(
   if (normalized.length === 0) return null
   const result = await pool.query<Record<string, unknown>>(
     `${SELECT_COLUMNS}
-      WHERE o.note = ANY($1) AND o.status IN ('paid','rejected','cancelled')
+      WHERE upper(o.note) = ANY($1) AND o.status IN ('paid','rejected','cancelled')
       ORDER BY o.resolved_at DESC NULLS LAST LIMIT 1`,
     [normalized]
   )

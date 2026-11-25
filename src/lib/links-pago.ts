@@ -50,11 +50,13 @@ export const PAYMENT_ORDER_CONCEPTO_MIN = 3
 export const PAYMENT_ORDER_CONCEPTO_MAX = 20
 
 /**
- * Normaliza el concepto de pago de una orden: UNA palabra alfanumérica,
- * sin espacios ni caracteres especiales. Mayúsculas y sin acentos (las
- * quitan también los bancos al imprimir el comprobante; el mismo criterio
- * de `normalizarTexto` del matcheo). Null = inválido (vacío, con espacios,
- * con caracteres especiales o fuera de 3–20 caracteres).
+ * Forma NORMALIZADA del concepto de pago (mayúsculas y sin acentos): la que
+ * usa el MATCH del escaneo y el ancla de conciliación — el mismo criterio de
+ * `normalizarTexto`, que ignora mayúsculas/minúsculas y acentos por ambos
+ * lados. La palabra guardada y entregada al pagador conserva las
+ * mayúsculas/minúsculas del creador (ver `conceptoPagoDeOrden` y
+ * `paymentOrderConceptoVisible`). Null = inválido (vacío, con espacios, con
+ * caracteres especiales o fuera de 3–20 caracteres).
  */
 export function normalizePaymentOrderConcepto(raw: string): string | null {
   const upper = raw
@@ -76,8 +78,34 @@ export function normalizePaymentOrderConcepto(raw: string): string | null {
 export const PAYMENT_ORDER_CONCEPTO_ERROR = `El concepto de pago es obligatorio: una sola palabra alfanumérica, sin espacios ni caracteres especiales, de ${PAYMENT_ORDER_CONCEPTO_MIN} a ${PAYMENT_ORDER_CONCEPTO_MAX} caracteres.`
 
 /**
- * Ancla de CONCILIACIÓN de una orden: el concepto de pago que el pagador
- * escribe en su SPEI y que el escaneo valida en el comprobante. Las órdenes
+ * Valida el concepto de pago CONSERVANDO las mayúsculas/minúsculas tal como
+ * lo escribe el creador: UNA palabra alfanumérica de 3–20, sin espacios ni
+ * caracteres especiales. Solo quita los acentos (los bancos también los
+ * quitan al imprimir el comprobante; el match los ignora igual por ambos
+ * lados). Es la palabra que se GUARDA en `note` y la que el pagador recibe
+ * por WhatsApp — el escaneo matchea contra la forma normalizada, así que el
+ * caseo exacto nunca rompe la conciliación. Null = inválido.
+ */
+export function conceptoPagoDeOrden(raw: string): string | null {
+  const texto = raw
+    .trim()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+  if (!/^[A-Za-z0-9]+$/.test(texto)) return null
+  if (
+    texto.length < PAYMENT_ORDER_CONCEPTO_MIN ||
+    texto.length > PAYMENT_ORDER_CONCEPTO_MAX
+  ) {
+    return null
+  }
+  return texto
+}
+
+/**
+ * Ancla de CONCILIACIÓN de una orden: el concepto de pago (forma NORMALIZADA,
+ * mayúsculas y sin acentos) que el pagador escribe en su SPEI y que el
+ * escaneo valida en el comprobante — el match ignora caseo y acentos por
+ * ambos lados, así que la forma guardada nunca importa aquí. Las órdenes
  * nuevas lo traen en `note` (palabra obligatoria del creador); las de la era
  * previa (sin palabra válida) conservan el CÓDIGO del link como ancla — su
  * pagador ya lo recibió así. El código sigue existiendo siempre como
@@ -88,6 +116,21 @@ export function paymentOrderConceptAnchor(order: {
   code: string
 }): string {
   return normalizePaymentOrderConcepto(order.note ?? "") ?? order.code
+}
+
+/**
+ * El concepto de pago VISIBLE de una orden: la palabra tal como la escribió
+ * el creador (mayúsculas/minúsculas respetadas — es lo que se le entrega al
+ * pagador por WhatsApp y lo que ve el creador en el módulo), o el CÓDIGO del
+ * link en las órdenes de la era previa (nota libre no válida). Para el MATCH
+ * del escaneo usar `paymentOrderConceptAnchor`, nunca esta forma.
+ */
+export function paymentOrderConceptoVisible(order: {
+  note: string | null
+  code: string
+}): string {
+  const note = order.note?.trim() ?? ""
+  return conceptoPagoDeOrden(note) ? note : order.code
 }
 
 /**

@@ -11,8 +11,8 @@ import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/w
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { resolveCreatorBankData } from "@/server/links-pago/bank"
 import {
-  normalizePaymentOrderConcepto,
-  paymentOrderConceptAnchor,
+  conceptoPagoDeOrden,
+  paymentOrderConceptoVisible,
   PAYMENT_ORDER_CONCEPTO_ERROR,
 } from "@/lib/links-pago"
 import {
@@ -80,8 +80,10 @@ export async function createPaymentOrderAction(input: {
 
   // El concepto de pago es el ANCLA de conciliación: el pagador lo recibe
   // por WhatsApp, lo escribe en su SPEI y el escaneo valida el comprobante
-  // contra esta palabra (el código del link queda como identificador).
-  const note = normalizePaymentOrderConcepto(input.note ?? "")
+  // contra esta palabra (el código del link queda como identificador). Se
+  // guarda TAL CUAL la escribe el creador (mayúsculas/minúsculas
+  // respetadas; solo se quitan acentos) — el match normaliza ambos lados.
+  const note = conceptoPagoDeOrden(input.note ?? "")
   if (!note) {
     return { error: PAYMENT_ORDER_CONCEPTO_ERROR, order: null }
   }
@@ -303,7 +305,7 @@ export async function resolvePaymentOrderAction(input: {
     notifyPayerOfResolution(
       resolved,
       "Pago confirmado",
-      `Confirmamos tu pago de ${money(resolved.amountMxn)} con el concepto de pago ${paymentOrderConceptAnchor(resolved)}. Gracias.`
+      `Confirmamos tu pago de ${money(resolved.amountMxn)} con el concepto de pago ${paymentOrderConceptoVisible(resolved)}. Gracias.`
     )
     if (user.id !== resolved.creatorUserId) {
       createPaymentOrderNotification({
@@ -317,7 +319,7 @@ export async function resolvePaymentOrderAction(input: {
     notifyPayerOfResolution(
       resolved,
       "Pago no confirmado",
-      `El comprobante con el concepto de pago ${paymentOrderConceptAnchor(resolved)} no fue aceptado${
+      `El comprobante con el concepto de pago ${paymentOrderConceptoVisible(resolved)} no fue aceptado${
         reason ? `: ${reason}` : ""
       }. Contacta a quien te emitió el link.`
     )

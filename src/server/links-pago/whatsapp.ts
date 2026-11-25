@@ -15,6 +15,7 @@ import {
   MAX_PAYMENT_ORDER_CODE_TOKENS,
   parsePaymentOrderRequestAmount,
   paymentOrderConceptAnchor,
+  paymentOrderConceptoVisible,
   PAYMENT_ORDER_CONCEPTO_MAX,
   PAYMENT_ORDER_CONCEPTO_MIN,
 } from "@/lib/links-pago"
@@ -123,11 +124,13 @@ function sha256Of(bytes: Uint8Array): string {
  * de centavos) jamás se confunden de pagador.
  */
 function instruccionesDePago(order: PaymentOrder): string {
-  const ancla = paymentOrderConceptAnchor(order)
-  const porPalabra = ancla !== order.code
+  // El concepto se entrega tal como lo escribió el creador
+  // (mayúsculas/minúsculas respetadas); el match del escaneo normaliza.
+  const concepto = paymentOrderConceptoVisible(order)
+  const porPalabra = concepto !== order.code
   const sentencia = porPalabra
-    ? `Realiza tu pago SPEI con el concepto de pago *${ancla}* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
-    : `Realiza tu pago SPEI con el código ${ancla} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
+    ? `Realiza tu pago SPEI con el concepto de pago *${concepto}* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
+    : `Realiza tu pago SPEI con el código ${concepto} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
   return [
     sentencia,
     "",
@@ -156,7 +159,7 @@ function respuestaConConcepto(
 ): PaymentOrderTurnResult {
   return {
     text: instruccionesDePago(order),
-    additionalTexts: [paymentOrderConceptAnchor(order), order.bank.account],
+    additionalTexts: [paymentOrderConceptoVisible(order), order.bank.account],
     orderId: order.id,
     inboundText,
     mediaMime: null,
@@ -309,7 +312,7 @@ async function maybeHandlePaymentConfirmation(input: {
     text: [
       "*¡Gracias por avisar!* Para confirmar tu pago necesito tu comprobante:",
       "",
-      `Adjunta en este chat la FOTO o el PDF de tu transferencia (con el concepto de pago ${paymentOrderConceptAnchor(order)}) y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
+      `Adjunta en este chat la FOTO o el PDF de tu transferencia (con el concepto de pago ${paymentOrderConceptoVisible(order)}) y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
     ].join("\n"),
     orderId: order.id,
     inboundText: input.text,

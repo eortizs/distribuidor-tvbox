@@ -61,7 +61,7 @@ import {
   PAYMENT_ORDER_MAX_MXN,
   PAYMENT_ORDER_MIN_MXN,
   PAYMENT_ORDER_CONCEPTO_ERROR,
-  normalizePaymentOrderConcepto,
+  conceptoPagoDeOrden,
 } from "@/lib/links-pago"
 import { createPaymentOrderAction, type CreatedPaymentOrder } from "@/app/actions/links-pago"
 
@@ -383,7 +383,7 @@ export function Calculadora({
       )
       return
     }
-    if (!normalizePaymentOrderConcepto(referencia)) {
+    if (!conceptoPagoDeOrden(referencia)) {
       setCobroError(PAYMENT_ORDER_CONCEPTO_ERROR)
       return
     }

@@ -1,7 +1,7 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { runWithTenant } from "@/server/tenant/context"
-import { paymentOrderConceptAnchor } from "@/lib/links-pago"
+import { paymentOrderConceptoVisible } from "@/lib/links-pago"
 
 import type { PaymentOrder } from "./repository"
 
@@ -62,7 +62,7 @@ export function notifyPayerContacted(order: PaymentOrder, phone: string): void {
     "Pagador en contacto",
     `El pagador (WhatsApp ${maskPhone(phone)}) abrió tu link ${order.code} (${money(
       order.amountMxn
-    )}) y recibió el concepto de pago ${paymentOrderConceptAnchor(order)} y la CLABE. Te avisaremos cuando envíe su comprobante o cuando el pago se confirme.`
+    )}) y recibió el concepto de pago ${paymentOrderConceptoVisible(order)} y la CLABE. Te avisaremos cuando envíe su comprobante o cuando el pago se confirme.`
   )
 }
 
@@ -108,6 +108,6 @@ function notifyDepositConfirmedInTenant(order: PaymentOrder): void {
     "Pago confirmado",
     `Recibimos tu comprobante y confirmamos el depósito de ${money(
       order.amountMxn
-    )} con el concepto de pago ${paymentOrderConceptAnchor(order)} en la cuenta. Tu pago quedó validado. Gracias.`
+    )} con el concepto de pago ${paymentOrderConceptoVisible(order)} en la cuenta. Tu pago quedó validado. Gracias.`
   )
 }
