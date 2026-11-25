@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { CircleCheckIcon } from "lucide-react"
+import { CircleCheckIcon, PaperclipIcon } from "lucide-react"
 
 function ChatBubble({
   side,
@@ -96,7 +96,10 @@ export function WhatsAppPhoneDemo() {
           </ChatBubble>
 
           <ChatBubble side="right" time="10:34">
-            Listo, ya hice la transferencia
+            <span className="inline-flex items-center gap-1.5">
+              Listo, ya mandé el comprobante
+              <PaperclipIcon aria-hidden="true" className="size-3.5 shrink-0" />
+            </span>
           </ChatBubble>
 
           <ChatBubble side="left" variant="verified" time="10:36">
