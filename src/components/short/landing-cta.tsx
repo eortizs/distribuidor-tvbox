@@ -11,14 +11,10 @@ import { affiliateCtaEnabled, affiliateRegisterPath } from "@/lib/afiliados"
  * `SELF_SIGNUP_ENABLED` siga apagado.
  *
  * Al abrir el servicio: `LAUNCH_ENABLED = true` + build publica los CTAs
- * para todo el mundo y `SPEILINK_SUPPORT_WHATSAPP` (número del soporte, solo
- * dígitos) deja vivo el CTA del pie. El alta REAL exige además
+ * para todo el mundo. El alta REAL exige además
  * `SELF_SIGNUP_ENABLED=on` (o un enlace de afiliado válido).
  */
 export const LAUNCH_ENABLED = false
-
-const SUPPORT_WHATSAPP =
-  (process.env.SPEILINK_SUPPORT_WHATSAPP || "").replace(/\D/g, "") || null
 
 const BASE_CTA_CLASS =
   "inline-flex items-center justify-center font-semibold transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669] focus-visible:ring-offset-2"
@@ -129,36 +125,6 @@ export function NavbarLoginButton({
       className="inline-flex min-h-11 shrink-0 items-center whitespace-nowrap rounded-lg px-2 text-sm font-semibold text-[#1E293B] transition-colors hover:text-[#059669] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669] sm:px-3.5"
     >
       Iniciar sesión
-    </a>
-  )
-}
-
-/** Soporte del pie: solo vivo con `SPEILINK_SUPPORT_WHATSAPP` definida. */
-export function FooterSupportButton({
-  affiliateCode = null,
-}: {
-  affiliateCode?: string | null
-}) {
-  if (!SUPPORT_WHATSAPP || !affiliateCtaEnabled(LAUNCH_ENABLED, affiliateCode)) {
-    return (
-      <button
-        type="button"
-        disabled
-        aria-disabled="true"
-        className="inline-flex min-h-11 cursor-not-allowed items-center text-sm font-medium text-slate-600 underline underline-offset-4 opacity-65 focus-visible:outline-none"
-      >
-        Soporte por WhatsApp
-      </button>
-    )
-  }
-  return (
-    <a
-      href={`https://wa.me/${SUPPORT_WHATSAPP}`}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="inline-flex min-h-11 items-center text-sm font-medium text-slate-600 underline underline-offset-4 transition-colors hover:text-[#059669] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#059669]"
-    >
-      Soporte por WhatsApp
     </a>
   )
 }

@@ -18,11 +18,7 @@ import { CustomerDataValue } from "@/components/short/CustomerDataValue"
 import { DirectTransferFlow } from "@/components/short/DirectTransferFlow"
 import { FloatingCommissionBadge } from "@/components/short/FloatingCommissionBadge"
 import { FaqAccordion, type FaqAccordionItem } from "@/components/short/faq-accordion"
-import {
-  FooterSupportButton,
-  NavbarLoginButton,
-  PrimarySignupCta,
-} from "@/components/short/landing-cta"
+import { NavbarLoginButton, PrimarySignupCta } from "@/components/short/landing-cta"
 import { WhatsAppPhoneDemo } from "@/components/short/whatsapp-phone-demo"
 
 /**
@@ -520,7 +516,7 @@ export function Landing({ affiliate }: LandingProps) {
               />
               <div className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-4">
                 <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-balance sm:text-4xl">
-                  Deja de revisar tu banco en cada transferencia.
+                  Sin revisar tu banco en cada transferencia.
                 </h2>
                 <p className="text-sm leading-relaxed text-slate-300 sm:text-base">
                   Empieza a cobrar hoy por WhatsApp con confirmación automática al
@@ -550,13 +546,6 @@ export function Landing({ affiliate }: LandingProps) {
                 className="h-6 w-auto"
               />
               <Wordmark className="text-base text-[#0F172A]" />
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-500">
-              <FooterSupportButton affiliateCode={code} />
-              <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
-              <span>Aviso de Privacidad</span>
-              <span aria-hidden="true" className="size-1 rounded-full bg-slate-300" />
-              <span>Términos de Uso</span>
             </div>
           </div>
           <p className="border-t border-slate-100 pt-5 text-xs leading-relaxed text-slate-500">
