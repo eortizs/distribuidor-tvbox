@@ -5,6 +5,12 @@ import { Frame, FrameDescription, FrameHeader, FrameTitle } from "@/components/r
 import { resolveTenantHost } from "@/server/tenant/hosts"
 import { requestHost } from "@/server/tenant/request-host"
 
+export const instant = false
+
+export const metadata = {
+  title: "Finanzas",
+}
+
 /**
  * Sección FINANZAS (reestructura de bloques 2026-11-24): en el host de
  * plataforma es un bloque del nav SIN contenido aún — se llena cuando exista

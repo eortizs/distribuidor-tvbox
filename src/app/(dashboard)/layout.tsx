@@ -14,9 +14,25 @@ import { effectiveDbContext, findTenantById } from "@/server/tenant/context"
 
 export const instant = false
 
-/** Branding multitenant (§2.5): el nombre del negocio en el título. */
+/** Branding multitenant (§2.5) + marca por host (reestructura 2026-11-24):
+ *  el negocio pone su nombre en el título; el HOST DE PLATAFORMA (cuentas
+ *  sin tenant) viste SPEILink en título, applicationName y PWA — la pestaña
+ *  jamás lee TVBOX allí. El legado conserva su comportamiento exacto. */
 export async function generateMetadata(): Promise<Metadata> {
+  const hostKind = resolveTenantHost(await requestHost()).kind
   const context = await effectiveDbContext()
+  if (hostKind === "platform" && !context?.tenantId) {
+    return {
+      title: { default: "SPEILink", template: "%s" },
+      description: "Panel de administración de SPEILink",
+      applicationName: "SPEILink",
+      appleWebApp: {
+        capable: true,
+        title: "SPEILink",
+        statusBarStyle: "default",
+      },
+    }
+  }
   if (!context?.tenantId) return {}
   const tenant = await findTenantById(context.tenantId)
   return tenant ? { title: { default: tenant.name, template: `%s · ${tenant.name}` } } : {}
