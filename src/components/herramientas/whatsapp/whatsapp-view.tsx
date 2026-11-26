@@ -33,6 +33,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import type {
+  WhatsAppContactRow,
   WhatsAppLogRow,
   WhatsAppOutboxRow,
 } from "@/server/whatsapp/service"
@@ -98,6 +99,7 @@ export function WhatsAppView({
   initialOutbox,
   initialLog,
   registered,
+  initialContacts,
 }: {
   initialStatus: WhatsAppStatusInfo
   /** Número del canal (solo admin); null si el módulo está sin config. */
@@ -108,11 +110,13 @@ export function WhatsAppView({
   initialOutbox: WhatsAppOutboxRow[]
   initialLog: WhatsAppLogRow[]
   registered: RegisteredNumber[]
+  initialContacts: WhatsAppContactRow[]
 }) {
   const isBusiness = variant === "business"
   const [status, setStatus] = useState(initialStatus)
   const [outbox, setOutbox] = useState(initialOutbox)
   const [log, setLog] = useState(initialLog)
+  const [contacts, setContacts] = useState(initialContacts)
   const [qr, setQr] = useState<string | null>(null)
   const [pairingCode, setPairingCode] = useState<string | null>(null)
   const [pairingBusy, setPairingBusy] = useState<"qr" | "code" | null>(null)
@@ -124,10 +128,11 @@ export function WhatsAppView({
   const fetchData = useCallback(async () => {
     setRefreshing(true)
     try {
-      const [statusRes, outboxRes, logRes] = await Promise.all([
+      const [statusRes, outboxRes, logRes, contactsRes] = await Promise.all([
         fetch("/api/whatsapp/status", { cache: "no-store" }),
         fetch("/api/whatsapp/outbox", { cache: "no-store" }),
         fetch("/api/whatsapp/log?limit=50", { cache: "no-store" }),
+        fetch("/api/whatsapp/contacts", { cache: "no-store" }),
       ])
       if (statusRes.ok) {
         const payload = (await statusRes.json()) as { data?: WhatsAppStatusInfo }
@@ -148,6 +153,12 @@ export function WhatsAppView({
       if (logRes.ok) {
         const payload = (await logRes.json()) as { data?: { items?: WhatsAppLogRow[] } }
         if (payload.data?.items) setLog(payload.data.items)
+      }
+      if (contactsRes.ok) {
+        const payload = (await contactsRes.json()) as {
+          data?: { items?: WhatsAppContactRow[] }
+        }
+        if (payload.data?.items) setContacts(payload.data.items)
       }
     } catch {
       // Sondeo mejor esfuerzo: la vista reintenta en el siguiente ciclo.
@@ -459,6 +470,82 @@ export function WhatsAppView({
   const statusMeta = STATUS_META[status.status]
   const canPair = status.configured && status.status !== "open"
 
+  const contactColumns = useMemo<
+    ColumnDef<DataGridFeatures, WhatsAppContactRow>[]
+  >(
+    () => [
+      {
+        accessorKey: "pushName",
+        id: "pushName",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Nombre" />
+        ),
+        cell: ({ row }) =>
+          row.original.pushName ? (
+            <span className="text-foreground text-xs font-medium">
+              {row.original.pushName}
+            </span>
+          ) : (
+            <span className="text-muted-foreground text-xs">Sin nombre</span>
+          ),
+        size: 220,
+      },
+      {
+        accessorKey: "phone",
+        id: "phone",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="WhatsApp" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-xs tabular-nums">
+            +{row.original.phone}
+          </span>
+        ),
+        size: 150,
+      },
+      {
+        accessorKey: "firstSeenAt",
+        id: "firstSeenAt",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Primer contacto" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {fmt(row.original.firstSeenAt)}
+          </span>
+        ),
+        size: 130,
+      },
+      {
+        accessorKey: "lastSeenAt",
+        id: "lastSeenAt",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Último contacto" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {fmt(row.original.lastSeenAt)}
+          </span>
+        ),
+        size: 130,
+      },
+      {
+        accessorKey: "inboundCount",
+        id: "inboundCount",
+        header: ({ column }) => (
+          <DataGridColumnHeader column={column} title="Mensajes" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground text-xs tabular-nums">
+            {row.original.inboundCount}
+          </span>
+        ),
+        size: 100,
+      },
+    ],
+    []
+  )
+
   const outboxTable = useTable({
     features: dataGridFeatures,
     columns: outboxColumns,
@@ -471,6 +558,13 @@ export function WhatsAppView({
     columns: logColumns,
     data: log,
     getRowId: (row: WhatsAppLogRow) => String(row.id),
+  })
+
+  const contactsTable = useTable({
+    features: dataGridFeatures,
+    columns: contactColumns,
+    data: contacts,
+    getRowId: (row: WhatsAppContactRow) => row.id,
   })
 
   return (
@@ -675,6 +769,29 @@ export function WhatsAppView({
             </ul>
           )}
         </div>
+      </FramePanel>
+
+      <FramePanel className="p-0">
+        <div className="flex flex-col gap-1 px-(--frame-panel-px) pt-(--frame-panel-py)">
+          <h2 className="text-lg font-semibold">Contactos</h2>
+          <p className="text-muted-foreground text-sm pb-3">
+            Números sin cuenta en el panel que han escrito a este canal. Quedan
+            registrados desde su primer mensaje; el nombre es el de su perfil
+            de WhatsApp cuando lo trae.
+          </p>
+        </div>
+        <DataGrid
+          table={contactsTable}
+          recordCount={contacts.length}
+          tableLayout={{ dense: true }}
+          emptyMessage="Sin contactos todavía."
+        >
+          <DataGridContainer>
+            <DataGridScrollArea>
+              <DataGridTable />
+            </DataGridScrollArea>
+          </DataGridContainer>
+        </DataGrid>
       </FramePanel>
 
       <FramePanel className="p-0">

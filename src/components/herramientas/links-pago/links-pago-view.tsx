@@ -220,6 +220,7 @@ export function LinksPagoView({
                 status: "pending",
                 bank: created.bank,
                 payerPhone: null,
+                payerName: null,
                 linkOpenedAt: null,
                 payerBoundAt: null,
                 ticketFileId: null,
@@ -531,6 +532,9 @@ export function LinksPagoView({
                                 ? `+${order.payerPhone}`
                                 : "Aún no contacta"}
                             </dd>
+                            {order.payerName ? (
+                              <dd className="break-words">{order.payerName}</dd>
+                            ) : null}
                             {order.payerBoundAt ? (
                               <dd className="text-muted-foreground text-xs">
                                 Contactó el{" "}

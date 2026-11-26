@@ -8,7 +8,10 @@ import {
 } from "@/server/db"
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
-import { paymentOrderConceptAnchor } from "@/lib/links-pago"
+import {
+  normalizePaymentOrderPayerName,
+  paymentOrderConceptAnchor,
+} from "@/lib/links-pago"
 
 /*
  * Órdenes de pago por WhatsApp (/modulos/links-de-pago): cobros de MONTO
@@ -77,6 +80,7 @@ export interface PaymentOrder {
   status: PaymentOrderStatus
   bank: { bank: string; account: string; holder: string }
   payerPhone: string | null
+  payerName: string | null
   /** Primera apertura del link corto (spei.link → wa.me). */
   linkOpenedAt: string | null
   /** Primer contacto del pagador (teléfono ligado por entrega del código). */
@@ -209,6 +213,10 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
       row.payer_phone === null || row.payer_phone === undefined
         ? null
         : String(row.payer_phone),
+    payerName:
+      row.payer_name === null || row.payer_name === undefined
+        ? null
+        : String(row.payer_name),
     linkOpenedAt: isoOrNull(row.link_opened_at),
     payerBoundAt: isoOrNull(row.payer_bound_at),
     payerNudgedAt: isoOrNull(row.payer_nudged_at),
@@ -250,7 +258,8 @@ const SELECT_COLUMNS = `
   SELECT o.id, o.code, o.tenant_id, o.creator_user_id,
          u.username AS creator_username,
          o.amount_mxn, o.note, o.status, o.bank_name, o.bank_account,
-         o.bank_holder, o.payer_phone, o.link_opened_at, o.payer_bound_at,
+         o.bank_holder, o.payer_phone, o.payer_name, o.link_opened_at,
+         o.payer_bound_at,
          o.payer_nudged_at, o.ticket_file_id, o.ticket_sha256,
          o.scan_status, o.scan_result, o.resolved_at, o.rejection_reason,
          o.created_at, o.mp_payment_id, o.mp_deposit_at, o.verifying_since,
@@ -497,18 +506,51 @@ export async function listPaymentOrders(input: {
  */
 export async function touchPaymentOrderPayer(
   orderId: string,
-  phone: string
+  phone: string,
+  payerName: string | null = null
 ): Promise<boolean> {
+  const name = normalizePaymentOrderPayerName(payerName)
   const result = await pool.query(
     `UPDATE payment_orders
-        SET payer_phone = $2, payer_bound_at = now(), updated_at = now()
+        SET payer_phone = $2, payer_name = $3::text, payer_bound_at = now(),
+            updated_at = now()
       WHERE id = $1::uuid AND payer_phone IS NULL
       RETURNING id`,
-    [orderId, phone]
+    [orderId, phone, name]
   )
   const bound = (result.rowCount ?? 0) > 0
-  if (bound) notifyPaymentOrderChange(orderId)
-  return bound
+  if (bound) {
+    notifyPaymentOrderChange(orderId)
+    return true
+  }
+  if (!name) return false
+  const backfill = await pool.query(
+    `UPDATE payment_orders
+        SET payer_name = $3::text, updated_at = now()
+      WHERE id = $1::uuid AND payer_phone = $2 AND payer_name IS NULL
+      RETURNING id`,
+    [orderId, phone, name]
+  )
+  if ((backfill.rowCount ?? 0) > 0) notifyPaymentOrderChange(orderId)
+  return false
+}
+
+export async function fillPayerNamesForPhone(
+  phone: string,
+  payerName: string | null
+): Promise<string[]> {
+  const name = normalizePaymentOrderPayerName(payerName)
+  if (!name) return []
+  const result = await pool.query<{ id: string }>(
+    `UPDATE payment_orders
+        SET payer_name = $2::text, updated_at = now()
+      WHERE payer_phone = $1 AND payer_name IS NULL
+      RETURNING id`,
+    [phone, name]
+  )
+  const orderIds = result.rows.map((row) => String(row.id))
+  for (const orderId of orderIds) notifyPaymentOrderChange(orderId)
+  return orderIds
 }
 
 /**

@@ -19,6 +19,7 @@ export interface PaymentOrderListItem {
   status: PaymentOrder["status"]
   bank: PaymentOrder["bank"]
   payerPhone: string | null
+  payerName: string | null
   /** Primera apertura del link corto (spei.link → wa.me). */
   linkOpenedAt: string | null
   /** Primer contacto del pagador (teléfono ligado por entrega del código). */
@@ -49,6 +50,8 @@ export const PAYMENT_ORDER_MAX_MXN = 50_000
 export const PAYMENT_ORDER_CONCEPTO_MIN = 3
 export const PAYMENT_ORDER_CONCEPTO_MAX = 20
 
+export const PAYMENT_ORDER_PAYER_NAME_MAX = 80
+
 /**
  * Forma NORMALIZADA del concepto de pago (mayúsculas y sin acentos): la que
  * usa el MATCH del escaneo y el ancla de conciliación — el mismo criterio de
@@ -72,6 +75,25 @@ export function normalizePaymentOrderConcepto(raw: string): string | null {
     return null
   }
   return upper
+}
+
+export function normalizePaymentOrderPayerName(raw: unknown): string | null {
+  if (typeof raw !== "string") return null
+  const name = raw
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+    .replace(
+      /[\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g,
+      ""
+    )
+    .replace(/\s+/g, " ")
+    .trim()
+  if (!name) return null
+  return (
+    Array.from(name)
+      .slice(0, PAYMENT_ORDER_PAYER_NAME_MAX)
+      .join("")
+      .trim() || null
+  )
 }
 
 /** Mensaje de error compartido del concepto de pago inválido. */
@@ -207,6 +229,7 @@ export function toPaymentOrderListItem(order: PaymentOrder): PaymentOrderListIte
     status: order.status,
     bank: order.bank,
     payerPhone: order.payerPhone,
+    payerName: order.payerName,
     linkOpenedAt: order.linkOpenedAt,
     payerBoundAt: order.payerBoundAt,
     ticketFileId: order.ticketFileId,

@@ -327,9 +327,8 @@ const SILENT_CLIENT_RESULT = (inboundText: string, mediaMime: string | null) => 
 })
 
 /**
- * Turno de orden de pago manejado SIN responder (tope de ráfagas o cortesía
- * ya gastada): la rama se apropia del mensaje para no caer a la cortesía de
- * «no registrado», pero responde silencio.
+ * Turno de orden de pago manejado SIN responder (tope de ráfagas o aviso
+ * ya gastado): la rama se apropia del mensaje y responde silencio.
  */
 const SILENT_PAYMENT_ORDER_RESULT = (inboundText: string, mediaMime: string | null) => ({
   text: "",
@@ -342,7 +341,7 @@ const SILENT_PAYMENT_ORDER_RESULT = (inboundText: string, mediaMime: string | nu
  * Rama de ÓRDENES DE PAGO (números que no son usuarios ni clientes): el
  * pagador externo de links paga aquí con el código de concepto de su link
  * corto y manda el comprobante por el mismo chat. Null = el turno no apunta
- * a ninguna orden de pago → cortesía (legado) o silencio (negocio).
+ * a ninguna orden de pago → silencio (el contacto ya quedó registrado).
  */
 async function handlePaymentOrderIncomingMessage(
   session: WhatsAppSession,
@@ -364,12 +363,16 @@ async function handlePaymentOrderIncomingMessage(
     if (messageText.length === 0) return null
     if (!allowInbound(session, input.phone)) {
       // Apropiarse el turno en silencio (como la pata de medios y la rama de
-      // clientes): devolver null caería a la cortesía de «no registrado»,
-      // falsa para un pagador con orden pendiente.
+      // clientes): devolver null dejaría el mensaje fuera de la bitácora para
+      // un pagador con orden pendiente.
       return SILENT_PAYMENT_ORDER_RESULT(messageText, null)
     }
     return withClientComposing(session, input.jid, () =>
-      maybeHandlePaymentOrderText({ phone: input.phone, text: messageText })
+      maybeHandlePaymentOrderText({
+        phone: input.phone,
+        text: messageText,
+        payerName: input.m.pushName,
+      })
     )
   }
 
@@ -416,6 +419,7 @@ async function handlePaymentOrderIncomingMessage(
     return maybeHandlePaymentOrderReceipt({
       phone: input.phone,
       text: messageText,
+      payerName: input.m.pushName,
       media: {
         mimeType: mediaInfo.mimeType,
         fileName: mediaInfo.fileName,
@@ -622,11 +626,14 @@ async function handleIncomingMessage(
     return
   }
 
-  const { findUserByWhatsAppPhone, logWhatsAppMessageDetached } = await import(
-    "./service"
-  )
+  const {
+    findUserByWhatsAppPhone,
+    logWhatsAppMessageDetached,
+    registerWhatsAppContactDetached,
+  } = await import("./service")
   const user = await findUserByWhatsAppPhone(phone)
   if (!user) {
+    registerWhatsAppContactDetached({ phone, pushName: m.pushName })
     if (session.kind === "business") {
       // NEGOCIO (§4.5 2B): solo pagadores. Sin usuario → rama de órdenes de
       // pago; sin orden → SILENCIO (sin cortesía, sin agente).
@@ -687,7 +694,7 @@ async function handleIncomingMessage(
 
     // LEGADO: rama de CLIENTES FlujoTV (no son usuarios del panel; renuevan
     // por aquí con su teléfono como identidad). Null = el teléfono no tiene
-    // licencias → cortesía de número desconocido.
+    // licencias → sigue a la rama de pagos.
     const clientHandled = await handleClientIncomingMessage(session, {
       jid,
       phone,
@@ -733,7 +740,7 @@ async function handleIncomingMessage(
     }
     // Rama de ÓRDENES DE PAGO: el pagador externo de links (cualquier
     // persona) solicita la orden aquí. Null = el turno no apunta a ninguna
-    // orden → cortesía de número desconocido.
+    // orden → silencio (el contacto ya quedó registrado).
     const paymentHandled = await handlePaymentOrderIncomingMessage(session, {
       jid,
       phone,
@@ -785,15 +792,7 @@ async function handleIncomingMessage(
     }
     // Diagnóstico: el espejo salió bien pero el chat no matchea — dejar la
     // huella del teléfono resuelto para ver la forma del JID entrante.
-    log(`incoming_unregistered phone=${phone} jid=${jid}`)
-    if (courtesyAllowed(session, phone)) {
-      await sendTextToJid(
-        session,
-        jid,
-        "Este número no está registrado en el panel Distribuidor TVBox. " +
-          "Pide al administrador que registre tu WhatsApp para usar el agente."
-      ).catch(() => undefined)
-    }
+    log(`incoming_contact_silent phone=${phone} jid=${jid}`)
     return
   }
 
@@ -816,6 +815,7 @@ async function handleIncomingMessage(
       const paymentHandled = await maybeHandlePaymentOrderText({
         phone,
         text: text.trim(),
+        payerName: m.pushName,
       }).catch((error: unknown) => {
         log("payment_order_user_branch", error)
         return null
@@ -924,6 +924,7 @@ async function handleIncomingMessage(
     const paymentHandled = await maybeHandlePaymentOrderText({
       phone,
       text: text.trim(),
+      payerName: m.pushName,
     }).catch((error: unknown) => {
       log("payment_order_user_branch", error)
       return null

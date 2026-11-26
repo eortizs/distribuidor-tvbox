@@ -20,7 +20,7 @@ import { log } from "./log.ts"
 /** Límite entrante por número: 20 mensajes por minuto. */
 const INBOUND_RATE_MAX = 20
 const INBOUND_RATE_WINDOW_MS = 60_000
-/** Respuestas de cortesía («no registrado», «solo texto»): 1 por 24 h. */
+/** Respuestas de cortesía («solo texto»): 1 por 24 h. */
 const COURTESY_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export type WhatsAppStatus =
@@ -162,7 +162,7 @@ export function allowInbound(session: WhatsAppSession, phone: string): boolean {
   return bucket.count <= INBOUND_RATE_MAX
 }
 
-/** Cortesía («no registrado», «solo texto»): 1 por 24 h POR sesión. */
+/** Cortesía («solo texto»): 1 por 24 h POR sesión. */
 export function courtesyAllowed(session: WhatsAppSession, phone: string): boolean {
   const map = session.courtesyAt
   const last = map.get(phone) ?? 0

@@ -18,7 +18,9 @@ import {
   findPaymentOrderCodeTokens,
   isPaymentLinkCode,
   MAX_PAYMENT_ORDER_CODE_TOKENS,
+  normalizePaymentOrderPayerName,
   parsePaymentOrderRequestAmount,
+  PAYMENT_ORDER_PAYER_NAME_MAX,
   paymentOrderRequestText,
 } from "../src/lib/links-pago.ts"
 
@@ -286,6 +288,32 @@ check("el importe de la solicitud no cuenta como código (ni en el caption)", ()
   ])
   // Fuera de una solicitud los dígitos siguen siendo tokens (códigos numéricos).
   assert.deepEqual(findPaymentOrderCodeTokens("2345 GBAR"), ["2345", "GBAR"])
+})
+
+check("el nombre del pagador se recorta y colapsa espacios; vacío → null", () => {
+  assert.equal(normalizePaymentOrderPayerName("  Juan   Pérez  "), "Juan Pérez")
+  assert.equal(normalizePaymentOrderPayerName("Ana\nLópez\tGarcía"), "Ana López García")
+  assert.equal(normalizePaymentOrderPayerName("   "), null)
+  assert.equal(normalizePaymentOrderPayerName(""), null)
+  assert.equal(normalizePaymentOrderPayerName(null), null)
+  assert.equal(normalizePaymentOrderPayerName(undefined), null)
+  assert.equal(normalizePaymentOrderPayerName(42), null)
+})
+
+check("el nombre del pagador respeta el tope sin partir pares sustitutos", () => {
+  const limite = "a".repeat(PAYMENT_ORDER_PAYER_NAME_MAX)
+  assert.equal(normalizePaymentOrderPayerName(`${limite}bc`), limite)
+  const emojis = "😀".repeat(PAYMENT_ORDER_PAYER_NAME_MAX)
+  assert.equal(normalizePaymentOrderPayerName(`${emojis}😀`), emojis)
+  assert.equal(normalizePaymentOrderPayerName(`${"a".repeat(79)} bc`), "a".repeat(79))
+})
+
+check("el nombre del pagador descarta controles, bidi e invisibles", () => {
+  assert.equal(normalizePaymentOrderPayerName("Juan\u0000\u001b Pérez"), "Juan Pérez")
+  assert.equal(normalizePaymentOrderPayerName("Ana\u202eLópez"), "AnaLópez")
+  assert.equal(normalizePaymentOrderPayerName("A\u200bb\u2066"), "Ab")
+  assert.equal(normalizePaymentOrderPayerName("\ufeff"), null)
+  assert.equal(normalizePaymentOrderPayerName("👩‍🍳 Cocinera"), "👩‍🍳 Cocinera")
 })
 
 console.log(`\n${passed} pruebas OK`)

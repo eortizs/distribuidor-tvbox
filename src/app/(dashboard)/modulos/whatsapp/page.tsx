@@ -4,7 +4,11 @@ import { WhatsAppView } from "@/components/herramientas/whatsapp/whatsapp-view"
 import { requireRole } from "@/server/auth/guards"
 import { listUsers } from "@/server/auth/users"
 import { whatsappAgentLlmConfigured } from "@/server/whatsapp/config"
-import { listWhatsAppLog, listWhatsAppOutbox } from "@/server/whatsapp/service"
+import {
+  listWhatsAppContacts,
+  listWhatsAppLog,
+  listWhatsAppOutbox,
+} from "@/server/whatsapp/service"
 import { getWhatsAppStatus } from "@/server/whatsapp/gateway"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
 import { findTenantById } from "@/server/tenant/context"
@@ -26,10 +30,11 @@ export default async function WhatsAppPage() {
   const agentNumber = isLegacy
     ? whatsappAgentNumber()
     : ((await findTenantById(tenantId ?? ""))?.whatsappNumber ?? null)
-  const [outbox, log, users] = await Promise.all([
+  const [outbox, log, users, contacts] = await Promise.all([
     listWhatsAppOutbox(),
     listWhatsAppLog(50),
     listUsers(),
+    listWhatsAppContacts(),
   ])
 
   const registered = users
@@ -52,6 +57,7 @@ export default async function WhatsAppPage() {
         initialOutbox={outbox}
         initialLog={log}
         registered={registered}
+        initialContacts={contacts}
       />
     </div>
   )

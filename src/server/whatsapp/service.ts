@@ -6,6 +6,8 @@ import { AppError } from "@/server/umejson/types"
 import type { UserRole } from "@/server/auth/types"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
 import { findTenantById, tenantIdOfUser } from "@/server/tenant/context"
+import { fillPayerNamesForPhone } from "@/server/links-pago/repository"
+import { normalizePaymentOrderPayerName } from "@/lib/links-pago"
 
 import {
   canonicalWhatsAppDigits,
@@ -374,5 +376,69 @@ export async function listWhatsAppLog(limit = 50): Promise<WhatsAppLogRow[]> {
     text: String(row.text ?? ""),
     meta: (row.meta as Record<string, unknown> | null) ?? null,
     createdAt: new Date(row.created_at as string).toISOString(),
+  }))
+}
+
+export interface WhatsAppContactRow {
+  id: string
+  phone: string
+  pushName: string | null
+  firstSeenAt: string
+  lastSeenAt: string
+  inboundCount: number
+}
+
+export async function registerWhatsAppContact(input: {
+  phone: string
+  pushName?: string | null
+}): Promise<void> {
+  const name = normalizePaymentOrderPayerName(input.pushName)
+  await pool.query(
+    `INSERT INTO wa_contacts (phone, push_name, inbound_count)
+     VALUES ($1, $2::text, 1)
+     ON CONFLICT (tenant_id, phone) DO UPDATE
+        SET last_seen_at = now(),
+            inbound_count = wa_contacts.inbound_count + 1,
+            push_name = COALESCE(wa_contacts.push_name, EXCLUDED.push_name),
+            updated_at = now()`,
+    [input.phone, name]
+  )
+  if (name) await fillPayerNamesForPhone(input.phone, name)
+}
+
+export function registerWhatsAppContactDetached(input: {
+  phone: string
+  pushName?: string | null
+}): void {
+  void registerWhatsAppContact(input).catch((error: unknown) => {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        error: `whatsapp: contact: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      })
+    )
+  })
+}
+
+export async function listWhatsAppContacts(
+  limit = 200
+): Promise<WhatsAppContactRow[]> {
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 500)
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT id, phone, push_name, first_seen_at, last_seen_at, inbound_count
+       FROM wa_contacts
+      ORDER BY last_seen_at DESC
+      LIMIT $1`,
+    [capped]
+  )
+  return result.rows.map((row) => ({
+    id: String(row.id),
+    phone: String(row.phone),
+    pushName: typeof row.push_name === "string" ? row.push_name : null,
+    firstSeenAt: new Date(row.first_seen_at as string).toISOString(),
+    lastSeenAt: new Date(row.last_seen_at as string).toISOString(),
+    inboundCount: Number(row.inbound_count ?? 0),
   }))
 }

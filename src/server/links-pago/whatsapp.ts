@@ -42,7 +42,8 @@ import { notifyPayerContacted } from "./notify"
  * Canal WhatsApp del PAGADOR de una orden de pago: cualquier persona sin
  * cuenta en el panel. El socket (rama de números no registrados ni clientes)
  * llama a estos handlers; ambos devuelven null cuando el turno NO es de una
- *     orden de pago y el flujo debe seguir (cortesía de número desconocido).
+ *     orden de pago y el flujo debe seguir (silencio: el contacto ya quedó
+ *     registrado al entrar).
  *
  *   - Texto: el link corto spei.link llega con la SOLICITUD prellenada
  *     («Solicito un link de pago por $X (código ABCD)»): el CÓDIGO del link
@@ -337,11 +338,12 @@ async function maybeHandlePaymentConfirmation(input: {
  *      otro número → guía sin revelar código ni datos; ninguna → replay por
  *      teléfono (orden resuelta) o guía honesta.
  *
- * Null = no es un turno de link de pago (el socket sigue con la cortesía).
+ * Null = no es un turno de link de pago (el socket sigue y termina en silencio).
  */
 export async function maybeHandlePaymentOrderText(input: {
   phone: string
   text: string
+  payerName?: string | null
 }): Promise<PaymentOrderTurnResult | null> {
   const tokens = findPaymentOrderCodeTokens(input.text)
 
@@ -349,9 +351,11 @@ export async function maybeHandlePaymentOrderText(input: {
   if (order) {
     // Saber el código ES la identidad del pagador: se liga el teléfono y
     // (solo la primera vez) se avisa al creador que su link está en uso.
-    const firstBind = await touchPaymentOrderPayer(order.id, input.phone).catch(
-      () => false
-    )
+    const firstBind = await touchPaymentOrderPayer(
+      order.id,
+      input.phone,
+      input.payerName
+    ).catch(() => false)
     if (firstBind) {
       notifyPayerContacted(order, input.phone)
     }
@@ -360,6 +364,7 @@ export async function maybeHandlePaymentOrderText(input: {
       order_id: order.id,
       code: order.code,
       status: order.status,
+      push_name: Boolean(input.payerName),
     })
     // Orden en verificación de depósito: replay del estado en lugar de
     // re-enviar instrucciones de pago (el pago ya fue hecho y validado).
@@ -375,7 +380,7 @@ export async function maybeHandlePaymentOrderText(input: {
   }
 
   // Replay honesto: el código corresponde a una orden YA resuelta (evita
-  // que el turno caiga a la cortesía de «no registrado»).
+   // que el turno caiga al silencio).
   if (tokens.length > 0) {
     const resolved = await findResolvedPaymentOrderByAnyCode(tokens).catch(() => null)
     if (resolved) {
@@ -506,7 +511,8 @@ export async function maybeHandlePaymentOrderText(input: {
   // comprobante validado con el código impreso.
   const firstBind = await touchPaymentOrderPayer(
     candidata.id,
-    input.phone
+    input.phone,
+    input.payerName
   ).catch(() => false)
   if (firstBind) {
     notifyPayerContacted(candidata, input.phone)
@@ -516,6 +522,7 @@ export async function maybeHandlePaymentOrderText(input: {
     order_id: candidata.id,
     code: candidata.code,
     monto,
+    push_name: Boolean(input.payerName),
   })
   return respuestaConConcepto(candidata, input.text)
 }
@@ -715,6 +722,7 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   phone: string
   text: string
   media: { mimeType: string; fileName: string | null; bytes: Uint8Array }
+  payerName?: string | null
   /**
    * Extracción de visión ya corrida por el llamador (delegación del canal
    * de renovación: el MISMO archivo ya fue leído una vez) — evita un
@@ -769,7 +777,7 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   }
 
   // Cuota de escaneo por teléfono (gasta visión): sin cupo solo se responde
-  // si el turno apunta a una orden pendiente real; si no, cortesía.
+  // si el turno apunta a una orden pendiente real; si no, silencio.
   if (!checkPaymentOrderScanQuota(input.phone)) {
     const known = pending.some((order) => tokens.includes(order.code))
     if (!known) return null
@@ -919,8 +927,8 @@ export async function maybeHandlePaymentOrderReceipt(input: {
       }
     } else if (!extraccion) {
       // Sin lectura y sin referencias: responder honesto en vez de dejar que
-      // el turno caiga a la cortesía de «no registrado» (nunca perder un
-      // comprobante por un fallo del verificador).
+      // el turno caiga al silencio (nunca perder un comprobante por un fallo
+      // del verificador).
       return {
         text: "No pude leer tu comprobante en este momento (el verificador de pagos no está disponible). Reenvía la foto en unos minutos, o escríbeme el CÓDIGO de tu orden como mensaje junto al comprobante.",
         orderId: null,
@@ -951,7 +959,11 @@ export async function maybeHandlePaymentOrderReceipt(input: {
     })
   }
 
-  await touchPaymentOrderPayer(candidate.id, input.phone).catch(() => {})
+  await touchPaymentOrderPayer(
+    candidate.id,
+    input.phone,
+    input.payerName
+  ).catch(() => {})
 
   // Orden ya EN VERIFICACIÓN de depósito (comprobante aprobado por el
   // escaneo): replay del estado SIN re-escanear — ni gasto de visión ni

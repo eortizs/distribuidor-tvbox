@@ -381,8 +381,8 @@ function clientTextForResolutionFailure(
 /* -------------------------------------------------------------------------- */
 
 /**
- * Comando `/renovar` del cliente: 0 licencias → null (la cortesía de número
- * desconocido del socket responde); 1 → directo; N → lista + `/renovar
+ * Comando `/renovar` del cliente: 0 licencias → null (el socket termina en
+ * silencio: el contacto ya quedó registrado); 1 → directo; N → lista + `/renovar
  * <usuario>` (SOLO acepta usuarios de las licencias de ESE teléfono). Nunca
  * lanza: cualquier fallo degrada a un mensaje amable.
  */

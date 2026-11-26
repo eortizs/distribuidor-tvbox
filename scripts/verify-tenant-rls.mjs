@@ -53,6 +53,7 @@ const TABLES = [
   "user_section_permissions","user_module_permissions","user_module_prefs",
   "connector_connections","user_mp_tokens","clients","tenant_mp_tokens",
   "signup_handoffs",
+  "wa_contacts",
   "affiliates",
   "tenants",
 ]
