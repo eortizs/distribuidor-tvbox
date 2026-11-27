@@ -9,9 +9,15 @@ import {
 import { publishRealtimeDetached } from "@/server/realtime/bus"
 import { AppError } from "@/server/umejson/types"
 import {
+  COBRADOR_QR_CODE_LENGTH,
+  isCobradorQrCode,
   normalizePaymentOrderPayerName,
+  PAYMENT_QR_REPORT_LABEL,
+  PAYMENT_QR_REQUEST_WINDOW_MS,
   paymentOrderConceptAnchor,
+  type PaymentOrderOrigin,
 } from "@/lib/links-pago"
+import type { UserRole } from "@/server/auth/types"
 
 /*
  * Órdenes de pago por WhatsApp (/modulos/links-de-pago): cobros de MONTO
@@ -56,6 +62,16 @@ import {
  * crear: ediciones posteriores del perfil del creador no cambian órdenes
  * vivas, y `bank_holder` es el titular contra el que el escaneo valida el
  * beneficiario del comprobante.
+ *
+ * QR FIJO (origin 'qr'): PAGO LIBRE. La orden nace del COMPROBANTE que el
+ * pagador envía desde el mismo WhatsApp que escaneó el QR: importe leído del
+ * comprobante, ligada a su teléfono, `note` = el concepto libre que escribió
+ * (solo informativo) y `created_at` = cuándo pagó (abre la ventana del
+ * depósito). Mismo verificador: solo se confirma cuando el depósito de ese
+ * importe acredita.
+ *
+ * `createdAt` solo lo fija el pago libre (ver `paymentQrOrderStart`): las
+ * órdenes de link nacen en el momento de su creación.
  */
 
 export type PaymentOrderStatus =
@@ -77,6 +93,11 @@ export interface PaymentOrder {
   creatorUsername: string | null
   amountMxn: number
   note: string | null
+  /**
+   * 'link' = importe y concepto del cobrador; 'qr' = pago libre del QR fijo
+   * (importe y concepto del pagador, leídos de su comprobante).
+   */
+  origin: PaymentOrderOrigin
   status: PaymentOrderStatus
   bank: { bank: string; account: string; holder: string }
   payerPhone: string | null
@@ -177,6 +198,146 @@ function isoOrNull(value: unknown): string | null {
     : new Date(value as string).toISOString()
 }
 
+/* -------------------------------------------------------------------------- */
+/*     QR FIJO de cobro: el código que identifica al cobrador en el chat      */
+/* -------------------------------------------------------------------------- */
+
+/** Reintentos ante colisión del código de cobrador (espacio de ~10⁹). */
+const MAX_QR_CODE_ATTEMPTS = 8
+
+function generateQrCode(): string {
+  let code = ""
+  for (let index = 0; index < COBRADOR_QR_CODE_LENGTH; index += 1) {
+    code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]
+  }
+  return code
+}
+
+/** Quién cobra detrás de un código de QR fijo. */
+export interface PaymentQrOwner {
+  id: string
+  username: string
+  role: UserRole
+  /** null = cuenta sin tenant (plataforma/afiliado): no puede tener QR. */
+  tenantId: string | null
+  code: string
+}
+
+function mapQrOwner(row: Record<string, unknown>): PaymentQrOwner {
+  return {
+    id: String(row.id),
+    username: String(row.username),
+    role: row.role as UserRole,
+    tenantId:
+      row.tenant_id === null || row.tenant_id === undefined
+        ? null
+        : String(row.tenant_id),
+    code: String(row.payment_qr_code),
+  }
+}
+
+/** Código de QR fijo ya asignado a un usuario; null = aún no lo tiene. */
+export async function findPaymentQrCodeOfUser(
+  userId: string
+): Promise<string | null> {
+  const result = await pool.query<{ payment_qr_code: string | null }>(
+    `SELECT payment_qr_code FROM users WHERE id = $1::uuid LIMIT 1`,
+    [userId]
+  )
+  return result.rows[0]?.payment_qr_code ?? null
+}
+
+/**
+ * Dueño de un código de QR fijo DENTRO del tenant del contexto (RLS): es la
+ * puerta del canal de WhatsApp — el socket corre bajo el tenant de su
+ * sesión, así que el chat de un negocio solo resuelve a SUS cobradores.
+ */
+export async function findPaymentQrOwner(
+  code: string
+): Promise<PaymentQrOwner | null> {
+  if (!isCobradorQrCode(code)) return null
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT id, username, role, tenant_id, payment_qr_code
+       FROM users
+      WHERE payment_qr_code = $1 AND tenant_id IS NOT NULL
+      LIMIT 1`,
+    [code]
+  )
+  return result.rows[0] ? mapQrOwner(result.rows[0]) : null
+}
+
+/**
+ * Igual que `findPaymentQrOwner`, para la ruta PÚBLICA del shortener
+ * (`spei.link/cobro/<código>`): ahí no hay sesión ni contexto de tenant, así
+ * que corre por la lista blanca (`systemPool`, §4.2) y trae el estado del
+ * tenant — un negocio suspendido no recibe pagadores.
+ */
+export async function findPaymentQrOwnerPublic(
+  code: string
+): Promise<(PaymentQrOwner & { tenantStatus: string | null }) | null> {
+  if (!isCobradorQrCode(code)) return null
+  const result = await systemPool.query<Record<string, unknown>>(
+    `SELECT u.id, u.username, u.role, u.tenant_id, u.payment_qr_code,
+            t.status AS tenant_status
+       FROM users u
+       LEFT JOIN tenants t ON t.id = u.tenant_id
+      WHERE u.payment_qr_code = $1 AND u.tenant_id IS NOT NULL
+      LIMIT 1`,
+    [code]
+  )
+  const row = result.rows[0]
+  return row
+    ? {
+        ...mapQrOwner(row),
+        tenantStatus:
+          row.tenant_status === null || row.tenant_status === undefined
+            ? null
+            : String(row.tenant_status),
+      }
+    : null
+}
+
+/**
+ * Código de QR fijo del usuario, asignándolo la primera vez (claim atómico:
+ * solo escribe si aún no tiene; el índice único resuelve la colisión con un
+ * reintento). Solo las cuentas CON tenant tienen QR — la plataforma y los
+ * afiliados no cobran.
+ */
+export async function ensurePaymentQrCode(userId: string): Promise<string> {
+  const current = await findPaymentQrCodeOfUser(userId)
+  if (current) return current
+  let lastError: unknown = null
+  for (let attempt = 0; attempt < MAX_QR_CODE_ATTEMPTS; attempt += 1) {
+    const code = generateQrCode()
+    try {
+      const result = await pool.query<{ payment_qr_code: string }>(
+        `UPDATE users
+            SET payment_qr_code = $2
+          WHERE id = $1::uuid AND payment_qr_code IS NULL
+            AND tenant_id IS NOT NULL
+          RETURNING payment_qr_code`,
+        [userId, code]
+      )
+      if (result.rows[0]) return String(result.rows[0].payment_qr_code)
+      // Sin fila tocada: otra petición concurrente lo asignó ya — o la
+      // cuenta no tiene tenant y jamás podrá tener QR.
+      const assigned = await findPaymentQrCodeOfUser(userId)
+      if (assigned) return assigned
+      throw new AppError(
+        422,
+        "qr_no_disponible",
+        "Solo las cuentas de un negocio pueden tener un QR fijo de cobro."
+      )
+    } catch (error) {
+      lastError = error
+      if (!isUniqueViolation(error)) throw error
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("No se pudo generar el código del QR fijo.")
+}
+
 /**
  * Señal de tiempo real (kind `payment_order`) tras cada mutación que cambia
  * el listado del módulo: creación, escaneo del comprobante, contacto del
@@ -203,6 +364,7 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
         : String(row.creator_username),
     amountMxn: Number(row.amount_mxn),
     note: row.note === null || row.note === undefined ? null : String(row.note),
+    origin: row.origin === "qr" ? "qr" : "link",
     status: row.status as PaymentOrderStatus,
     bank: {
       bank: String(row.bank_name),
@@ -257,7 +419,7 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
 const SELECT_COLUMNS = `
   SELECT o.id, o.code, o.tenant_id, o.creator_user_id,
          u.username AS creator_username,
-         o.amount_mxn, o.note, o.status, o.bank_name, o.bank_account,
+         o.amount_mxn, o.note, o.origin, o.status, o.bank_name, o.bank_account,
          o.bank_holder, o.payer_phone, o.payer_name, o.link_opened_at,
          o.payer_bound_at,
          o.payer_nudged_at, o.ticket_file_id, o.ticket_sha256,
@@ -273,6 +435,10 @@ const SELECT_COLUMNS = `
  * Crea la orden 'pending' con su código único entre pendientes y el
  * snapshot bancario/monto congelados. Lanza AppError con mensajes listos
  * para la UI (tope de pendientes, colisión agotada).
+ *
+ * Las órdenes del QR FIJO (`origin: 'qr'`) nacen ya ligadas al teléfono del
+ * pagador —es el mismo WhatsApp que escaneó el QR— con el mismo binding que
+ * `touchPaymentOrderPayer` (nombre de perfil, `payer_bound_at`).
  */
 export async function createPaymentOrder(input: {
   creatorUserId: string
@@ -281,6 +447,15 @@ export async function createPaymentOrder(input: {
   bank: { bank: string; account: string; holder: string }
   /** Cliente del registro local asociado (Fase 3); opcional y del tenant. */
   clientId?: string | null
+  /** Default 'link' (importe y concepto del cobrador). */
+  origin?: PaymentOrderOrigin
+  /** Solo con origin 'qr': el pagador que escaneó el QR y envía el comprobante. */
+  payer?: { phone: string; name: string | null }
+  /**
+   * Solo con origin 'qr': instante en que el pagador pagó (ver
+   * `paymentQrOrderStart`). Es también el inicio de la ventana de depósito.
+   */
+  createdAt?: Date
 }): Promise<PaymentOrder> {
   if (input.clientId) {
     // El cliente debe existir y ser del tenant del creador (RLS ya filtra;
@@ -317,6 +492,13 @@ export async function createPaymentOrder(input: {
   }
 
   const amount = Math.round(input.amountMxn * 100) / 100
+  const origin: PaymentOrderOrigin = input.origin === "qr" ? "qr" : "link"
+  const payer = origin === "qr" ? (input.payer ?? null) : null
+  // Solo el pago libre del QR fija el instante de la orden (cuando pagó).
+  const createdAt =
+    origin === "qr" && input.createdAt && Number.isFinite(input.createdAt.getTime())
+      ? input.createdAt
+      : null
   let lastError: unknown = null
   for (let attempt = 0; attempt < MAX_CODE_ATTEMPTS; attempt += 1) {
     const code = generateCode()
@@ -324,8 +506,11 @@ export async function createPaymentOrder(input: {
       const result = await pool.query(
         `INSERT INTO payment_orders
            (code, creator_user_id, amount_mxn, note, bank_name, bank_account,
-            bank_holder, client_id)
-         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8::uuid)
+            bank_holder, client_id, origin, payer_phone, payer_name,
+            payer_bound_at, created_at)
+         VALUES ($1, $2::uuid, $3, $4, $5, $6, $7, $8::uuid, $9, $10, $11,
+                 CASE WHEN $10::text IS NULL THEN NULL ELSE now() END,
+                 COALESCE($12::timestamptz, now()))
          RETURNING id`,
         [
           code,
@@ -336,6 +521,10 @@ export async function createPaymentOrder(input: {
           input.bank.account,
           input.bank.holder,
           input.clientId ?? null,
+          origin,
+          payer?.phone ?? null,
+          payer ? normalizePaymentOrderPayerName(payer.name) : null,
+          createdAt,
         ]
       )
       const created = await getPaymentOrder(String(result.rows[0].id))
@@ -843,6 +1032,130 @@ export async function findActivePaymentOrdersByPayerPhone(
 }
 
 /**
+ * Órdenes de QR fijo ACTIVAS (pending + verifying) de un teléfono, la más
+ * nueva primero. Alimenta el tope por teléfono del pago libre: un número no
+ * acumula más de `QR_MAX_ACTIVE_PER_PAYER` pagos sin confirmar.
+ */
+export async function listActiveQrOrdersForPayer(
+  phone: string
+): Promise<PaymentOrder[]> {
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.origin = 'qr' AND o.payer_phone = $1
+        AND o.status IN ('pending','verifying')
+      ORDER BY o.created_at DESC`,
+    [phone]
+  )
+  return result.rows.map(mapRow)
+}
+
+/**
+ * Orden ligada a un comprobante por su huella (sha256 del archivo), en
+ * cualquier estado. Es la puerta del pago libre del QR fijo: el MISMO archivo
+ * reenviado responde el estado de la orden que ya lo registró en vez de abrir
+ * otro cobro (el índice único por huella cierra la carrera entre dos turnos).
+ */
+export async function findPaymentOrderByTicketSha(
+  sha256: string
+): Promise<PaymentOrder | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.ticket_sha256 = $1
+      ORDER BY o.created_at DESC LIMIT 1`,
+    [sha256]
+  )
+  return result.rows[0] ? mapRow(result.rows[0]) : null
+}
+
+/** Solicitud vigente de un pagador del QR fijo (forma del módulo puro). */
+export interface PaymentQrRequestRecord {
+  payerPhone: string
+  payerName: string | null
+  cobradorUserId: string
+  requestedAt: string
+  lastRequestedAt: string
+}
+
+function mapQrRequest(row: Record<string, unknown>): PaymentQrRequestRecord {
+  return {
+    payerPhone: String(row.payer_phone),
+    payerName:
+      row.payer_name === null || row.payer_name === undefined
+        ? null
+        : String(row.payer_name),
+    cobradorUserId: String(row.cobrador_user_id),
+    requestedAt: new Date(row.requested_at as string).toISOString(),
+    lastRequestedAt: new Date(row.last_requested_at as string).toISOString(),
+  }
+}
+
+/**
+ * Registra la SOLICITUD del QR fijo: el pagador (por su teléfono de WhatsApp)
+ * acaba de recibir los datos de cobro de ese cobrador. Una fila por
+ * (tenant, teléfono, cobrador); reescanear refresca el último escaneo (abre
+ * la ventana del depósito) y conserva la fecha del primero. El nombre de
+ * perfil solo se rellena (el primero no vacío gana).
+ */
+export async function upsertPaymentQrRequest(input: {
+  payerPhone: string
+  payerName: string | null
+  cobradorUserId: string
+}): Promise<PaymentQrRequestRecord | null> {
+  const result = await pool.query<Record<string, unknown>>(
+    `INSERT INTO payment_qr_requests
+       (payer_phone, payer_name, cobrador_user_id)
+     VALUES ($1, $2, $3::uuid)
+     ON CONFLICT (tenant_id, payer_phone, cobrador_user_id) DO UPDATE
+        SET last_requested_at = now(),
+            payer_name = COALESCE(payment_qr_requests.payer_name, EXCLUDED.payer_name)
+     RETURNING payer_phone, payer_name, cobrador_user_id, requested_at,
+               last_requested_at`,
+    [
+      input.payerPhone,
+      normalizePaymentOrderPayerName(input.payerName),
+      input.cobradorUserId,
+    ]
+  )
+  return result.rows[0] ? mapQrRequest(result.rows[0]) : null
+}
+
+/**
+ * Solicitudes VIGENTES de un teléfono (último escaneo dentro de
+ * `PAYMENT_QR_REQUEST_WINDOW_MS`), la más reciente primero. El canal las
+ * consulta al llegar un comprobante: le dicen a qué cobrador le pagó ese
+ * número de WhatsApp. Vacío = el número no escaneó ningún QR vigente.
+ */
+export async function listOpenPaymentQrRequestsForPayer(
+  phone: string
+): Promise<PaymentQrRequestRecord[]> {
+  const result = await pool.query<Record<string, unknown>>(
+    `SELECT payer_phone, payer_name, cobrador_user_id, requested_at,
+            last_requested_at
+       FROM payment_qr_requests
+      WHERE payer_phone = $1
+        AND last_requested_at >= now() - ($2::int * interval '1 second')
+      ORDER BY last_requested_at DESC`,
+    [phone, Math.round(PAYMENT_QR_REQUEST_WINDOW_MS / 1000)]
+  )
+  return result.rows.map(mapQrRequest)
+}
+
+/**
+ * ¿El número escaneó algún QR fijo alguna vez (aunque su solicitud ya haya
+ * vencido)? Sirve para no dejar en silencio a quien pagó por un QR y manda
+ * el comprobante cuando su escaneo ya no está vigente: se le pide reescanear.
+ */
+export async function hasPaymentQrRequestHistory(
+  phone: string
+): Promise<boolean> {
+  const result = await pool.query(
+    `SELECT 1 FROM payment_qr_requests WHERE payer_phone = $1 LIMIT 1`,
+    [phone]
+  )
+  return (result.rowCount ?? 0) > 0
+}
+
+/**
  * Retardo del recordatorio proactivo desde el contacto del pagador: los
  * pagadores reales pagan en los primeros minutos (casos PLJ7/6HMR: 4 min);
  * a los 10 min sin comprobante la confirmación no llegó y el recordatorio
@@ -1086,7 +1399,9 @@ export async function confirmPaymentOrderDeposit(input: {
  * «Concepto» del reporte SPEI): el link es DETERMINISTA (el depósito que
  * confirmó la orden), no una inferencia por ventana. La conciliación vive
  * contra la PALABRA del concepto de pago; el código queda como respaldo de
- * las órdenes creadas antes de que la palabra fuera obligatoria.
+ * las órdenes creadas antes de que la palabra fuera obligatoria. En las
+ * órdenes del QR fijo el concepto es LIBRE (lo que escribió el pagador, si
+ * algo): se muestra tal cual o vacío — nunca el código de la orden.
  */
 export async function findPaymentOrdersByMpPaymentIds(
   mpPaymentIds: string[]
@@ -1099,8 +1414,9 @@ export async function findPaymentOrdersByMpPaymentIds(
     mp_payment_id: string
     code: string
     note: string | null
+    origin: PaymentOrderOrigin
   }>(
-    `SELECT id::text, mp_payment_id, code, note
+    `SELECT id::text, mp_payment_id, code, note, origin
        FROM payment_orders
       WHERE mp_payment_id = ANY($1)`,
     [ids]
@@ -1108,7 +1424,9 @@ export async function findPaymentOrdersByMpPaymentIds(
   for (const row of rows.rows) {
     result.set(
       String(row.mp_payment_id),
-      paymentOrderConceptAnchor({ note: row.note, code: String(row.code) })
+      row.origin === "qr"
+        ? (row.note ?? "").trim() || PAYMENT_QR_REPORT_LABEL
+        : paymentOrderConceptAnchor({ note: row.note, code: String(row.code) })
     )
   }
   return result

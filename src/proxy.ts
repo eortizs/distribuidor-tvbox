@@ -4,7 +4,12 @@ import { NextResponse, type NextRequest } from "next/server"
 import { findSessionUser } from "@/server/auth/session-lookup"
 import { systemPool } from "@/server/db"
 import { shortLinkHost } from "@/server/site-url"
-import { isPaymentLinkCode } from "@/lib/links-pago"
+import {
+  cobradorQrShortPath,
+  isCobradorQrPath,
+  isPaymentLinkCode,
+  parseCobradorQrPath,
+} from "@/lib/links-pago"
 import { handleAffiliateShortRequest } from "@/server/afiliados/proxy"
 import {
   modulesForKind,
@@ -126,7 +131,23 @@ export async function proxy(request: NextRequest) {
     const affiliateResponse = await handleAffiliateShortRequest(request)
     if (affiliateResponse) return affiliateResponse
 
-    if (segment.length > 0 && !isPaymentLinkCode(segment.toUpperCase())) {
+    // QR FIJO de cobro (spei.link/cobro/<CÓDIGO>): espacio propio dentro del
+    // dominio corto, ANTES de la validación de código de link (ese espacio
+    // `spei.link/<4>` es de links de pago). La forma se valida aquí con la
+    // fuente única del módulo por el mismo motivo que los links: un segmento
+    // malformado respondería 404 en el proxy y no URIError → 500 en el
+    // handler. Rutas públicas del apex primero (son páginas, no códigos).
+    const cobro = parseCobradorQrPath(trimmed)
+    if (cobro) {
+      url.pathname = `/short${cobradorQrShortPath(cobro)}`
+      return NextResponse.rewrite(url)
+    }
+
+    // Bajo /cobro sin código válido: mismo 404 que un código de link inválido.
+    if (
+      isCobradorQrPath(trimmed) ||
+      (segment.length > 0 && !isPaymentLinkCode(segment.toUpperCase()))
+    ) {
       return new NextResponse("Link no encontrado", {
         status: 404,
         headers: {

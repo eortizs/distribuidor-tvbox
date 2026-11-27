@@ -25,6 +25,8 @@ import {
   findPendingPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyConcepto,
+  hasPaymentQrRequestHistory,
+  listOpenPaymentQrRequestsForPayer,
   listPendingPaymentOrders,
   listPendingPaymentOrdersByAmount,
   savePaymentOrderScan,
@@ -37,6 +39,17 @@ import {
   reviewPaymentReceipt,
 } from "./review"
 import { notifyPayerContacted } from "./notify"
+import {
+  respuestaConConcepto,
+  textoEstadoResuelto,
+  textoVerificandoDeposito,
+  type PaymentOrderTurnResult,
+} from "./payment-order-messages"
+import {
+  atenderComprobanteQr,
+  maybeHandleQrPaymentText,
+  TEXTO_QR_REESCANEAR,
+} from "./qr-fijo"
 
 /*
  * Canal WhatsApp del PAGADOR de una orden de pago: cualquier persona sin
@@ -44,6 +57,13 @@ import { notifyPayerContacted } from "./notify"
  * llama a estos handlers; ambos devuelven null cuando el turno NO es de una
  *     orden de pago y el flujo debe seguir (silencio: el contacto ya quedó
  *     registrado al entrar).
+ *
+ *   Dos formatos de cobro comparten el canal: el LINK con importe y concepto
+ *   definidos por el cobrador (este archivo) y el QR FIJO, de pago libre
+ *   (qr-fijo.ts). El texto pasa PRIMERO por la solicitud del QR —no trae
+ *   orden, trae al cobrador— y el comprobante de un pagador de QR se atiende
+ *   entero en qr-fijo.ts (la orden nace de ese comprobante); lo demás sigue
+ *   por las ramas de los links.
  *
  *   - Texto: el link corto spei.link llega con la SOLICITUD prellenada
  *     («Solicito un link de pago por $X (código ABCD)»): el CÓDIGO del link
@@ -76,21 +96,7 @@ import { notifyPayerContacted } from "./notify"
  * con evidencia ajena: revisión manual del creador.
  */
 
-export interface PaymentOrderTurnResult {
-  /** Primera respuesta para el pagador; vacía = turno manejado sin responder. */
-  text: string
-  /**
-   * Mensajes adicionales ENVIADOS en orden tras `text` (la respuesta de la
-   * orden de pago viaja en TRES mensajes: instrucciones, el código solo y
-   * la CLABE solo).
-   */
-  additionalTexts?: string[]
-  /** Orden de pago involucrada, para la bitácora del módulo WhatsApp. */
-  orderId: string | null
-  /** Texto entrante del turno, para la bitácora. */
-  inboundText: string
-  mediaMime: string | null
-}
+export type { PaymentOrderTurnResult } from "./payment-order-messages"
 
 function logEvent(event: string, fields: Record<string, unknown>): void {
   console.info(JSON.stringify({ ts: new Date().toISOString(), event, ...fields }))
@@ -108,102 +114,12 @@ function sha256Of(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex")
 }
 
-/**
- * Mensaje 1 de la respuesta: las INSTRUCCIONES del pago. Texto
- * DETERMINISTA (siempre idéntico, plantilla fija): sentencia del pago con
- * el CONCEPTO DE PAGO de la orden + los datos (importe, banco, CLABE y
- * titular) — la CLABE se imprime aquí para que el pagador sepa a qué refiere
- * el número que llega suelto en el tercer mensaje. En las órdenes de la era
- * previa (sin palabra) el ancla sigue siendo el CÓDIGO del link y el texto
- * lo nombra como tal.
- *
- * La identificación del pagador por el CONCEPTO DE PAGO es MANDATORIA: el
- * comprobante (con el concepto escrito como concepto e impreso en el
- * ticket) es la única evidencia que confirma la orden automáticamente — sin
- * él el pago queda para revisión del creador, aunque el depósito acredite.
- * Así dos cobros del mismo importe (sucursales distintas, sin coordinación
- * de centavos) jamás se confunden de pagador.
- */
-function instruccionesDePago(order: PaymentOrder): string {
-  // El concepto se entrega tal como lo escribió el creador
-  // (mayúsculas/minúsculas respetadas); el match del escaneo normaliza.
-  const concepto = paymentOrderConceptoVisible(order)
-  const porPalabra = concepto !== order.code
-  const sentencia = porPalabra
-    ? `Realiza tu pago SPEI con el concepto de pago *${concepto}* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
-    : `Realiza tu pago SPEI con el código ${concepto} como *concepto de pago* y adjunta el comprobante de pago en este chat para que el sistema pueda validar el pago.`
-  return [
-    sentencia,
-    "",
-    `Importe: ${money(order.amountMxn)}`,
-    // En las órdenes de palabra la REFERENCIA es el propio concepto (ya va
-    // en la sentencia): el renglón solo agrega contexto en las de la era
-    // previa, cuya nota era texto libre.
-    !porPalabra && order.note ? `Referencia: ${order.note}` : "",
-    "Banco: " + order.bank.bank,
-    "CLABE: " + order.bank.account,
-    "Titular: " + order.bank.holder,
-  ]
-    .filter((line) => line.length > 0)
-    .join("\n")
-}
-
-/**
- * Respuesta en TRES mensajes enviados de golpe: 1) instrucciones, 2) el
- * CONCEPTO DE PAGO SOLO y 3) la CLABE SOLO — el concepto y la CLABE viajan
- * sin nada más para que el pagador los copie/pegue con un toque en su app
- * bancaria.
- */
-function respuestaConConcepto(
-  order: PaymentOrder,
-  inboundText: string
-): PaymentOrderTurnResult {
-  return {
-    text: instruccionesDePago(order),
-    additionalTexts: [paymentOrderConceptoVisible(order), order.bank.account],
-    orderId: order.id,
-    inboundText,
-    mediaMime: null,
-  }
-}
-
 /** Guía cuando la orden por monto ya tiene pagador de OTRO número. */
 function textoPagadorAjeno(): string {
   return [
     "Ese link de pago ya tiene un pagador asignado.",
     "",
     "Si es tuyo, abre de nuevo tu enlace spei.link y envía el mensaje que trae (incluye el código de tu link), o pide a quien te lo emitió el CÓDIGO (las 4 letras al final del enlace) y envíamelo como mensaje.",
-  ].join("\n")
-}
-
-/** Replay honesto del estado de una orden ya resuelta o cancelada. */
-function textoEstadoResuelto(order: PaymentOrder): string {
-  switch (order.status) {
-    case "verifying":
-      return textoVerificandoDeposito(order)
-    case "paid":
-      return [
-        `El link de pago *${order.code}* ya está pagado`,
-        order.resolvedAt ? `(confirmada el ${new Date(order.resolvedAt).toLocaleString("es-MX")})` : "",
-        ". No es necesario volver a enviar el comprobante.",
-      ]
-        .filter((line) => line.length > 0)
-        .join(" ")
-    case "rejected":
-      return `El link de pago *${order.code}* fue rechazado. Si tu pago fue real, contacta a quien te emitió la orden para revisar el caso.`
-    case "cancelled":
-      return `El link de pago *${order.code}* fue cancelado y el código ya no está activo. Pide un link de pago nuevo.`
-    default:
-      return `El link de pago *${order.code}* ya no está activo (estado: ${order.status}).`
-  }
-}
-
-/** Estado de una orden EN VERIFICACIÓN de depósito (replay honesto). */
-function textoVerificandoDeposito(order: PaymentOrder): string {
-  return [
-    `Tu pago de la orden *${order.code}* (${money(order.amountMxn)}) está *en verificación*: el comprobante ya pasó la validación y estamos confirmando la acreditación del depósito en la cuenta.`,
-    "",
-    "Te avisaremos aquí mismo en cuanto se confirme (suele tardar minutos; según tu banco puede tardar más). No es necesario reenviar el comprobante.",
   ].join("\n")
 }
 
@@ -309,6 +225,10 @@ async function maybeHandlePaymentConfirmation(input: {
     order_id: order.id,
     code: order.code,
   })
+  // Pago libre del QR fijo: el comprobante ya llegó con la orden; solo su estado.
+  if (order.origin === "qr") {
+    return respuestaConConcepto(order, input.text)
+  }
   return {
     text: [
       "*¡Gracias por avisar!* Para confirmar tu pago necesito tu comprobante:",
@@ -345,6 +265,18 @@ export async function maybeHandlePaymentOrderText(input: {
   text: string
   payerName?: string | null
 }): Promise<PaymentOrderTurnResult | null> {
+  // QR FIJO primero: su mensaje inicial no trae orden, trae al COBRADOR (el
+  // pago es libre). Devuelve null en cuanto ve que el turno no es suyo —sin
+  // consultar la BD— y el turno sigue por los links.
+  const qr = await maybeHandleQrPaymentText(input).catch((error: unknown) => {
+    logEvent("orden_pago.qr_turn_error", {
+      phone: maskPhone(input.phone),
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  })
+  if (qr !== null) return qr
+
   const tokens = findPaymentOrderCodeTokens(input.text)
 
   const order = await findPendingPaymentOrderByAnyCode(tokens).catch(() => null)
@@ -533,24 +465,29 @@ function textoVeredicto(input: {
   outcome: Awaited<ReturnType<typeof reviewPaymentReceipt>>
 }): string {
   const orden = `orden *${input.order.code}* (${money(input.order.amountMxn)})`
+  // En el pago libre del QR fijo no hay concepto que validar (ni código que pedir).
+  const libre = input.order.origin === "qr"
+  const validado = libre ? "importe correcto" : "concepto e importe correctos"
   switch (input.outcome.review) {
     case "auto_approved":
       return [
-        `*Pago confirmado* — el comprobante de tu ${orden} pasó la verificación (concepto e importe) y el depósito quedó acreditado en la cuenta.`,
+        `*Pago confirmado* — el comprobante de tu ${orden} pasó la verificación (${libre ? "importe" : "concepto e importe"}) y el depósito quedó acreditado en la cuenta.`,
         "",
         "Gracias. Este es tu comprobante de pago confirmado.",
       ].join("\n")
     case "verifying_deposit":
       return [
-        `Comprobante recibido y validado para tu ${orden}: concepto e importe correctos.`,
+        `Comprobante recibido y validado para tu ${orden}: ${validado}.`,
         "",
         "Estoy confirmando la acreditación de tu depósito en la cuenta; te aviso aquí mismo en cuanto se confirme (suele tardar minutos, según tu banco puede tardar más).",
       ].join("\n")
     case "awaiting_creator":
       return [
-        `Comprobante recibido y validado para tu ${orden}: concepto e importe correctos.`,
+        `Comprobante recibido y validado para tu ${orden}: ${validado}.`,
         "",
-        "Quien emitió la orden confirmará la recepción de tu pago y te avisará por este chat.",
+        libre
+          ? "Quien te cobró confirmará la recepción de tu pago y te avisará por este chat."
+          : "Quien emitió la orden confirmará la recepción de tu pago y te avisará por este chat.",
       ].join("\n")
     case "auto_rejected": {
       const reasons = input.outcome.scan.reasons
@@ -576,7 +513,9 @@ function textoVeredicto(input: {
         status: input.outcome.status,
       })
     case "not_a_receipt":
-      return "El archivo que enviaste no parece un comprobante de transferencia. Envía SOLO la foto o el PDF del comprobante del pago (puedes escribir el código como mensaje si lo tienes a la mano)."
+      return libre
+        ? "El archivo que enviaste no parece un comprobante de transferencia. Envía SOLO la foto o el PDF del comprobante de tu pago."
+        : "El archivo que enviaste no parece un comprobante de transferencia. Envía SOLO la foto o el PDF del comprobante del pago (puedes escribir el código como mensaje si lo tienes a la mano)."
   }
 }
 
@@ -713,6 +652,86 @@ async function revisarManualConAviso(input: {
 }
 
 /**
+ * Un comprobante que no corresponde a ninguna orden queda en silencio —la
+ * regla del canal para números sin pago— SALVO que el número haya pagado
+ * antes por un QR fijo: su escaneo venció (pasó la vigencia) y se le pide
+ * reescanear en vez de ignorar un pago real.
+ */
+async function guiaQrVencido(input: {
+  phone: string
+  text: string
+  media: { mimeType: string }
+}): Promise<PaymentOrderTurnResult | null> {
+  const conocido = await hasPaymentQrRequestHistory(input.phone).catch(
+    () => false
+  )
+  if (!conocido) return null
+  return {
+    text: TEXTO_QR_REESCANEAR,
+    orderId: null,
+    inboundText: input.text,
+    mediaMime: input.media.mimeType,
+  }
+}
+
+/**
+ * COMPROBANTE del pago libre del QR fijo: la orden nace de él en qr-fijo.ts
+ * (el pagador se identifica por su teléfono); aquí solo se arma la respuesta
+ * con el mismo veredicto de siempre. `lectura` es la extracción de visión
+ * que este turno ya haya hecho (no se gasta dos veces).
+ */
+async function atenderComprobanteLibre(
+  input: {
+    phone: string
+    text: string
+    media: { mimeType: string; fileName: string | null; bytes: Uint8Array }
+    payerName?: string | null
+    preextracted?: ExtraccionLLM
+  },
+  lectura: ExtraccionLLM | null = null
+): Promise<PaymentOrderTurnResult> {
+  const qr = await atenderComprobanteQr({
+    phone: input.phone,
+    payerName: input.payerName,
+    text: input.text,
+    media: input.media,
+    preextracted: lectura ?? input.preextracted,
+  }).catch((error: unknown) => {
+    logEvent("orden_pago.qr_turn_error", {
+      phone: maskPhone(input.phone),
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return null
+  })
+  const base = {
+    inboundText: input.text,
+    mediaMime: input.media.mimeType,
+  }
+  if (qr === null) {
+    return {
+      text: "No pude registrar tu pago en este momento. Vuelve a enviar el comprobante en unos minutos.",
+      orderId: null,
+      ...base,
+    }
+  }
+  if (qr.kind === "reply") {
+    return { text: qr.text, orderId: qr.orderId, ...base }
+  }
+  logEvent("orden_pago.whatsapp_receipt", {
+    phone: maskPhone(input.phone),
+    order_id: qr.order.id,
+    code: qr.order.code,
+    review: qr.outcome.review,
+    qr: true,
+  })
+  return {
+    text: textoVeredicto({ order: qr.order, outcome: qr.outcome }),
+    orderId: qr.order.id,
+    ...base,
+  }
+}
+
+/**
  * Turno de COMPROBANTE del pagador (foto/PDF, solo o con caption). El
  * código IMPRESO descubre la orden; si la lectura falla, el código del
  * caption; si tampoco hay, el teléfono de un pagador ya conocido. Null =
@@ -740,21 +759,50 @@ export async function maybeHandlePaymentOrderReceipt(input: {
     input.preextracted?.datos?.concepto
       ? findPaymentOrderCodeTokens(input.preextracted.datos.concepto)
       : []
+  const tokensApuntanAPendiente = tokens.some((token) =>
+    pending.some((order) => order.status === "pending" && order.code === token)
+  )
+  const tokensApuntanAOrden = tokens.some((token) =>
+    pending.some((order) => order.code === token)
+  )
+
+  // PAGO LIBRE del QR fijo: el pagador se identifica por su TELÉFONO —tiene
+  // una solicitud vigente o ya pagó por un QR—. Su comprobante se atiende
+  // entero en qr-fijo.ts (la orden nace de él): un reenvío del mismo archivo
+  // responde su estado y uno nuevo abre otro cobro. Nada de descubrimiento
+  // por concepto (allí es libre). Dos excepciones dejan el turno a los links:
+  // el caption trae el código explícito de una orden activa, o el teléfono
+  // también tiene links pendientes (el comprobante puede ser de uno de
+  // ellos: primero se busca por su concepto, líneas abajo).
+  const pagadorQr =
+    pending.some(
+      (order) => order.origin === "qr" && order.payerPhone === input.phone
+    ) ||
+    (await listOpenPaymentQrRequestsForPayer(input.phone).catch(() => []))
+      .length > 0
+  const linksPendientesDelTelefono = pending.some(
+    (order) => order.origin !== "qr" && order.payerPhone === input.phone
+  )
+  if (pagadorQr && !tokensApuntanAOrden && !linksPendientesDelTelefono) {
+    return atenderComprobanteLibre(input)
+  }
+
   if (
     pending.length === 0 &&
     tokens.length === 0 &&
     delegadoTokens.length === 0
   ) {
-    return null
+    return guiaQrVencido(input)
   }
 
   // Replay barato de una orden ya EN VERIFICACIÓN: si el teléfono tiene
-  // EXACTAMENTE una orden activa y está verifying (y ningún token apunta a
-  // una pendiente), responde el estado SIN gastar visión — el comprobante ya
-  // fue aprobado y el resultado llega cuando el depósito se acredite.
-  const delTelefono = pending.filter((order) => order.payerPhone === input.phone)
-  const tokensApuntanAPendiente = tokens.some((token) =>
-    pending.some((order) => order.status === "pending" && order.code === token)
+  // EXACTAMENTE una orden activa de link y está verifying (y ningún token
+  // apunta a una pendiente), responde el estado SIN gastar visión — el
+  // comprobante ya fue aprobado y el resultado llega cuando el depósito se
+  // acredite. Las órdenes del QR fijo no cuentan: allí cada archivo se mira
+  // por su huella (un comprobante nuevo es otro pago).
+  const delTelefono = pending.filter(
+    (order) => order.origin !== "qr" && order.payerPhone === input.phone
   )
   if (
     delTelefono.length === 1 &&
@@ -816,14 +864,18 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   //   2. código escrito en el caption (desambiguador del link),
   //   3. teléfono de un pagador ya conocido (impreso ilegible o lector
   //      caído).
+  // Las órdenes del QR fijo no participan: su concepto es libre y su
+  // comprobante se atiende por teléfono en qr-fijo.ts.
   const conceptoImpreso = extraccion?.datos?.concepto ?? null
   let candidate: PaymentOrder | null = null
   // El concepto coincide con varias órdenes y nada dejó clara la orden.
   let ambiguo = false
   let coincidentes = 0
   if (conceptoImpreso) {
-    const porPalabra = pending.filter((order) =>
-      conceptoImpresoCoincide(paymentOrderConceptAnchor(order), conceptoImpreso)
+    const porPalabra = pending.filter(
+      (order) =>
+        order.origin !== "qr" &&
+        conceptoImpresoCoincide(paymentOrderConceptAnchor(order), conceptoImpreso)
     )
     coincidentes = porPalabra.length
     const porConcepto = desambiguarComprobantePorConcepto({
@@ -846,6 +898,13 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   if (!candidate) {
     candidate =
       pending.find((order) => tokens.includes(order.code)) ?? null
+  }
+
+  // Pagador del QR fijo que también tiene links pendientes: su comprobante no
+  // calzó con el concepto de ninguno (ni trajo un código), así que es un pago
+  // libre — lo atiende qr-fijo.ts con la lectura de visión ya hecha.
+  if (!candidate && !ambiguo && pagadorQr) {
+    return atenderComprobanteLibre(input, extraccion)
   }
 
   // Sin orden pendiente: ¿el concepto o el código corresponden a una orden
@@ -912,10 +971,12 @@ export async function maybeHandlePaymentOrderReceipt(input: {
       }
     }
 
-    // Fallback por teléfono: el pagador de UNA orden pendiente envía un
-    // comprobante sin código legible (impreso borroso o lector caído). Con
-    // varias órdenes a su nombre pedimos el código para desambiguar.
-    const delPagador = pending.filter((order) => order.payerPhone === input.phone)
+    // Fallback por teléfono: el pagador de UNA orden pendiente de link envía
+    // un comprobante sin código legible (impreso borroso o lector caído).
+    // Con varias órdenes a su nombre pedimos el código para desambiguar.
+    const delPagador = pending.filter(
+      (order) => order.origin !== "qr" && order.payerPhone === input.phone
+    )
     if (delPagador.length === 1) {
       candidate = delPagador[0]
     } else if (delPagador.length > 1) {
@@ -936,15 +997,22 @@ export async function maybeHandlePaymentOrderReceipt(input: {
         mediaMime: input.media.mimeType,
       }
     }
-    if (!candidate) return null
+    if (!candidate) return guiaQrVencido(input)
   }
 
   // Binding inequívoco o revisión manual: un código que ya vivió en otra
   // orden (fue liberado al resolverse y reasignado) o una orden con pagador
-  // de otro número jamás se auto-aprueban con evidencia ajena.
+  // de otro número jamás se auto-aprueban con evidencia ajena. Las órdenes
+  // del QR FIJO solo llegan aquí por su código explícito y se exceptúan de
+  // la primera: su código nunca se entrega como evidencia (el pagador se
+  // identifica por su teléfono), así que uno reciclado no señala a otra
+  // orden.
   const sha256 = sha256Of(input.media.bytes)
   const codigoReasignado =
-    (await findResolvedPaymentOrderByAnyCode([candidate.code]).catch(() => null)) !== null
+    candidate.origin !== "qr" &&
+    (await findResolvedPaymentOrderByAnyCode([candidate.code]).catch(
+      () => null
+    )) !== null
   const pagadorDistinto =
     candidate.payerPhone !== null && candidate.payerPhone !== input.phone
   if (codigoReasignado || pagadorDistinto) {
@@ -1099,8 +1167,11 @@ export async function findPaymentOrderForReceiptConcept(
   const normalized = concepto.trim()
   if (normalized.length === 0) return null
   const pending = await listPendingPaymentOrders().catch(() => [])
-  const porImpreso = pending.find((order) =>
-    conceptoImpresoCoincide(paymentOrderConceptAnchor(order), normalized)
+  // Las órdenes del QR fijo no se descubren por concepto (allí es libre).
+  const porImpreso = pending.find(
+    (order) =>
+      order.origin !== "qr" &&
+      conceptoImpresoCoincide(paymentOrderConceptAnchor(order), normalized)
   )
   if (porImpreso) return porImpreso
   const tokens = findPaymentOrderCodeTokens(normalized)

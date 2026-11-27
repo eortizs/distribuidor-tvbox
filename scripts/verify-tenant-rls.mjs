@@ -54,6 +54,7 @@ const TABLES = [
   "connector_connections","user_mp_tokens","clients","tenant_mp_tokens",
   "signup_handoffs",
   "wa_contacts",
+  "payment_qr_requests",
   "affiliates",
   "tenants",
 ]
@@ -210,6 +211,19 @@ try {
     )
   }
   await client.query("SELECT set_config('app.tenant_id','',false)")
+
+  // 7. payment_qr_requests (solicitudes del QR fijo): con RLS (arriba), y
+  // SIN contexto el rol de la app no ve ninguna (las solicitudes viven por
+  // tenant; el CRUD como rol de la app lo ejercita la verificación de staging).
+  const anonQrRequests = await client.query(
+    "SELECT count(*)::int AS n FROM payment_qr_requests"
+  )
+  if (anonQrRequests.rows[0].n !== 0) {
+    fail(
+      "payment_qr_requests",
+      `sin contexto se ven ${anonQrRequests.rows[0].n} filas (debe ser 0)`
+    )
+  }
 
   if (failures.length > 0) {
     console.error(`\n${failures.length} fallos de aislamiento`)

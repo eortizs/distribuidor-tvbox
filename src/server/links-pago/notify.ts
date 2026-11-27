@@ -96,18 +96,20 @@ function notifyDepositConfirmedInTenant(order: PaymentOrder): void {
   const deposito = order.mpDepositAt
     ? ` acreditado el ${new Date(order.mpDepositAt).toLocaleString("es-MX")}`
     : ""
+  // En el pago libre del QR fijo no hubo concepto que validar.
+  const libre = order.origin === "qr"
   notifyCreator(
     order,
     "Cobro confirmado por depósito",
     `El pagador${pagador} de tu orden ${order.code} pagó ${money(
       order.amountMxn
-    )}: el comprobante pasó la validación automática (concepto e importe) y el depósito quedó acreditado en tu cuenta${deposito}.`
+    )}: el comprobante pasó la validación automática (${libre ? "importe" : "concepto e importe"}) y el depósito quedó acreditado en tu cuenta${deposito}.`
   )
   notifyPayer(
     order,
     "Pago confirmado",
     `Recibimos tu comprobante y confirmamos el depósito de ${money(
       order.amountMxn
-    )} con el concepto de pago ${paymentOrderConceptoVisible(order)} en la cuenta. Tu pago quedó validado. Gracias.`
+    )}${libre ? "" : ` con el concepto de pago ${paymentOrderConceptoVisible(order)}`} en la cuenta. Tu pago quedó validado. Gracias.`
   )
 }

@@ -14,7 +14,10 @@ import {
   PAYMENT_ORDER_OG_DESCRIPTION,
   PAYMENT_ORDER_OG_IMAGE_ALT,
   PAYMENT_ORDER_OG_SITE_NAME,
+  PAYMENT_QR_OG_DESCRIPTION,
+  PAYMENT_QR_OG_TITLE,
   buildPaymentOrderOgHtml,
+  buildPaymentQrOgHtml,
   isPreviewCrawler,
   paymentOrderOgTitle,
 } from "../src/lib/links-pago-og.ts"
@@ -188,6 +191,63 @@ check("la imagen declara su texto alternativo de marca", () => {
   const html = buildPaymentOrderOgHtml(INPUT)
   assert.ok(html.includes(PAYMENT_ORDER_OG_IMAGE_ALT))
   assert.equal(PAYMENT_ORDER_OG_SITE_NAME, "SPEILink")
+})
+
+/* ----------------------- QR fijo de cobro (sin importe) ------------------ */
+
+const QR_INPUT = {
+  canonicalUrl: "https://spei.link/cobro/K7QM2P",
+  imageUrl: "https://spei.link/spei-link-og.png",
+  waUrl: "https://wa.me/525540049353?text=Solicito%20realizar%20un%20pago.",
+}
+
+check("QR fijo: el titulo dice que el monto lo define el pagador", () => {
+  const html = buildPaymentQrOgHtml(QR_INPUT)
+  assert.equal(PAYMENT_QR_OG_TITLE, "Link de pago SPEILink: tú defines el monto")
+  assert.ok(
+    html.includes(
+      `<meta property="og:title" content="Link de pago SPEILink: tú defines el monto" />`
+    )
+  )
+  assert.ok(!html.includes("$100.00"))
+})
+
+check("QR fijo: la descripcion explica el pago libre (monto que quieras, CLABE, comprobante)", () => {
+  assert.match(PAYMENT_QR_OG_DESCRIPTION, /el monto que quieras/)
+  assert.match(PAYMENT_QR_OG_DESCRIPTION, /CLABE/)
+  assert.match(PAYMENT_QR_OG_DESCRIPTION, /comprobante/)
+  // Pago libre: no se pide declarar monto ni concepto por chat.
+  assert.doesNotMatch(PAYMENT_QR_OG_DESCRIPTION, /escribe por WhatsApp/)
+  const html = buildPaymentQrOgHtml(QR_INPUT)
+  assert.ok(html.includes(PAYMENT_QR_OG_DESCRIPTION))
+})
+
+check("QR fijo: canonical y og:url apuntan a spei.link/cobro/<codigo>", () => {
+  const html = buildPaymentQrOgHtml(QR_INPUT)
+  assert.ok(
+    html.includes('<meta property="og:url" content="https://spei.link/cobro/K7QM2P" />')
+  )
+  assert.ok(
+    html.includes('<link rel="canonical" href="https://spei.link/cobro/K7QM2P" />')
+  )
+})
+
+check("QR fijo: los pasos en pantalla son recibir la CLABE, transferir lo que quiera y enviar el comprobante", () => {
+  const html = buildPaymentQrOgHtml(QR_INPUT)
+  assert.match(html, /<h1>Paga por WhatsApp: tú defines el monto<\/h1>/)
+  assert.match(html, /<li>Recibe la CLABE y transfiere por SPEI el monto que quieras\.<\/li>/)
+  assert.match(html, /<li>Envía el comprobante por WhatsApp y recibe la confirmación\.<\/li>/)
+})
+
+check("QR fijo: sin scripts, con badge y boton al chat de WhatsApp", () => {
+  const html = buildPaymentQrOgHtml(QR_INPUT)
+  assert.ok(!html.includes("<script"))
+  assert.ok(
+    html.includes(
+      '<meta property="og:image" content="https://spei.link/spei-link-og.png" />'
+    )
+  )
+  assert.match(html, /<a class="cta" href="https:\/\/wa\.me\/525540049353\?text=[^"]*">/)
 })
 
 console.log(`\n${passed} pruebas OK`)

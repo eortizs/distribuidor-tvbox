@@ -227,8 +227,10 @@ export async function reviewPaymentReceipt(input: {
   }
 
   // El ancla de conciliación es el CONCEPTO DE PAGO de la orden (el código
-  // del link en las órdenes de la era previa).
-  const ancla = paymentOrderConceptAnchor(order)
+  // del link en las órdenes de la era previa). En los pagos por QR fijo el
+  // concepto es LIBRE —lo escribe el pagador como quiera—: no se evalúa; la
+  // prueba es el IMPORTE exacto del comprobante y, después, el depósito.
+  const ancla = order.origin === "qr" ? "" : paymentOrderConceptAnchor(order)
   const checks = evaluarCondiciones({
     datos: extraccion.datos,
     conceptCode: ancla,
@@ -240,7 +242,7 @@ export async function reviewPaymentReceipt(input: {
   // impreso el CÓDIGO del link (pagador instruido antes del cambio, o quien
   // lo leyó del propio enlace) pasa la condición de concepto — el código
   // identifica esta orden con la misma fuerza (único entre activas).
-  if (ancla !== order.code) {
+  if (ancla.length > 0 && ancla !== order.code) {
     const codigoCheck = checks.find((check) => check.key === "codigo")
     if (codigoCheck && !codigoCheck.passed) {
       const codigoYaImpreso = conceptoImpresoCoincide(
@@ -291,6 +293,9 @@ export async function reviewPaymentReceipt(input: {
   }
 
   const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
+  // En el QR fijo no hay concepto que validar ni link que marcar.
+  const verificado = order.origin === "qr" ? "importe" : "concepto e importe"
+  const porPagar = order.origin === "qr" ? "la orden" : "el link"
 
   if (!scan.ok) {
   const persisted = await savePaymentOrderScan({
@@ -351,9 +356,9 @@ export async function reviewPaymentReceipt(input: {
     notifyCreator(
       order,
       "Comprobante validado",
-    `El pagador${pagador} de tu orden ${order.code} (${money(
-      order.amountMxn
-    )}) envió un comprobante válido (concepto e importe). Confirma la recepción del depósito en TU cuenta y marca el link como pagado en Módulos → SPEILink.`
+      `El pagador${pagador} de tu orden ${order.code} (${money(
+        order.amountMxn
+      )}) envió un comprobante válido (${verificado}). Confirma la recepción del depósito en TU cuenta y marca ${porPagar} como pagad${order.origin === "qr" ? "a" : "o"} en Módulos → SPEILink.`
     )
     return { review: "awaiting_creator" }
   }

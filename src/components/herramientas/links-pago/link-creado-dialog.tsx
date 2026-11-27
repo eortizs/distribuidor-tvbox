@@ -1,8 +1,8 @@
 "use client"
 
 import { CopyIcon, ExternalLinkIcon, Share2Icon } from "lucide-react"
-import { toast } from "sonner"
 
+import type { CreatedPaymentOrder } from "@/app/actions/links-pago"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -11,8 +11,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { copyPaymentLink, sharePaymentLink } from "@/components/herramientas/links-pago/share-payment-link"
 import { paymentOrderMoney } from "@/lib/links-pago"
-import type { CreatedPaymentOrder } from "@/app/actions/links-pago"
 
 /*
  * Diálogo de link de pago creado: QR + datos SPEI + copiar/compartir link.
@@ -30,30 +30,15 @@ interface LinkCreadoDialogProps {
 }
 
 export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
-  function copyText(value: string, label: string) {
-    void navigator.clipboard
-      .writeText(value)
-      .then(() => toast.success(`${label} copiado`))
-      .catch(() => toast.error("No se pudo copiar"))
-  }
-
   /**
-   * Comparte el link corto con el medio que elija el cobrador (WhatsApp,
-   * SMS, etc.) vía Web Share API del sistema. Sin soporte (desktop sin
-   * share sheet) o ante un fallo real, cae a copiar al portapapeles;
-   * cancelar el sheet nativo (AbortError) no es error ni copia nada.
+   * Comparte el link corto del pago (mecánica compartida con la tarjeta del
+   * QR fijo: ver share-payment-link.ts).
    */
   async function shareLink(order: CreatedPaymentOrder) {
-    const text = `Link de pago ${order.code} por ${paymentOrderMoney(order.amountMxn)}`
-    if (typeof navigator.share === "function") {
-      try {
-        await navigator.share({ title: "Link de pago", text, url: order.shortUrl })
-        return
-      } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") return
-      }
-    }
-    copyText(order.shortUrl, "El link de pago")
+    await sharePaymentLink({
+      text: `Link de pago ${order.code} por ${paymentOrderMoney(order.amountMxn)}`,
+      url: order.shortUrl,
+    })
   }
 
   return (
@@ -92,7 +77,7 @@ export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
                   size="icon"
                   className="relative after:content-[''] after:absolute after:-inset-2"
                   aria-label="Copiar el link de pago"
-                  onClick={() => copyText(order.shortUrl, "El link de pago")}
+                  onClick={() => copyPaymentLink(order.shortUrl)}
                 >
                   <CopyIcon />
                 </Button>

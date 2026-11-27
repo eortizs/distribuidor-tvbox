@@ -16,6 +16,12 @@ export interface PaymentOrderListItem {
   clientName: string | null
   amountMxn: number
   note: string | null
+  /**
+   * 'link' = importe y concepto definidos por el cobrador; 'qr' = pago libre
+   * del QR fijo (importe leído del comprobante; `note`, si existe, es el
+   * concepto libre que escribió el pagador, solo informativo).
+   */
+  origin: PaymentOrderOrigin
   status: PaymentOrder["status"]
   bank: PaymentOrder["bank"]
   payerPhone: string | null
@@ -226,6 +232,7 @@ export function toPaymentOrderListItem(order: PaymentOrder): PaymentOrderListIte
     clientName: order.clientName,
     amountMxn: order.amountMxn,
     note: order.note,
+    origin: order.origin,
     status: order.status,
     bank: order.bank,
     payerPhone: order.payerPhone,
@@ -345,11 +352,256 @@ export function parsePaymentOrderRequestAmount(text: string): number | null {
   return Math.round(amount * 100) / 100
 }
 
-/** Importe legible de un texto del comprobante (misma lectura del escaneo). */
-function importeLeido(value: string | null): number | null {
+/* -------------------------------------------------------------------------- */
+/*      QR FIJO de cobro: pago libre — monto y concepto los pone el pagador    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Origen de una orden de pago: 'link' es el link con importe y concepto que
+ * define el cobrador; 'qr' nace del QR FIJO de un cobrador, donde el pagador
+ * transfiere el MONTO que quiera con el CONCEPTO que quiera y la orden se
+ * crea desde su comprobante (identificado por su teléfono de WhatsApp).
+ */
+export type PaymentOrderOrigin = "link" | "qr"
+
+/**
+ * Código del QR FIJO de un cobrador: 6 caracteres del mismo alfabeto sin
+ * ambigüedad de los links. Se eligen SEIS a propósito — un código de link
+ * tiene 4 y `findPaymentOrderCodeTokens` solo extrae tokens de 4 — así el
+ * código de cobrador nunca puede confundirse con el de una orden.
+ */
+export const COBRADOR_QR_CODE_LENGTH = 6
+
+export function isCobradorQrCode(code: string): boolean {
+  return /^[A-HJ-NP-Z2-9]{6}$/.test(code)
+}
+
+/** Segmento del dominio corto reservado al QR fijo: `spei.link/cobro/<CÓDIGO>`. */
+export const COBRADOR_QR_PATH = "/cobro"
+
+export function cobradorQrShortPath(code: string): string {
+  return `${COBRADOR_QR_PATH}/${code}`
+}
+
+/**
+ * Código del QR fijo dentro de una ruta del dominio corto
+ * (`/cobro/<código>`, sin distinguir mayúsculas/minúsculas). Null = no es la
+ * ruta del QR o el código no tiene la forma válida (el proxy responde 404).
+ */
+export function parseCobradorQrPath(pathname: string): string | null {
+  const match = /^\/cobro\/([A-Za-z0-9]+)\/?$/i.exec(pathname)
+  if (!match) return null
+  const code = match[1].toUpperCase()
+  return isCobradorQrCode(code) ? code : null
+}
+
+/**
+ * ¿La ruta cae bajo el espacio del QR fijo (`/cobro` o `/cobro/…`)? El proxy
+ * lo usa para responder 404 ahí mismo cuando `parseCobradorQrPath` no dio un
+ * código válido: ese espacio jamás se interpreta como un link de pago.
+ */
+export function isCobradorQrPath(pathname: string): boolean {
+  return /^\/cobro(?:\/|$)/i.test(pathname)
+}
+
+/**
+ * Texto prellenado EXACTO del QR fijo: abre el chat del número del negocio
+ * con la solicitud y el código del cobrador. El código viaja en el mensaje
+ * porque un mismo número de WhatsApp atiende a TODOS los cobradores del
+ * panel: sin él, el sistema no sabría de quién es el QR (ni a qué cuenta
+ * va el dinero).
+ */
+export function cobradorQrRequestText(code: string): string {
+  return `Solicito realizar un pago. (cobrador ${code})`
+}
+
+const COBRADOR_QR_REQUEST_RE = /\bsolicito\s+realizar\s+un\s+pago\b/i
+const COBRADOR_QR_TOKEN_RE = /\bcobrador\s+([A-HJ-NP-Z2-9]{6})\b/i
+
+/**
+ * ¿El mensaje es la SOLICITUD del QR fijo? `{ code }` con el código de
+ * cobrador (en mayúsculas) o `code: null` cuando la frase está pero el
+ * código falta o no es válido. Null = el mensaje no es una solicitud de QR.
+ */
+export function parseCobradorQrRequest(
+  text: string
+): { code: string | null } | null {
+  if (!COBRADOR_QR_REQUEST_RE.test(text)) return null
+  const match = COBRADOR_QR_TOKEN_RE.exec(text)
+  return { code: match ? match[1].toUpperCase() : null }
+}
+
+/** Órdenes de QR fijo activas (pendientes o verificando) por teléfono. */
+export const QR_MAX_ACTIVE_PER_PAYER = 3
+
+/**
+ * Vigencia de una SOLICITUD del QR fijo —el escaneo que entrega la CLABE al
+ * pagador—: durante estos días un comprobante enviado desde el MISMO número
+ * de WhatsApp se atribuye al cobrador de ese QR. Pasado el plazo el pagador
+ * reescanea y vuelve a enviar su comprobante.
+ */
+export const PAYMENT_QR_REQUEST_WINDOW_MS = 7 * 24 * 60 * 60_000
+
+/**
+ * Con solicitudes vigentes en VARIOS cobradores (un mismo teléfono escribió a
+ * dos QR del panel) gana la más recientemente escaneada si es reciente: quien
+ * vuelve a escanear el QR de la persona que le cobró y reenvía el comprobante
+ * queda identificado sin que se le pida nada más.
+ */
+export const PAYMENT_QR_REQUEST_FRESH_MS = 30 * 60_000
+
+/** Solicitud vigente de un pagador del QR fijo (fila de `payment_qr_requests`). */
+export interface PaymentQrRequest {
+  cobradorUserId: string
+  /** Último escaneo: el pagador recibió ahí los datos de la cuenta. */
+  lastRequestedAt: string
+}
+
+export type CobradorDelQr =
+  | { kind: "cobrador"; cobradorUserId: string; lastRequestedAt: string }
+  | { kind: "sin_solicitud" }
+  | { kind: "ambiguo" }
+
+/**
+ * ¿A qué cobrador se atribuye un comprobante del QR fijo? El pagador se
+ * identifica por su TELÉFONO de WhatsApp: sus solicitudes vigentes dicen a
+ * quién le tocaba pagar. Una sola → ese. Varias → la del último escaneo si
+ * es reciente y no hay empate; si no, se le pide reescanear (jamás se
+ * arriesga la cuenta equivocada).
+ */
+export function cobradorDelQr(
+  requests: PaymentQrRequest[],
+  now: number = Date.now()
+): CobradorDelQr {
+  if (requests.length === 0) return { kind: "sin_solicitud" }
+  if (requests.length === 1) {
+    return {
+      kind: "cobrador",
+      cobradorUserId: requests[0].cobradorUserId,
+      lastRequestedAt: requests[0].lastRequestedAt,
+    }
+  }
+  const sorted = [...requests].sort(
+    (first, second) =>
+      Date.parse(second.lastRequestedAt) - Date.parse(first.lastRequestedAt)
+  )
+  const newest = sorted[0]
+  const newestMs = Date.parse(newest.lastRequestedAt)
+  const nextMs = sorted[1] ? Date.parse(sorted[1].lastRequestedAt) : Number.NEGATIVE_INFINITY
+  if (newestMs >= now - PAYMENT_QR_REQUEST_FRESH_MS && newestMs > nextMs) {
+    return {
+      kind: "cobrador",
+      cobradorUserId: newest.cobradorUserId,
+      lastRequestedAt: newest.lastRequestedAt,
+    }
+  }
+  return { kind: "ambiguo" }
+}
+
+/** Hora de México (CDMX): sin horario de verano desde 2022, fija en UTC−6. */
+const CDMX_OFFSET_MS = 6 * 60 * 60_000
+
+/**
+ * Fecha y hora IMPRESAS en el comprobante (`YYYY-MM-DD` + `HH:mm` en 24 h,
+ * hora de México) como instante; null si falta alguna o no tiene la forma.
+ */
+export function instanteDelComprobante(
+  fecha: string | null,
+  hora: string | null
+): number | null {
+  if (!fecha || !hora) return null
+  const f = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fecha)
+  const h = /^(\d{2}):(\d{2})$/.exec(hora)
+  if (!f || !h) return null
+  const year = Number(f[1])
+  const month = Number(f[2])
+  const day = Number(f[3])
+  const hour = Number(h[1])
+  const minute = Number(h[2])
+  if (hour > 23 || minute > 59) return null
+  // Fecha de calendario real (Date.UTC «corrige» el 32 de diciembre).
+  const dayStart = new Date(Date.UTC(year, month - 1, day))
+  if (
+    dayStart.getUTCFullYear() !== year ||
+    dayStart.getUTCMonth() !== month - 1 ||
+    dayStart.getUTCDate() !== day
+  ) {
+    return null
+  }
+  const ms = Date.UTC(year, month - 1, day, hour, minute) + CDMX_OFFSET_MS
+  return Number.isFinite(ms) ? ms : null
+}
+
+/**
+ * Inicio de una orden nacida del QR FIJO (`created_at`): es también el
+ * inicio de su ventana de depósito en Mercado Pago ([inicio − tolerancia,
+ * ahora]), así que debe ser el momento en que el pagador PAGÓ, nunca antes de
+ * haber recibido los datos de la cuenta. Regla: la hora impresa en el
+ * comprobante cuando es legible y no anterior al último escaneo; si no, el
+ * último escaneo. Nunca en el futuro. Así un comprobante VIEJO (de una
+ * transferencia anterior al escaneo) no puede confirmar un cobro nuevo: su
+ * depósito cae antes de la ventana.
+ */
+export function paymentQrOrderStart(input: {
+  lastRequestedAt: string
+  receiptFecha: string | null
+  receiptHora: string | null
+  now?: number
+}): Date {
+  const now = input.now ?? Date.now()
+  const scannedMs = Date.parse(input.lastRequestedAt)
+  const floor = Number.isFinite(scannedMs) ? scannedMs : now
+  const printedMs = instanteDelComprobante(input.receiptFecha, input.receiptHora)
+  const startMs =
+    printedMs !== null && printedMs >= floor && printedMs <= now
+      ? printedMs
+      : floor
+  return new Date(Math.min(startMs, now))
+}
+
+/** Tope del concepto libre guardado como referencia (nunca se valida). */
+export const PAYMENT_ORDER_NOTE_MAX = 120
+
+/**
+ * Rótulo de la columna «Concepto» del reporte SPEILink cuando el depósito
+ * confirmó un pago por QR fijo sin concepto escrito: identifica el origen en
+ * vez de caer a la inferencia por ventana de las renovaciones.
+ */
+export const PAYMENT_QR_REPORT_LABEL = "QR fijo"
+
+/**
+ * Concepto LIBRE impreso en el comprobante de un pago por QR fijo: se guarda
+ * como referencia informativa para el cobrador y el reporte SPEILink. No se
+ * exige ni se valida — el pagador escribe lo que quiera en su transferencia.
+ */
+export function conceptoLibreDeComprobante(
+  value: string | null | undefined
+): string | null {
+  if (typeof value !== "string") return null
+  const clean = value.replace(/\s+/g, " ").trim()
+  if (!clean) return null
+  const cut = Array.from(clean).slice(0, PAYMENT_ORDER_NOTE_MAX).join("").trim()
+  return cut || null
+}
+
+/**
+ * Importe legible de un texto del comprobante, a centavos — u null si no se
+ * entiende con certeza. Lo usan la desambiguación por importe y el pago
+ * libre del QR fijo, donde el importe de la orden es el que declara el
+ * comprobante: por eso NO adivina. Acepta lo que imprimen los bancos
+ * («500.00», «$350», «1,500.50» con miles por coma); rechaza las formas
+ * ambiguas («500,00» o «12.345», que podrían ser 500 o 50 000).
+ */
+export function leerImporteDeComprobante(value: string | null): number | null {
   if (!value) return null
-  const parsed = Number(value.replace(/[,\s$]/g, ""))
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
+  const cuerpo = value.replace(/[$\s]/g, "")
+  const conMiles = /^\d{1,3}(,\d{3})+(?:\.\d{1,2})?$/.test(cuerpo)
+  const plano = /^\d+(?:\.\d{1,2})?$/.test(cuerpo)
+  if (!conMiles && !plano) return null
+  const parsed = Number(conMiles ? cuerpo.replace(/,/g, "") : cuerpo)
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.round(parsed * 100) / 100
+    : null
 }
 
 export interface DesambiguacionComprobante {
@@ -384,7 +636,7 @@ export function desambiguarComprobantePorConcepto(input: {
     return { order: coincidentes[0], ambiguo: false, via: "unica" }
   }
 
-  const importe = importeLeido(input.importeTexto)
+  const importe = leerImporteDeComprobante(input.importeTexto)
   const porImporte =
     importe === null
       ? coincidentes

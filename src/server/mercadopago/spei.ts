@@ -458,7 +458,8 @@ export async function listSpeiDepositsForDay(
         buyerUserId: options?.conceptBuyerUserId,
       })
       // El link por ID de pago de MP es determinista y GANA sobre la
-      // inferencia por ventana de transfer_concepts.
+      // inferencia por ventana de transfer_concepts (también en los pagos
+      // por QR fijo sin concepto, que llegan con su rótulo).
       const orderCodes = await findPaymentOrdersByMpPaymentIds(
         deposits.map((deposit) => deposit.id)
       ).catch(() => new Map<string, string>())

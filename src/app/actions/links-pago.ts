@@ -9,7 +9,9 @@ import { getClient } from "@/server/clientes/registry"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
+import { AppError } from "@/server/umejson/types"
 import { resolveCreatorBankData } from "@/server/links-pago/bank"
+import { renderPaymentQrLink, type PaymentQrLink } from "@/server/links-pago/qr-asset"
 import {
   conceptoPagoDeOrden,
   paymentOrderConceptoVisible,
@@ -19,6 +21,7 @@ import {
   cancelPaymentOrder,
   checkRateLimitPaymentOrderCreation,
   createPaymentOrder,
+  ensurePaymentQrCode,
   getPaymentOrder,
   PAYMENT_ORDER_MAX_MXN,
   PAYMENT_ORDER_MIN_MXN,
@@ -31,6 +34,8 @@ import {
 } from "@/server/links-pago/wa-link"
 
 import type { PaymentOrder } from "@/server/links-pago/repository"
+
+export type { PaymentQrLink } from "@/server/links-pago/qr-asset"
 
 /*
  * Acciones del módulo SPEILink (/modulos/links-de-pago). Contrato de
@@ -232,6 +237,55 @@ export async function getPaymentOrderLinkAction(input: {
       waUrl,
       qrDataUrl,
     },
+  }
+}
+
+export interface PaymentQrResult {
+  error: string | null
+  qr: PaymentQrLink | null
+}
+
+/**
+ * Asigna (la primera vez) y devuelve el QR FIJO de cobro del usuario: un QR
+ * permanente con el que el pagador declara monto y concepto por WhatsApp.
+ * El código se acuña una sola vez y jamás cambia, así que el QR impreso
+ * sirve para siempre. Solo las cuentas de un negocio con cuenta de cobro
+ * tienen QR.
+ */
+export async function getPaymentQrAction(): Promise<PaymentQrResult> {
+  const user = await requireUser("core")
+
+  const bank = await resolveCreatorBankData(user)
+  if (!bank) {
+    return {
+      error: isOwnerRole(user.role)
+        ? "Para tener tu QR fijo necesitas una cuenta donde recibir: completa tus datos bancarios en Perfil → Datos bancarios o configura TRANSFER_BANK_NAME/ACCOUNT/HOLDER en el servidor."
+        : "Para tener tu QR fijo necesitas tus datos bancarios: complétalos en Perfil → Datos bancarios (Banco, Destinatario y CLABE).",
+      qr: null,
+    }
+  }
+
+  try {
+    const code = await ensurePaymentQrCode(user.id)
+    const qr = await renderPaymentQrLink(code, user.tenantId ?? null)
+    if (!qr) {
+      return {
+        error:
+          user.tenantId && user.tenantId !== LEGACY_TENANT_ID
+            ? "Vincula el WhatsApp de tu negocio en Módulos → WhatsApp antes de usar tu QR fijo."
+            : "El canal de WhatsApp no está configurado en el servidor (WHATSAPP_AGENT_NUMBER): no hay chat al que apuntar el QR fijo.",
+        qr: null,
+      }
+    }
+    return { error: null, qr }
+  } catch (error) {
+    return {
+      error:
+        error instanceof AppError && error.code === "qr_no_disponible"
+          ? error.message
+          : "No se pudo generar tu QR fijo. Inténtalo de nuevo.",
+      qr: null,
+    }
   }
 }
 

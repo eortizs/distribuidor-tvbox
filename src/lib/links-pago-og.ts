@@ -114,19 +114,42 @@ export interface PaymentOrderOgInput {
 }
 
 /**
+ * Título y descripción de la tarjeta del QR FIJO de cobro: ahí no hay
+ * importe (es un pago libre: el pagador transfiere lo que quiera), así que
+ * la tarjeta explica eso en lugar de anunciar un monto.
+ */
+export const PAYMENT_QR_OG_TITLE = "Link de pago SPEILink: tú defines el monto"
+export const PAYMENT_QR_OG_DESCRIPTION =
+  "Abre el link, recibe por WhatsApp la CLABE, transfiere por SPEI el monto que quieras y envía el comprobante."
+
+interface OgPageInput {
+  title: string
+  description: string
+  canonicalUrl: string
+  imageUrl: string
+  waUrl: string
+  /** Encabezado visible de la tarjeta en pantalla (sin etiquetas). */
+  heading: string
+  /** Pasos del pago que se listan en pantalla. */
+  steps: string[]
+}
+
+/**
  * Página de la vista previa: las etiquetas Open Graph (que es lo que lee el
  * rastreador) y, debajo, la misma explicación en pantalla con el botón para
  * continuar por WhatsApp (por si el link se abre a mano). Sin scripts: un
  * rastreador que ejecutará JavaScript seguiría la redirección y volvería a
  * la tarjeta genérica de wa.me.
  */
-export function buildPaymentOrderOgHtml(input: PaymentOrderOgInput): string {
-  const title = escapeHtml(paymentOrderOgTitle(input.amountLabel))
-  const description = escapeHtml(PAYMENT_ORDER_OG_DESCRIPTION)
+function buildOgPage(input: OgPageInput): string {
+  const title = escapeHtml(input.title)
+  const description = escapeHtml(input.description)
   const canonicalUrl = escapeHtml(input.canonicalUrl)
   const imageUrl = escapeHtml(input.imageUrl)
   const waUrl = escapeHtml(input.waUrl)
-  const amountLabel = escapeHtml(input.amountLabel)
+  const steps = input.steps
+    .map((step) => `        <li>${escapeHtml(step)}</li>`)
+    .join("\n")
 
   return `<!doctype html>
 <html lang="es-MX">
@@ -166,15 +189,56 @@ export function buildPaymentOrderOgHtml(input: PaymentOrderOgInput): string {
   <body>
     <main class="card">
       <img class="marca" src="${imageUrl}" width="140" height="140" alt="${escapeHtml(PAYMENT_ORDER_OG_IMAGE_ALT)}" />
-      <h1>Link de pago por ${amountLabel}</h1>
+      <h1>${escapeHtml(input.heading)}</h1>
       <ol>
-        <li>Abre el chat de WhatsApp y solicita tu pago.</li>
-        <li>Recibe tu concepto de pago y la CLABE.</li>
-        <li>Transfiere por SPEI y envía el comprobante.</li>
+${steps}
       </ol>
       <a class="cta" href="${waUrl}">Continuar por WhatsApp</a>
       <p class="pie">spei.link - Links de pago por WhatsApp</p>
     </main>
   </body>
 </html>`
+}
+
+/** Vista previa del link de pago con importe (spei.link/<CÓDIGO>). */
+export function buildPaymentOrderOgHtml(input: PaymentOrderOgInput): string {
+  return buildOgPage({
+    title: paymentOrderOgTitle(input.amountLabel),
+    description: PAYMENT_ORDER_OG_DESCRIPTION,
+    canonicalUrl: input.canonicalUrl,
+    imageUrl: input.imageUrl,
+    waUrl: input.waUrl,
+    heading: `Link de pago por ${input.amountLabel}`,
+    steps: [
+      "Abre el chat de WhatsApp y solicita tu pago.",
+      "Recibe tu concepto de pago y la CLABE.",
+      "Transfiere por SPEI y envía el comprobante.",
+    ],
+  })
+}
+
+export interface PaymentQrOgInput {
+  /** URL canónica del link corto (spei.link/cobro/<código>). */
+  canonicalUrl: string
+  /** URL ABSOLUTA de la imagen de la tarjeta (el badge de SPEILink). */
+  imageUrl: string
+  /** Destino del botón: el chat de WhatsApp con la solicitud prellenada. */
+  waUrl: string
+}
+
+/** Vista previa del QR fijo de cobro (spei.link/cobro/<CÓDIGO>): sin importe. */
+export function buildPaymentQrOgHtml(input: PaymentQrOgInput): string {
+  return buildOgPage({
+    title: PAYMENT_QR_OG_TITLE,
+    description: PAYMENT_QR_OG_DESCRIPTION,
+    canonicalUrl: input.canonicalUrl,
+    imageUrl: input.imageUrl,
+    waUrl: input.waUrl,
+    heading: "Paga por WhatsApp: tú defines el monto",
+    steps: [
+      "Abre el chat de WhatsApp y solicita tu pago.",
+      "Recibe la CLABE y transfiere por SPEI el monto que quieras.",
+      "Envía el comprobante por WhatsApp y recibe la confirmación.",
+    ],
+  })
 }

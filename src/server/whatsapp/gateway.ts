@@ -463,6 +463,19 @@ async function handleClientIncomingMessage(
   const mediaInfo = extractMediaInfo(input.m.message)
   const messageText = (text || caption).trim()
 
+  // QR FIJO de cobro (pago libre): su solicitud —o un ARCHIVO enviado por un
+  // teléfono con una solicitud vigente— va a la rama de pagos: un cliente
+  // del distribuidor también puede comprar algo con su QR, y aquí lo
+  // atendería la guía de renovación. Null = este cliente no está en ese caso
+  // y la rama de clientes sigue.
+  const { claimsQrPaymentTurn, hasOpenQrRequest } = await import(
+    "@/server/links-pago/qr-fijo"
+  )
+  if (claimsQrPaymentTurn(messageText)) return null
+  if (mediaInfo && (await hasOpenQrRequest(input.phone).catch(() => false))) {
+    return null
+  }
+
   // /renovar [usuario]: comando del cliente (fuera de SLASH_COMMANDS a
   // propósito; los distribuidores conservan /tv3<usuario>).
   const renovar = parseClientRenovarCommand(messageText)

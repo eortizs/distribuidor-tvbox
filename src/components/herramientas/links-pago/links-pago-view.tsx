@@ -47,16 +47,20 @@ import {
   getPaymentOrderLinkAction,
   resolvePaymentOrderAction,
   type CreatedPaymentOrder,
+  type PaymentQrLink,
 } from "@/app/actions/links-pago"
 import { LinkCreadoDialog } from "@/components/herramientas/links-pago/link-creado-dialog"
+import { QrFijoCard } from "@/components/herramientas/links-pago/qr-fijo-card"
 
 /*
  * Vista del módulo SPEILink (/modulos/links-de-pago): formulario de
  * alta (importe + CONCEPTO DE PAGO obligatorio, una palabra alfanumérica)
  * que devuelve el link corto spei.link/<código> + QR; el concepto queda
  * OCULTO hasta que el pagador solicita el pago por WhatsApp y es el ancla
- * de conciliación del comprobante; listado de órdenes con el resultado del
- * escaneo y las acciones de revisión del creador.
+ * de conciliación del comprobante; el QR FIJO de cobro (pago libre: la orden
+ * nace del comprobante que el pagador envía por WhatsApp); y el listado de
+ * órdenes —de los dos orígenes— con el resultado del escaneo y las acciones
+ * de revisión.
  */
 
 const dateFormatter = new Intl.DateTimeFormat("es-MX", {
@@ -103,6 +107,8 @@ function scanReasonsOf(order: PaymentOrderListItem): string[] {
 
 interface LinksPagoViewProps {
   initialOrders: PaymentOrderListItem[]
+  /** QR fijo ya asignado del servidor; null = el cobrador aún no tiene código. */
+  initialQr: PaymentQrLink | null
   isAdmin: boolean
   whatsappConfigured: boolean
   scanConfigured: boolean
@@ -110,6 +116,7 @@ interface LinksPagoViewProps {
 
 export function LinksPagoView({
   initialOrders,
+  initialQr,
   isAdmin,
   whatsappConfigured,
   scanConfigured,
@@ -217,6 +224,7 @@ export function LinksPagoView({
                 clientName: null,
                 amountMxn: created.amountMxn,
                 note: created.note,
+                origin: "link",
                 status: "pending",
                 bank: created.bank,
                 payerPhone: null,
@@ -416,6 +424,12 @@ export function LinksPagoView({
           </div>
         </FramePanel>
 
+        {/* QR fijo de cobro: pago libre, la orden nace del comprobante del pagador */}
+        <QrFijoCard
+          initialQr={initialQr}
+          whatsappConfigured={whatsappConfigured}
+        />
+
         {/* Listado */}
         <FramePanel>
           <FrameHeader>
@@ -470,6 +484,11 @@ export function LinksPagoView({
                           {order.note}
                         </span>
                       ) : null}
+                      {order.origin === "qr" ? (
+                        <Badge variant="secondary" className="hidden sm:inline-flex">
+                          QR fijo
+                        </Badge>
+                      ) : null}
                       {order.clientName ? (
                         <Badge variant="secondary" size="sm" className="hidden md:inline-flex">
                           {order.clientName}
@@ -507,15 +526,27 @@ export function LinksPagoView({
                               </dd>
                             </div>
                           ) : null}
-                          <div className="flex flex-col gap-0.5">
-                            <dt className="text-muted-foreground text-xs">Concepto de pago</dt>
-                            <dd className="font-mono">
-                              {paymentOrderConceptoVisible(order)}
-                            </dd>
-                            <dd className="text-muted-foreground text-xs">
-                              El pagador lo recibe al solicitar el pago por WhatsApp.
-                            </dd>
-                          </div>
+                          {order.origin === "qr" ? (
+                            <div className="flex flex-col gap-0.5">
+                              <dt className="text-muted-foreground text-xs">Concepto (libre)</dt>
+                              <dd className="break-words">
+                                {order.note ?? "Sin concepto"}
+                              </dd>
+                              <dd className="text-muted-foreground text-xs">
+                                Lo que escribió el pagador en su transferencia: no se exige ni se valida.
+                              </dd>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col gap-0.5">
+                              <dt className="text-muted-foreground text-xs">Concepto de pago</dt>
+                              <dd className="font-mono">
+                                {paymentOrderConceptoVisible(order)}
+                              </dd>
+                              <dd className="text-muted-foreground text-xs">
+                                El pagador lo recibe al solicitar el pago por WhatsApp.
+                              </dd>
+                            </div>
+                          )}
                           <div className="flex flex-col gap-0.5">
                             <dt className="text-muted-foreground text-xs">Cuenta de cobro</dt>
                             <dd>
@@ -663,15 +694,20 @@ export function LinksPagoView({
                             >
                               Cancelar link
                             </Button>
-                            <Button
-                              size="lg"
-                              variant="outline"
-                              disabled={busy || linkOrderId === order.id}
-                              onClick={() => showLink(order)}
-                            >
-                              <QrCodeIcon data-icon="inline-start" />
-                              {linkOrderId === order.id ? "Cargando…" : "Ver QR y link"}
-                            </Button>
+                            {/* El QR de un link apunta a la orden por su código; una
+                                orden del QR fijo nace del comprobante del pagador y no
+                                se comparte como link. */}
+                            {order.origin === "link" ? (
+                              <Button
+                                size="lg"
+                                variant="outline"
+                                disabled={busy || linkOrderId === order.id}
+                                onClick={() => showLink(order)}
+                              >
+                                <QrCodeIcon data-icon="inline-start" />
+                                {linkOrderId === order.id ? "Cargando…" : "Ver QR y link"}
+                              </Button>
+                            ) : null}
                           </div>
                         ) : order.rejectionReason ? (
                           <p className="text-muted-foreground text-xs">
