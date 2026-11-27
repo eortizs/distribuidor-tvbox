@@ -13,6 +13,7 @@ import { toast } from "sonner"
 import { useTable, type ColumnDef } from "@tanstack/react-table"
 import {
   ChevronRightIcon,
+  ChevronUpIcon,
   InfoIcon,
   MinusIcon,
   PlusIcon,
@@ -23,6 +24,8 @@ import {
   TriangleAlertIcon,
   XIcon,
 } from "lucide-react"
+
+import { cn } from "cn"
 
 import {
   Alert,
@@ -294,6 +297,9 @@ export function NotaDigitalView({
       .map((entrada) => entrada.articulo)
   }, [articulos, indiceBusqueda, terminoDiferido])
   const [cart, setCart] = useState<CartItem[]>([])
+  // Orden en Bottom Sheet: la barra fija inferior (solo con artículos) la
+  // abre; cerrada por defecto para no tapar el catálogo.
+  const [ordenAbierta, setOrdenAbierta] = useState(false)
   const cantidadesEnComanda = useMemo(
     () => new Map(cart.map((item) => [item.articulo.id, item.cantidad])),
     [cart]
@@ -317,29 +323,27 @@ export function NotaDigitalView({
       return
     }
     setCart((prev) => {
+      // El artículo agregado (o re-agregado) sube hasta arriba de la lista:
+      // queda primero en la orden y a mano para editar su cantidad.
       const existente = prev.find((item) => item.articulo.id === articulo.id)
-      if (existente) {
-        return prev.map((item) =>
-          item.articulo.id === articulo.id
-            ? {
-                ...item,
-                cantidad: Math.min(9999.999, item.cantidad + 1),
-              }
-            : item
-        )
-      }
+      const resto = prev.filter((item) => item.articulo.id !== articulo.id)
       return [
-        ...prev,
-        {
-          articulo: {
-            id: articulo.id,
-            sku: articulo.sku,
-            nombre: articulo.nombre,
-            um: articulo.um,
-            precioUnitario: articulo.precioUnitario,
-          },
-          cantidad: 1,
-        },
+        existente
+          ? {
+              ...existente,
+              cantidad: Math.min(9999.999, existente.cantidad + 1),
+            }
+          : {
+              articulo: {
+                id: articulo.id,
+                sku: articulo.sku,
+                nombre: articulo.nombre,
+                um: articulo.um,
+                precioUnitario: articulo.precioUnitario,
+              },
+              cantidad: 1,
+            },
+        ...resto,
       ]
     })
     setBusqueda("")
@@ -394,6 +398,7 @@ export function NotaDigitalView({
       setNotas((prev) => [notaOptimista(resultado.order!, cart), ...prev])
       setCreated(resultado.order)
       setCart([])
+      setOrdenAbierta(false)
       setFormError(null)
       router.refresh()
     })
@@ -574,21 +579,17 @@ export function NotaDigitalView({
         </TabsList>
 
         <TabsContent value="crear">
-          <div className="flex flex-col gap-4">
-            <div className="flex flex-row items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold">Nueva nota digital</h2>
-              <InfoHint
-                label="Más información sobre cómo funciona la nota digital"
-                titulo="Nueva nota digital"
-              >
-                Arma la comanda con artículos de tu catálogo y genera un link
-                de pago con QR. Cuando se confirme el depósito, el pagador
-                recibe su nota desglosada por WhatsApp.
-              </InfoHint>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <InputGroup className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted">
+          <div
+            className={cn(
+              "flex flex-col gap-4",
+              // Espacio para la barra fija de la orden cuando hay artículos.
+              cart.length > 0 && "pb-24"
+            )}
+          >
+            {/* Buscador pegajoso: el catálogo scrollea por debajo y la
+                búsqueda queda siempre a mano. */}
+            <div className="bg-background sticky top-0 z-20 -mx-4 px-4 pt-1 pb-2 md:-mx-6 md:px-6">
+              <InputGroup className="h-12 w-full rounded-full border-0 bg-muted">
                 <InputGroupAddon align="inline-start" className="pl-3.5">
                   <SearchIcon aria-hidden="true" />
                 </InputGroupAddon>
@@ -663,153 +664,38 @@ export function NotaDigitalView({
               />
             )}
 
-            <div className="flex flex-col gap-3">
-              {cart.length === 0 ? (
-                <Empty className="border-0 py-6">
-                  <EmptyHeader>
-                    <EmptyMedia variant="icon">
-                      <ReceiptTextIcon />
-                    </EmptyMedia>
-                    <EmptyTitle>Aún no hay artículos</EmptyTitle>
-                    <EmptyDescription>
-                      Busca un artículo o servicio del catálogo y toca el
-                      resultado para agregarlo.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                </Empty>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {cart.map((item) => (
-                    <li
-                      key={item.articulo.id}
-                      className="bg-muted/50 flex flex-col gap-3 rounded-lg p-3 sm:flex-row sm:items-center sm:gap-4"
-                    >
-                      <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium leading-snug break-words">
-                            {item.articulo.nombre}
-                          </p>
-                          <p className="text-muted-foreground mt-0.5 text-xs">
-                            {item.articulo.sku} ·{" "}
-                            {paymentOrderMoney(item.articulo.precioUnitario)} c/u
-                          </p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon-sm"
-                          aria-label={`Quitar ${item.articulo.nombre} de la comanda`}
-                          className="relative after:content-[''] after:absolute after:-inset-2 shrink-0"
-                          onClick={() =>
-                            setCart((prev) =>
-                              prev.filter(
-                                (cartItem) =>
-                                  cartItem.articulo.id !== item.articulo.id
-                              )
-                            )
-                          }
-                        >
-                          <Trash2Icon />
-                        </Button>
-                      </div>
-
-                      <div className="flex items-center justify-between gap-3 sm:justify-end sm:gap-4">
-                        <InputGroup className="h-10 w-36 shrink-0">
-                          <InputGroupButton
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Quitar una unidad de ${item.articulo.nombre}`}
-                            className="relative after:content-[''] after:absolute after:-inset-2"
-                            onClick={() => cambiarCantidad(item.articulo.id, -1)}
-                          >
-                            <MinusIcon />
-                          </InputGroupButton>
-                          <InputGroupInput
-                            type="number"
-                            min="0.001"
-                            max="9999.999"
-                            step="0.1"
-                            value={String(item.cantidad)}
-                            aria-label={`Cantidad de ${item.articulo.nombre}`}
-                            className="text-center tabular-nums"
-                            onChange={(event) => {
-                              const valor = Number(event.target.value)
-                              if (!Number.isFinite(valor)) return
-                              const cantidad = Math.min(9999.999, Math.max(0, valor))
-                              setCart((prev) =>
-                                prev
-                                  .map((cartItem) =>
-                                    cartItem.articulo.id === item.articulo.id
-                                      ? { ...cartItem, cantidad }
-                                      : cartItem
-                                  )
-                                  .filter((cartItem) => cartItem.cantidad > 0)
-                              )
-                            }}
-                          />
-                          <InputGroupButton
-                            variant="ghost"
-                            size="icon-sm"
-                            aria-label={`Agregar una unidad de ${item.articulo.nombre}`}
-                            className="relative after:content-[''] after:absolute after:-inset-2"
-                            onClick={() => cambiarCantidad(item.articulo.id, 1)}
-                          >
-                            <PlusIcon />
-                          </InputGroupButton>
-                        </InputGroup>
-                        <span className="shrink-0 text-right text-base font-semibold tabular-nums">
-                          {paymentOrderMoney(
-                            calcularLinea(
-                              item.articulo.precioUnitario,
-                              item.cantidad
-                            )
-                          )}
-                        </span>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              {formError ? (
-                <Alert variant="destructive">
-                  <TriangleAlertIcon />
-                  <AlertDescription>{formError}</AlertDescription>
-                </Alert>
-              ) : null}
-              {!whatsappConfigured ? (
-                <Alert>
-                  <TriangleAlertIcon />
-                  <AlertTitle>Canal no vinculado</AlertTitle>
-                  <AlertDescription>
-                    Vincula el WhatsApp de tu negocio en Módulos → WhatsApp para
-                    poder crear notas digitales.
-                  </AlertDescription>
-                </Alert>
-              ) : null}
-              {!scanConfigured ? (
-                <p className="text-muted-foreground text-xs">
-                  Sin modelo de lectura de comprobantes, las notas quedan en
-                  revisión manual para que las confirmes desde el detalle.
-                </p>
-              ) : null}
-            </div>
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-baseline gap-2">
-                <span className="text-muted-foreground text-sm">Total</span>
-                <span className="text-2xl font-semibold tracking-tight tabular-nums">
-                  {paymentOrderMoney(total)}
-                </span>
+            {cart.length > 0 ? (
+              // Barra fija de la orden: resumen siempre visible y acceso al
+              // sheet en la zona del pulgar, por encima de la barra de
+              // navegación (token del shell; 0 px con el teclado abierto).
+              <div className="fixed inset-x-0 bottom-[var(--shell-bottom-nav-space)] z-30 px-4 pb-3">
+                <button
+                  type="button"
+                  onClick={() => setOrdenAbierta(true)}
+                  aria-label={`Abrir la orden: ${cart.length} ${
+                    cart.length === 1 ? "renglón" : "renglones"
+                  }, total ${paymentOrderMoney(total)}`}
+                  className="bg-foreground text-background mx-auto flex w-full max-w-2xl items-center justify-between gap-3 rounded-full py-3 pr-4 pl-5 text-left shadow-lg transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <ReceiptTextIcon
+                      aria-hidden="true"
+                      className="size-5 shrink-0"
+                    />
+                    <span className="truncate text-sm font-semibold">
+                      Orden · {cart.length}
+                    </span>
+                    <span className="shrink-0 text-base font-bold tabular-nums">
+                      {paymentOrderMoney(total)}
+                    </span>
+                  </span>
+                  <span className="flex shrink-0 items-center gap-1 text-sm font-medium">
+                    Ver orden
+                    <ChevronUpIcon aria-hidden="true" className="size-4" />
+                  </span>
+                </button>
               </div>
-              <Button
-                size="lg"
-                className="w-full px-4 sm:w-auto"
-                onClick={crearNota}
-                disabled={!puedeCrear || isPending}
-              >
-                {isPending && cart.length > 0 ? "Creando…" : "Crear link de pago"}
-              </Button>
-            </div>
+            ) : null}
           </div>
         </TabsContent>
 
@@ -851,6 +737,183 @@ export function NotaDigitalView({
           </div>
         </TabsContent>
       </Tabs>
+
+      <Sheet
+        open={ordenAbierta}
+        onOpenChange={setOrdenAbierta}
+      >
+        <SheetContent side="bottom" className="mx-auto max-w-lg gap-0 rounded-t-xl">
+          <SheetHeader className="pr-12">
+            <SheetTitle>Orden</SheetTitle>
+            <SheetDescription>
+              {cart.length === 0
+                ? "Sin artículos todavía"
+                : `${cart.length} ${
+                    cart.length === 1 ? "renglón" : "renglones"
+                  } · ${paymentOrderMoney(total)}`}
+            </SheetDescription>
+          </SheetHeader>
+
+          <div className="max-h-[70dvh] overflow-y-auto px-4 pb-2">
+            <div className="flex justify-end pb-1">
+              <InfoHint
+                label="Más información sobre la orden"
+                titulo="Orden"
+              >
+                Toca el + de un artículo del catálogo para agregarlo a la orden
+                con una unidad y ajusta las cantidades aquí. Al crear el link
+                de pago, el pagador recibe su nota desglosada por WhatsApp
+                cuando se confirme el depósito.
+              </InfoHint>
+            </div>
+            {cart.length === 0 ? (
+              <Empty className="border-0 py-4">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <ReceiptTextIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>Aún no hay artículos</EmptyTitle>
+                  <EmptyDescription>
+                    Toca el + de un artículo o servicio del catálogo para
+                    agregarlo a la orden.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {cart.map((item) => (
+                  <li
+                    key={item.articulo.id}
+                    className="bg-muted/50 flex flex-col gap-3 rounded-lg p-3 sm:flex-row sm:items-center sm:gap-4"
+                  >
+                    <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium leading-snug break-words">
+                          {item.articulo.nombre}
+                        </span>
+                        <span className="text-muted-foreground mt-0.5 block text-xs">
+                          {item.articulo.sku} ·{" "}
+                          {paymentOrderMoney(item.articulo.precioUnitario)} c/u
+                        </span>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        aria-label={`Quitar ${item.articulo.nombre} de la orden`}
+                        className="relative after:content-[''] after:absolute after:-inset-2 shrink-0"
+                        onClick={() =>
+                          setCart((prev) =>
+                            prev.filter(
+                              (cartItem) =>
+                                cartItem.articulo.id !== item.articulo.id
+                            )
+                          )
+                        }
+                      >
+                        <Trash2Icon />
+                      </Button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 sm:justify-end sm:gap-4">
+                      <InputGroup className="h-10 w-36 shrink-0">
+                        <InputGroupButton
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Quitar una unidad de ${item.articulo.nombre}`}
+                          className="relative after:content-[''] after:absolute after:-inset-2"
+                          onClick={() => cambiarCantidad(item.articulo.id, -1)}
+                        >
+                          <MinusIcon />
+                        </InputGroupButton>
+                        <InputGroupInput
+                          type="number"
+                          min="0.001"
+                          max="9999.999"
+                          step="0.1"
+                          value={String(item.cantidad)}
+                          aria-label={`Cantidad de ${item.articulo.nombre}`}
+                          className="text-center tabular-nums"
+                          onChange={(event) => {
+                            const valor = Number(event.target.value)
+                            if (!Number.isFinite(valor)) return
+                            const cantidad = Math.min(9999.999, Math.max(0, valor))
+                            setCart((prev) =>
+                              prev
+                                .map((cartItem) =>
+                                  cartItem.articulo.id === item.articulo.id
+                                    ? { ...cartItem, cantidad }
+                                    : cartItem
+                                )
+                                .filter((cartItem) => cartItem.cantidad > 0)
+                            )
+                          }}
+                        />
+                        <InputGroupButton
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Agregar una unidad de ${item.articulo.nombre}`}
+                          className="relative after:content-[''] after:absolute after:-inset-2"
+                          onClick={() => cambiarCantidad(item.articulo.id, 1)}
+                        >
+                          <PlusIcon />
+                        </InputGroupButton>
+                      </InputGroup>
+                      <span className="shrink-0 text-right text-base font-semibold tabular-nums">
+                        {paymentOrderMoney(
+                          calcularLinea(
+                            item.articulo.precioUnitario,
+                            item.cantidad
+                          )
+                        )}
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {formError ? (
+              <Alert variant="destructive" className="mt-3">
+                <TriangleAlertIcon />
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            ) : null}
+            {!whatsappConfigured ? (
+              <Alert className="mt-3">
+                <TriangleAlertIcon />
+                <AlertTitle>Canal no vinculado</AlertTitle>
+                <AlertDescription>
+                  Vincula el WhatsApp de tu negocio en Módulos → WhatsApp para
+                  poder crear notas digitales.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+          </div>
+
+          <SheetFooter>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground text-sm">Total</span>
+              <span className="text-lg font-semibold tabular-nums">
+                {paymentOrderMoney(total)}
+              </span>
+            </div>
+            <Button
+              size="lg"
+              className="w-full"
+              onClick={crearNota}
+              disabled={!puedeCrear || isPending}
+            >
+              {isPending && cart.length > 0 ? "Creando…" : "Crear link de pago"}
+            </Button>
+            {!scanConfigured ? (
+              <span className="text-muted-foreground text-xs">
+                Sin modelo de lectura de comprobantes, las notas quedan en
+                revisión manual para que las confirmes desde el detalle.
+              </span>
+            ) : null}
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       <Sheet
         open={selected !== null}
