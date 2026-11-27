@@ -36,13 +36,6 @@ import {
   AutocompleteItem,
   AutocompleteList,
 } from "@/components/reui/autocomplete"
-import {
-  Frame,
-  FrameDescription,
-  FrameHeader,
-  FramePanel,
-  FrameTitle,
-} from "@/components/reui/frame"
 import { ArticulosAccordion } from "@/components/herramientas/articulos/articulos-accordion"
 import {
   AlertDialog,
@@ -707,44 +700,47 @@ export function ArticulosView({
     categoriaFiltro !== ""
 
   return (
-    <Frame spacing="default" variant="ghost" className="w-full">
-      <FrameHeader>
-        <FrameTitle className="text-xl font-semibold">
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-1">
+        <h2 className="text-xl font-semibold">
           Alta de Artículos/Servicios
-        </FrameTitle>
-        <FrameDescription>
+        </h2>
+        <p className="text-muted-foreground text-sm">
           Catálogo de productos y servicios del negocio: SKU, unidad de
           medida, precio unitario, categoría y disponibilidad. Es compartido:
           propietario y sucursales ven y editan lo mismo.
-        </FrameDescription>
-      </FrameHeader>
+        </p>
+      </div>
 
-      <FramePanel className="border-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <InputGroup className="h-12 min-w-44 flex-1 rounded-full border-0 bg-muted sm:max-w-xs">
-            <InputGroupAddon align="inline-start" className="pl-3.5">
-              <SearchIcon aria-hidden="true" />
+      <div className="flex items-center gap-2">
+        <InputGroup className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted">
+          <InputGroupAddon align="inline-start" className="pl-3.5">
+            <SearchIcon aria-hidden="true" />
+          </InputGroupAddon>
+          <InputGroupInput
+            aria-label="Buscar artículos"
+            placeholder="Buscar por SKU, nombre o categoría…"
+            value={busqueda}
+            onChange={(event) => setBusqueda(event.target.value)}
+            className="h-full text-base"
+          />
+          {busqueda ? (
+            <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
+              <InputGroupButton
+                size="icon-sm"
+                className="size-9 rounded-full"
+                onClick={() => setBusqueda("")}
+                aria-label="Limpiar búsqueda"
+              >
+                <XIcon aria-hidden="true" />
+              </InputGroupButton>
             </InputGroupAddon>
-            <InputGroupInput
-              aria-label="Buscar artículos"
-              placeholder="Buscar por SKU, nombre o categoría…"
-              value={busqueda}
-              onChange={(event) => setBusqueda(event.target.value)}
-              className="h-full text-base"
-            />
-            {busqueda ? (
-              <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
-                <InputGroupButton
-                  size="icon-sm"
-                  className="size-9 rounded-full"
-                  onClick={() => setBusqueda("")}
-                  aria-label="Limpiar búsqueda"
-                >
-                  <XIcon aria-hidden="true" />
-                </InputGroupButton>
-              </InputGroupAddon>
-            ) : null}
-          </InputGroup>
+          ) : null}
+        </InputGroup>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Select
             value={estadoFiltro}
             onValueChange={(value) => {
@@ -814,68 +810,66 @@ export function ArticulosView({
           </div>
         </div>
         {filas !== null ? (
-          <p className="text-muted-foreground mt-2 text-xs tabular-nums">
+          <p className="text-muted-foreground text-xs tabular-nums">
             {total.toLocaleString("es-MX")}{" "}
             {total === 1 ? "artículo" : "artículos"}
           </p>
         ) : null}
         {aviso ? (
-          <Alert variant="destructive" className="mt-3">
+          <Alert variant="destructive">
             <TriangleAlertIcon />
             <AlertDescription>{aviso.texto}</AlertDescription>
           </Alert>
         ) : null}
-      </FramePanel>
+      </div>
 
-      <FramePanel className="border-0">
-        {filas === null && !cargaFallida ? (
-          <div className="flex flex-col gap-3" aria-hidden>
-            <Skeleton className="h-14 w-full" />
-            <Skeleton className="h-14 w-full" />
-            <Skeleton className="h-14 w-full" />
-          </div>
-        ) : filas === null || filas.length === 0 ? (
-          <Empty className="border-0 py-6">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <PackageIcon />
-              </EmptyMedia>
-              <EmptyTitle>
-                {cargaFallida
-                  ? "No se pudieron cargar los artículos"
-                  : conFiltros
-                    ? "Sin artículos con esos filtros"
-                    : "Tu catálogo está vacío"}
-              </EmptyTitle>
-              <EmptyDescription>
-                {cargaFallida
-                  ? "Revisa tu conexión e inténtalo de nuevo."
-                  : conFiltros
-                    ? "Prueba con otra búsqueda, categoría o estado."
-                    : "Crea el primer artículo o importa tu catálogo por CSV."}
-              </EmptyDescription>
-            </EmptyHeader>
-            {cargaFallida ? (
-              <Button variant="outline" onClick={() => void load()}>
-                Reintentar
-              </Button>
-            ) : (
-              <Button onClick={abrirNueva}>
-                <PlusIcon aria-hidden="true" />
-                Nuevo artículo
-              </Button>
-            )}
-          </Empty>
-        ) : (
-          <ArticulosAccordion
-            articulos={filas}
-            modo="gestion"
-            onEditar={abrirEdicion}
-            onArchivar={archivar}
-            onRestaurar={restaurar}
-          />
-        )}
-      </FramePanel>
+      {filas === null && !cargaFallida ? (
+        <div className="flex flex-col gap-3" aria-hidden>
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+          <Skeleton className="h-14 w-full" />
+        </div>
+      ) : filas === null || filas.length === 0 ? (
+        <Empty className="border-0 py-6">
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <PackageIcon />
+            </EmptyMedia>
+            <EmptyTitle>
+              {cargaFallida
+                ? "No se pudieron cargar los artículos"
+                : conFiltros
+                  ? "Sin artículos con esos filtros"
+                  : "Tu catálogo está vacío"}
+            </EmptyTitle>
+            <EmptyDescription>
+              {cargaFallida
+                ? "Revisa tu conexión e inténtalo de nuevo."
+                : conFiltros
+                  ? "Prueba con otra búsqueda, categoría o estado."
+                  : "Crea el primer artículo o importa tu catálogo por CSV."}
+            </EmptyDescription>
+          </EmptyHeader>
+          {cargaFallida ? (
+            <Button variant="outline" onClick={() => void load()}>
+              Reintentar
+            </Button>
+          ) : (
+            <Button onClick={abrirNueva}>
+              <PlusIcon aria-hidden="true" />
+              Nuevo artículo
+            </Button>
+          )}
+        </Empty>
+      ) : (
+        <ArticulosAccordion
+          articulos={filas}
+          modo="gestion"
+          onEditar={abrirEdicion}
+          onArchivar={archivar}
+          onRestaurar={restaurar}
+        />
+      )}
 
       {/* ------------------------------ editor ------------------------------ */}
       <Sheet
@@ -1371,6 +1365,6 @@ export function ArticulosView({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </Frame>
+    </div>
   )
 }

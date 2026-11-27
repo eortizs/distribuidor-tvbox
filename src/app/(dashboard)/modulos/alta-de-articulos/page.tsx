@@ -34,7 +34,7 @@ export default async function AltaArticulosPage() {
   }
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
+    <div className="flex flex-1 flex-col p-4 md:p-6">
       <h1 className="sr-only">Alta de Artículos/Servicios</h1>
       <ArticulosView
         inicial={inicial}

@@ -31,13 +31,6 @@ import {
 } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
 import {
-  Frame,
-  FrameFooter,
-  FrameHeader,
-  FramePanel,
-  FrameTitle,
-} from "@/components/reui/frame"
-import {
   DataGrid,
   DataGridContainer,
   dataGridFeatures,
@@ -581,298 +574,281 @@ export function NotaDigitalView({
         </TabsList>
 
         <TabsContent value="crear">
-          <Frame
-            spacing="default"
-            variant="ghost"
-            className="w-full gap-3 rounded-none bg-transparent p-0"
-          >
-            <FramePanel className="border-0 px-0 rounded-none bg-transparent shadow-none before:hidden">
-              <FrameHeader className="flex-row items-center justify-between gap-2 px-0">
-                <FrameTitle className="text-lg font-semibold">
-                  Nueva nota digital
-                </FrameTitle>
-                <InfoHint
-                  label="Más información sobre cómo funciona la nota digital"
-                  titulo="Nueva nota digital"
-                >
-                  Arma la comanda con artículos de tu catálogo y genera un link
-                  de pago con QR. Cuando se confirme el depósito, el pagador
-                  recibe su nota desglosada por WhatsApp.
-                </InfoHint>
-              </FrameHeader>
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-row items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">Nueva nota digital</h2>
+              <InfoHint
+                label="Más información sobre cómo funciona la nota digital"
+                titulo="Nueva nota digital"
+              >
+                Arma la comanda con artículos de tu catálogo y genera un link
+                de pago con QR. Cuando se confirme el depósito, el pagador
+                recibe su nota desglosada por WhatsApp.
+              </InfoHint>
+            </div>
 
-              <div className="flex flex-col gap-3">
-                <div className="flex flex-col gap-2">
-                  <Label htmlFor="buscar-articulo-nota">
-                    Buscar artículos o servicios
-                  </Label>
-                  <InputGroup className="h-12 min-w-0 rounded-full border-0 bg-muted">
-                    <InputGroupAddon align="inline-start" className="pl-3.5">
-                      <SearchIcon aria-hidden="true" />
-                    </InputGroupAddon>
-                    <InputGroupInput
-                      id="buscar-articulo-nota"
-                      aria-label="Buscar artículos o servicios del catálogo"
-                      placeholder="Busca por nombre, SKU, categoría o descripción"
-                      value={busqueda}
-                      onChange={(event) => setBusqueda(event.target.value)}
-                      className="h-full text-base"
-                    />
-                    {busqueda ? (
-                      <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
-                        <InputGroupButton
-                          size="icon-sm"
-                          className="size-9 rounded-full"
-                          onClick={() => setBusqueda("")}
-                          aria-label="Limpiar búsqueda"
-                        >
-                          <XIcon aria-hidden="true" />
-                        </InputGroupButton>
-                      </InputGroupAddon>
-                    ) : null}
-                  </InputGroup>
-                </div>
-
-                {catalogoFallido ? (
-                  <Empty className="border-0 py-6">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <TriangleAlertIcon />
-                      </EmptyMedia>
-                      <EmptyTitle>No se pudo cargar el catálogo</EmptyTitle>
-                      <EmptyDescription>
-                        Revisa tu conexión e inténtalo de nuevo.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                    <Button variant="outline" onClick={() => router.refresh()}>
-                      Reintentar
-                    </Button>
-                  </Empty>
-                ) : articulos.length === 0 ? (
-                  <Empty className="border-0 py-6">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <ReceiptTextIcon />
-                      </EmptyMedia>
-                      <EmptyTitle>Sin artículos en el catálogo</EmptyTitle>
-                      <EmptyDescription>
-                        Da de alta tus productos o servicios en Alta de Artículos
-                        para poder armar la comanda.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                    <Button
-                      variant="outline"
-                      onClick={() => router.push("/modulos/alta-de-articulos")}
+            <div className="flex items-center gap-2">
+              <InputGroup className="h-12 min-w-0 max-w-xs flex-1 rounded-full border-0 bg-muted">
+                <InputGroupAddon align="inline-start" className="pl-3.5">
+                  <SearchIcon aria-hidden="true" />
+                </InputGroupAddon>
+                <InputGroupInput
+                  id="buscar-articulo-nota"
+                  aria-label="Buscar artículos o servicios del catálogo"
+                  placeholder="Busca por nombre, SKU, categoría o descripción"
+                  value={busqueda}
+                  onChange={(event) => setBusqueda(event.target.value)}
+                  className="h-full text-base"
+                />
+                {busqueda ? (
+                  <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
+                    <InputGroupButton
+                      size="icon-sm"
+                      className="size-9 rounded-full"
+                      onClick={() => setBusqueda("")}
+                      aria-label="Limpiar búsqueda"
                     >
-                      Ir a Alta de Artículos
-                    </Button>
-                  </Empty>
-                ) : articulosFiltrados.length === 0 ? (
-                  <p role="status" className="text-muted-foreground text-sm">
-                    Ningún artículo coincide con «{busqueda.trim()}».
-                  </p>
-                ) : (
-                  <ArticulosAccordion
-                    articulos={articulosFiltrados}
-                    modo="seleccion"
-                    onAgregar={agregarAlCarrito}
-                    cantidadEnComanda={cantidadEnComanda}
-                    sinDivideres
-                  />
-                )}
+                      <XIcon aria-hidden="true" />
+                    </InputGroupButton>
+                  </InputGroupAddon>
+                ) : null}
+              </InputGroup>
+            </div>
 
-                {cart.length === 0 ? (
-                  <Empty className="border-0 py-6">
-                    <EmptyHeader>
-                      <EmptyMedia variant="icon">
-                        <ReceiptTextIcon />
-                      </EmptyMedia>
-                      <EmptyTitle>Aún no hay artículos</EmptyTitle>
-                      <EmptyDescription>
-                        Busca un artículo o servicio del catálogo y toca el
-                        resultado para agregarlo.
-                      </EmptyDescription>
-                    </EmptyHeader>
-                  </Empty>
-                ) : (
-                  <ul className="flex flex-col gap-2">
-                    {cart.map((item) => (
-                      <li
-                        key={item.articulo.id}
-                        className="bg-muted/50 flex flex-col gap-3 rounded-lg p-3 sm:flex-row sm:items-center sm:gap-4"
-                      >
-                        <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
-                          <div className="min-w-0 flex-1">
-                            <p className="text-sm font-medium leading-snug break-words">
-                              {item.articulo.nombre}
-                            </p>
-                            <p className="text-muted-foreground mt-0.5 text-xs">
-                              {item.articulo.sku} ·{" "}
-                              {paymentOrderMoney(item.articulo.precioUnitario)} c/u
-                            </p>
-                          </div>
-                          <Button
+            {catalogoFallido ? (
+              <Empty className="border-0 py-6">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <TriangleAlertIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>No se pudo cargar el catálogo</EmptyTitle>
+                  <EmptyDescription>
+                    Revisa tu conexión e inténtalo de nuevo.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <Button variant="outline" onClick={() => router.refresh()}>
+                  Reintentar
+                </Button>
+              </Empty>
+            ) : articulos.length === 0 ? (
+              <Empty className="border-0 py-6">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <ReceiptTextIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>Sin artículos en el catálogo</EmptyTitle>
+                  <EmptyDescription>
+                    Da de alta tus productos o servicios en Alta de Artículos
+                    para poder armar la comanda.
+                  </EmptyDescription>
+                </EmptyHeader>
+                <Button
+                  variant="outline"
+                  onClick={() => router.push("/modulos/alta-de-articulos")}
+                >
+                  Ir a Alta de Artículos
+                </Button>
+              </Empty>
+            ) : articulosFiltrados.length === 0 ? (
+              <p role="status" className="text-muted-foreground text-sm">
+                Ningún artículo coincide con «{busqueda.trim()}».
+              </p>
+            ) : (
+              <ArticulosAccordion
+                articulos={articulosFiltrados}
+                modo="seleccion"
+                onAgregar={agregarAlCarrito}
+                cantidadEnComanda={cantidadEnComanda}
+                sinDivideres
+              />
+            )}
+
+            <div className="flex flex-col gap-3">
+              {cart.length === 0 ? (
+                <Empty className="border-0 py-6">
+                  <EmptyHeader>
+                    <EmptyMedia variant="icon">
+                      <ReceiptTextIcon />
+                    </EmptyMedia>
+                    <EmptyTitle>Aún no hay artículos</EmptyTitle>
+                    <EmptyDescription>
+                      Busca un artículo o servicio del catálogo y toca el
+                      resultado para agregarlo.
+                    </EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {cart.map((item) => (
+                    <li
+                      key={item.articulo.id}
+                      className="bg-muted/50 flex flex-col gap-3 rounded-lg p-3 sm:flex-row sm:items-center sm:gap-4"
+                    >
+                      <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium leading-snug break-words">
+                            {item.articulo.nombre}
+                          </p>
+                          <p className="text-muted-foreground mt-0.5 text-xs">
+                            {item.articulo.sku} ·{" "}
+                            {paymentOrderMoney(item.articulo.precioUnitario)} c/u
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          aria-label={`Quitar ${item.articulo.nombre} de la comanda`}
+                          className="relative after:content-[''] after:absolute after:-inset-2 shrink-0"
+                          onClick={() =>
+                            setCart((prev) =>
+                              prev.filter(
+                                (cartItem) =>
+                                  cartItem.articulo.id !== item.articulo.id
+                              )
+                            )
+                          }
+                        >
+                          <Trash2Icon />
+                        </Button>
+                      </div>
+
+                      <div className="flex items-center justify-between gap-3 sm:justify-end sm:gap-4">
+                        <InputGroup className="h-10 w-36 shrink-0">
+                          <InputGroupButton
                             variant="ghost"
                             size="icon-sm"
-                            aria-label={`Quitar ${item.articulo.nombre} de la comanda`}
-                            className="relative after:content-[''] after:absolute after:-inset-2 shrink-0"
-                            onClick={() =>
-                              setCart((prev) =>
-                                prev.filter(
-                                  (cartItem) =>
-                                    cartItem.articulo.id !== item.articulo.id
-                                )
-                              )
-                            }
+                            aria-label={`Quitar una unidad de ${item.articulo.nombre}`}
+                            className="relative after:content-[''] after:absolute after:-inset-2"
+                            onClick={() => cambiarCantidad(item.articulo.id, -1)}
                           >
-                            <Trash2Icon />
-                          </Button>
-                        </div>
-
-                        <div className="flex items-center justify-between gap-3 sm:justify-end sm:gap-4">
-                          <InputGroup className="h-10 w-36 shrink-0">
-                            <InputGroupButton
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={`Quitar una unidad de ${item.articulo.nombre}`}
-                              className="relative after:content-[''] after:absolute after:-inset-2"
-                              onClick={() => cambiarCantidad(item.articulo.id, -1)}
-                            >
-                              <MinusIcon />
-                            </InputGroupButton>
-                            <InputGroupInput
-                              type="number"
-                              min="0.001"
-                              max="9999.999"
-                              step="0.1"
-                              value={String(item.cantidad)}
-                              aria-label={`Cantidad de ${item.articulo.nombre}`}
-                              className="text-center tabular-nums"
-                              onChange={(event) => {
-                                const valor = Number(event.target.value)
-                                if (!Number.isFinite(valor)) return
-                                const cantidad = Math.min(9999.999, Math.max(0, valor))
-                                setCart((prev) =>
-                                  prev
-                                    .map((cartItem) =>
-                                      cartItem.articulo.id === item.articulo.id
-                                        ? { ...cartItem, cantidad }
-                                        : cartItem
-                                    )
-                                    .filter((cartItem) => cartItem.cantidad > 0)
-                                )
-                              }}
-                            />
-                            <InputGroupButton
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label={`Agregar una unidad de ${item.articulo.nombre}`}
-                              className="relative after:content-[''] after:absolute after:-inset-2"
-                              onClick={() => cambiarCantidad(item.articulo.id, 1)}
-                            >
-                              <PlusIcon />
-                            </InputGroupButton>
-                          </InputGroup>
-                          <span className="shrink-0 text-right text-base font-semibold tabular-nums">
-                            {paymentOrderMoney(
-                              calcularLinea(
-                                item.articulo.precioUnitario,
-                                item.cantidad
+                            <MinusIcon />
+                          </InputGroupButton>
+                          <InputGroupInput
+                            type="number"
+                            min="0.001"
+                            max="9999.999"
+                            step="0.1"
+                            value={String(item.cantidad)}
+                            aria-label={`Cantidad de ${item.articulo.nombre}`}
+                            className="text-center tabular-nums"
+                            onChange={(event) => {
+                              const valor = Number(event.target.value)
+                              if (!Number.isFinite(valor)) return
+                              const cantidad = Math.min(9999.999, Math.max(0, valor))
+                              setCart((prev) =>
+                                prev
+                                  .map((cartItem) =>
+                                    cartItem.articulo.id === item.articulo.id
+                                      ? { ...cartItem, cantidad }
+                                      : cartItem
+                                  )
+                                  .filter((cartItem) => cartItem.cantidad > 0)
                               )
-                            )}
-                          </span>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
+                            }}
+                          />
+                          <InputGroupButton
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Agregar una unidad de ${item.articulo.nombre}`}
+                            className="relative after:content-[''] after:absolute after:-inset-2"
+                            onClick={() => cambiarCantidad(item.articulo.id, 1)}
+                          >
+                            <PlusIcon />
+                          </InputGroupButton>
+                        </InputGroup>
+                        <span className="shrink-0 text-right text-base font-semibold tabular-nums">
+                          {paymentOrderMoney(
+                            calcularLinea(
+                              item.articulo.precioUnitario,
+                              item.cantidad
+                            )
+                          )}
+                        </span>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-                {formError ? (
-                  <Alert variant="destructive">
-                    <TriangleAlertIcon />
-                    <AlertDescription>{formError}</AlertDescription>
-                  </Alert>
-                ) : null}
-                {!whatsappConfigured ? (
-                  <Alert>
-                    <TriangleAlertIcon />
-                    <AlertTitle>Canal no vinculado</AlertTitle>
-                    <AlertDescription>
-                      Vincula el WhatsApp de tu negocio en Módulos → WhatsApp para
-                      poder crear notas digitales.
-                    </AlertDescription>
-                  </Alert>
-                ) : null}
-                {!scanConfigured ? (
-                  <p className="text-muted-foreground text-xs">
-                    Sin modelo de lectura de comprobantes, las notas quedan en
-                    revisión manual para que las confirmes desde el detalle.
-                  </p>
-                ) : null}
+              {formError ? (
+                <Alert variant="destructive">
+                  <TriangleAlertIcon />
+                  <AlertDescription>{formError}</AlertDescription>
+                </Alert>
+              ) : null}
+              {!whatsappConfigured ? (
+                <Alert>
+                  <TriangleAlertIcon />
+                  <AlertTitle>Canal no vinculado</AlertTitle>
+                  <AlertDescription>
+                    Vincula el WhatsApp de tu negocio en Módulos → WhatsApp para
+                    poder crear notas digitales.
+                  </AlertDescription>
+                </Alert>
+              ) : null}
+              {!scanConfigured ? (
+                <p className="text-muted-foreground text-xs">
+                  Sin modelo de lectura de comprobantes, las notas quedan en
+                  revisión manual para que las confirmes desde el detalle.
+                </p>
+              ) : null}
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-baseline gap-2">
+                <span className="text-muted-foreground text-sm">Total</span>
+                <span className="text-2xl font-semibold tracking-tight tabular-nums">
+                  {paymentOrderMoney(total)}
+                </span>
               </div>
-
-              <FrameFooter className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-0">
-                <div className="flex items-baseline gap-2">
-                  <span className="text-muted-foreground text-sm">Total</span>
-                  <span className="text-2xl font-semibold tracking-tight tabular-nums">
-                    {paymentOrderMoney(total)}
-                  </span>
-                </div>
-                <Button
-                  size="lg"
-                  className="w-full px-4 sm:w-auto"
-                  onClick={crearNota}
-                  disabled={!puedeCrear || isPending}
-                >
-                  {isPending && cart.length > 0 ? "Creando…" : "Crear link de pago"}
-                </Button>
-              </FrameFooter>
-            </FramePanel>
-          </Frame>
+              <Button
+                size="lg"
+                className="w-full px-4 sm:w-auto"
+                onClick={crearNota}
+                disabled={!puedeCrear || isPending}
+              >
+                {isPending && cart.length > 0 ? "Creando…" : "Crear link de pago"}
+              </Button>
+            </div>
+          </div>
         </TabsContent>
 
         <TabsContent value="notas">
-          <Frame
-            spacing="default"
-            variant="ghost"
-            className="w-full gap-3 rounded-none bg-transparent p-0"
-          >
-            <FramePanel className="border-0 p-0 rounded-none bg-transparent shadow-none before:hidden">
-              <FrameHeader className="flex-row items-center justify-between gap-2 px-0">
-                <FrameTitle className="text-lg font-semibold">
-                  Mis notas digitales
-                  {notas.length > 0 && (
-                    <span className="ml-2 font-normal text-muted-foreground text-sm">
-                      {notas.length}
-                    </span>
-                  )}
-                </FrameTitle>
-                <InfoHint
-                  label="Más información sobre el listado de notas"
-                  titulo="Mis notas digitales"
-                >
-                  Folio, estado y total de cada comanda. Toca una fila para ver
-                  el desglose y sus acciones.
-                </InfoHint>
-              </FrameHeader>
-              <DataGrid
-                table={table}
-                recordCount={notas.length}
-                onRowClick={(nota) => setSelectedId(nota.id)}
-                tableLayout={{ dense: true }}
-                emptyMessage="Aún no hay notas digitales. Crea la primera en «Nueva nota»."
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-row items-center justify-between gap-2">
+              <h2 className="text-lg font-semibold">
+                Mis notas digitales
+                {notas.length > 0 && (
+                  <span className="ml-2 font-normal text-muted-foreground text-sm">
+                    {notas.length}
+                  </span>
+                )}
+              </h2>
+              <InfoHint
+                label="Más información sobre el listado de notas"
+                titulo="Mis notas digitales"
               >
-                <DataGridContainer>
-                  <DataGridScrollArea>
-                    <DataGridTable />
-                  </DataGridScrollArea>
-                </DataGridContainer>
-                <div className="px-0 pb-3">
-                  <DataGridPagination />
-                </div>
-              </DataGrid>
-            </FramePanel>
-          </Frame>
+                Folio, estado y total de cada comanda. Toca una fila para ver
+                el desglose y sus acciones.
+              </InfoHint>
+            </div>
+            <DataGrid
+              table={table}
+              recordCount={notas.length}
+              onRowClick={(nota) => setSelectedId(nota.id)}
+              tableLayout={{ dense: true }}
+              emptyMessage="Aún no hay notas digitales. Crea la primera en «Nueva nota»."
+            >
+              <DataGridContainer>
+                <DataGridScrollArea>
+                  <DataGridTable />
+                </DataGridScrollArea>
+              </DataGridContainer>
+              <div className="px-0 pb-3">
+                <DataGridPagination />
+              </div>
+            </DataGrid>
+          </div>
         </TabsContent>
       </Tabs>
 
