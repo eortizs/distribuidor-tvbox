@@ -11,6 +11,7 @@ import { saveUserFile } from "@/server/storage/user-files"
 
 import {
   desambiguarComprobantePorConcepto,
+  esConceptoLibre,
   findPaymentOrderCodeTokens,
   MAX_PAYMENT_ORDER_CODE_TOKENS,
   parsePaymentOrderRequestAmount,
@@ -233,7 +234,11 @@ async function maybeHandlePaymentConfirmation(input: {
     text: [
       "*¡Gracias por avisar!* Para confirmar tu pago necesito tu comprobante:",
       "",
-      `Adjunta en este chat la FOTO o el PDF de tu transferencia (con el concepto de pago ${paymentOrderConceptoVisible(order)}) y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
+      `Adjunta en este chat la FOTO o el PDF de tu transferencia${
+        esConceptoLibre(order)
+          ? ""
+          : ` (con el concepto de pago ${paymentOrderConceptoVisible(order)})`
+      } y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
     ].join("\n"),
     orderId: order.id,
     inboundText: input.text,
@@ -465,8 +470,9 @@ function textoVeredicto(input: {
   outcome: Awaited<ReturnType<typeof reviewPaymentReceipt>>
 }): string {
   const orden = `orden *${input.order.code}* (${money(input.order.amountMxn)})`
-  // En el pago libre del QR fijo no hay concepto que validar (ni código que pedir).
-  const libre = input.order.origin === "qr"
+  // En los pagos libres (QR fijo y nota digital) no hay concepto que validar
+  // (ni código que pedir en el QR).
+  const libre = esConceptoLibre(input.order)
   const validado = libre ? "importe correcto" : "concepto e importe correctos"
   switch (input.outcome.review) {
     case "auto_approved":
@@ -864,8 +870,9 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   //   2. código escrito en el caption (desambiguador del link),
   //   3. teléfono de un pagador ya conocido (impreso ilegible o lector
   //      caído).
-  // Las órdenes del QR fijo no participan: su concepto es libre y su
-  // comprobante se atiende por teléfono en qr-fijo.ts.
+  // Las órdenes del QR fijo y las notas digitales NO participan: su concepto
+  // es libre y su comprobante se identifica por teléfono (QR) o por el
+  // teléfono ligado al folio (nota). Solo los LINKS matchean por palabra.
   const conceptoImpreso = extraccion?.datos?.concepto ?? null
   let candidate: PaymentOrder | null = null
   // El concepto coincide con varias órdenes y nada dejó clara la orden.
@@ -874,7 +881,7 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   if (conceptoImpreso) {
     const porPalabra = pending.filter(
       (order) =>
-        order.origin !== "qr" &&
+        order.origin === "link" &&
         conceptoImpresoCoincide(paymentOrderConceptAnchor(order), conceptoImpreso)
     )
     coincidentes = porPalabra.length
@@ -898,6 +905,38 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   if (!candidate) {
     candidate =
       pending.find((order) => tokens.includes(order.code)) ?? null
+  }
+
+  // NOTA DIGITAL: el pagador se identifica por su TELÉFONO —ligado al abrir
+  // el link con su folio— y el concepto es libre, así que no participa en el
+  // matching por palabra. Eligen el código explícito del caption y, sin él,
+  // la ÚNICA nota activa de ese teléfono. Con varias y sin código se pide el
+  // folio (fail-closed): jamás se atribuye el comprobante a otra comanda.
+  // Va ANTES del pago libre del QR para que un pagador con ambos formatos no
+  // vea su nota capturada por el QR.
+  const notasDelTelefono = pending.filter(
+    (order) => order.origin === "nota" && order.payerPhone === input.phone
+  )
+  if (!candidate && notasDelTelefono.length > 0) {
+    const porFolio = tokens.length
+      ? notasDelTelefono.find((order) => tokens.includes(order.code)) ?? null
+      : null
+    if (porFolio) {
+      candidate = porFolio
+    } else if (notasDelTelefono.length === 1) {
+      candidate = notasDelTelefono[0]
+    } else {
+      return {
+        text: [
+          "Tienes varias notas digitales activas con este número.",
+          "",
+          "Envía el comprobante junto con el CÓDIGO de tu nota (las 4 letras del enlace spei.link) para identificar cuál pagaste.",
+        ].join("\n"),
+        orderId: null,
+        inboundText: input.text,
+        mediaMime: input.media.mimeType,
+      }
+    }
   }
 
   // Pagador del QR fijo que también tiene links pendientes: su comprobante no
@@ -975,7 +1014,8 @@ export async function maybeHandlePaymentOrderReceipt(input: {
     // un comprobante sin código legible (impreso borroso o lector caído).
     // Con varias órdenes a su nombre pedimos el código para desambiguar.
     const delPagador = pending.filter(
-      (order) => order.origin !== "qr" && order.payerPhone === input.phone
+      (order) =>
+        order.origin === "link" && order.payerPhone === input.phone
     )
     if (delPagador.length === 1) {
       candidate = delPagador[0]
@@ -1167,10 +1207,11 @@ export async function findPaymentOrderForReceiptConcept(
   const normalized = concepto.trim()
   if (normalized.length === 0) return null
   const pending = await listPendingPaymentOrders().catch(() => [])
-  // Las órdenes del QR fijo no se descubren por concepto (allí es libre).
+  // Las notas digitales NO se descubren por concepto (es libre): su
+  // comprobante se identifica por el teléfono ligado al folio en el canal.
   const porImpreso = pending.find(
     (order) =>
-      order.origin !== "qr" &&
+      order.origin === "link" &&
       conceptoImpresoCoincide(paymentOrderConceptAnchor(order), normalized)
   )
   if (porImpreso) return porImpreso

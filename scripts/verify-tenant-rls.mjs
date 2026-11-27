@@ -55,6 +55,7 @@ const TABLES = [
   "signup_handoffs",
   "wa_contacts",
   "payment_qr_requests",
+  "nota_digital_items",
   "articulos",
   "affiliates",
   "tenants",

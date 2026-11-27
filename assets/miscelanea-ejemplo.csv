@@ -1,0 +1,19 @@
+﻿sku,nombre,descripcion,um,precio_unitario,categoria,disponible
+MISC-001,Refresco 600 ml,,pieza,18,Bebidas,si
+MISC-002,Agua natural 1 L,,pieza,12,Bebidas,si
+MISC-003,Leche entera 1 L,,pieza,27,Lácteos,si
+MISC-004,Pan de dulce,,pieza,15,Panadería,si
+MISC-005,Tortilla de maíz,,kg,38,Panadería,si
+MISC-006,Huevo fresca,,kg,92,Abarrotes,si
+MISC-007,Arroz blanco,,kg,34,Abarrotes,si
+MISC-008,Frijol negro,,kg,58,Abarrotes,si
+MISC-009,Aceite vegetal 1 L,,pieza,62,Abarrotes,si
+MISC-010,Azúcar refinada 1 kg,,pieza,29,Abarrotes,si
+MISC-011,Jabón de barra,,pieza,14,Limpieza,si
+MISC-012,Detergente líquido 1 L,,pieza,55,Limpieza,si
+MISC-013,Papel higiénico 4 rollos,,paquete,68,Limpieza,si
+MISC-014,Recarga de tiempo aire 50 MXN,,servicio,50,Servicios,si
+MISC-015,Recarga de tiempo aire 100 MXN,,servicio,100,Servicios,si
+MISC-016,Café de grano,,kg,210,Bebidas,si
+MISC-017,Mermelada de fresa 250 g,,pieza,45,Abarrotes,si
+MISC-018,Galletas de mantequilla 200 g,,paquete,39,Abarrotes,si

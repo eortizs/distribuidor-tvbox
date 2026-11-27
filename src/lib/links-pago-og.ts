@@ -28,6 +28,14 @@ export function paymentOrderOgTitle(amountLabel: string): string {
   return `Link de pago ${PAYMENT_ORDER_OG_SITE_NAME} por ${amountLabel}`
 }
 
+/** Título de la tarjeta de una NOTA DIGITAL (mismo importe, otro ancla). */
+export function notaDigitalOgTitle(amountLabel: string): string {
+  return `Nota Digital ${PAYMENT_ORDER_OG_SITE_NAME} por ${amountLabel}`
+}
+
+export const NOTA_DIGITAL_OG_DESCRIPTION =
+  "Abre el link, solicita tu nota digital por WhatsApp, transfiere por SPEI con concepto libre y envía el comprobante para recibir tu nota desglosada."
+
 /**
  * Tokens de user-agent de los rastreadores que arman la vista previa de un
  * link. WhatsApp usa "WhatsApp/2.x" tanto en el móvil (la propia app pide la
@@ -111,6 +119,8 @@ export interface PaymentOrderOgInput {
   imageUrl: string
   /** Destino del botón: el chat de WhatsApp con la solicitud prellenada. */
   waUrl: string
+  /** 'nota' cambia el título y los pasos de la tarjeta. */
+  origin?: "link" | "qr" | "nota"
 }
 
 /**
@@ -202,18 +212,29 @@ ${steps}
 
 /** Vista previa del link de pago con importe (spei.link/<CÓDIGO>). */
 export function buildPaymentOrderOgHtml(input: PaymentOrderOgInput): string {
+  const nota = input.origin === "nota"
   return buildOgPage({
-    title: paymentOrderOgTitle(input.amountLabel),
-    description: PAYMENT_ORDER_OG_DESCRIPTION,
+    title: nota
+      ? notaDigitalOgTitle(input.amountLabel)
+      : paymentOrderOgTitle(input.amountLabel),
+    description: nota
+      ? NOTA_DIGITAL_OG_DESCRIPTION
+      : PAYMENT_ORDER_OG_DESCRIPTION,
     canonicalUrl: input.canonicalUrl,
     imageUrl: input.imageUrl,
     waUrl: input.waUrl,
-    heading: `Link de pago por ${input.amountLabel}`,
-    steps: [
-      "Abre el chat de WhatsApp y solicita tu pago.",
-      "Recibe tu concepto de pago y la CLABE.",
-      "Transfiere por SPEI y envía el comprobante.",
-    ],
+    heading: `${nota ? "Nota digital" : "Link de pago"} por ${input.amountLabel}`,
+    steps: nota
+      ? [
+          "Abre el chat de WhatsApp y solicita tu nota digital.",
+          "Recibe el importe y la CLABE; transfiere con concepto libre.",
+          "Envía el comprobante y recibe tu Nota Digital desglosada.",
+        ]
+      : [
+          "Abre el chat de WhatsApp y solicita tu pago.",
+          "Recibe tu concepto de pago y la CLABE.",
+          "Transfiere por SPEI y envía el comprobante.",
+        ],
   })
 }
 

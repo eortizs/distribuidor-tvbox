@@ -14,9 +14,11 @@ import { resolveCreatorBankData } from "@/server/links-pago/bank"
 import { renderPaymentQrLink, type PaymentQrLink } from "@/server/links-pago/qr-asset"
 import {
   conceptoPagoDeOrden,
+  esConceptoLibre,
   paymentOrderConceptoVisible,
   PAYMENT_ORDER_CONCEPTO_ERROR,
 } from "@/lib/links-pago"
+import { notaDigitalTexto } from "@/server/links-pago/notify"
 import {
   cancelPaymentOrder,
   checkRateLimitPaymentOrderCreation,
@@ -220,6 +222,7 @@ export async function getPaymentOrderLinkAction(input: {
     amountMxn: order.amountMxn,
     code: order.code,
     number: waNumber,
+    origin: order.origin,
   })
 
   const shortUrl = buildPaymentOrderShortLink(order.code)
@@ -356,11 +359,21 @@ export async function resolvePaymentOrderAction(input: {
   }
 
   if (input.decision === "approve") {
-    notifyPayerOfResolution(
-      resolved,
-      "Pago confirmado",
-      `Confirmamos tu pago de ${money(resolved.amountMxn)} con el concepto de pago ${paymentOrderConceptoVisible(resolved)}. Gracias.`
-    )
+    if (resolved.origin === "nota") {
+      // Un aprobado a mano por el creador entrega la MISMA Nota Digital que
+      // la confirmación automática por depósito (consistencia).
+      notifyPayerOfResolution(
+        resolved,
+        "Tu Nota Digital",
+        await notaDigitalTexto(resolved)
+      )
+    } else {
+      notifyPayerOfResolution(
+        resolved,
+        "Pago confirmado",
+        `Confirmamos tu pago de ${money(resolved.amountMxn)} con el concepto de pago ${paymentOrderConceptoVisible(resolved)}. Gracias.`
+      )
+    }
     if (user.id !== resolved.creatorUserId) {
       createPaymentOrderNotification({
         userId: resolved.creatorUserId,
@@ -373,9 +386,13 @@ export async function resolvePaymentOrderAction(input: {
     notifyPayerOfResolution(
       resolved,
       "Pago no confirmado",
-      `El comprobante con el concepto de pago ${paymentOrderConceptoVisible(resolved)} no fue aceptado${
+      `${
+        esConceptoLibre(resolved)
+          ? `El comprobante de tu pago de ${money(resolved.amountMxn)}`
+          : `El comprobante con el concepto de pago ${paymentOrderConceptoVisible(resolved)}`
+      } no fue aceptado${
         reason ? `: ${reason}` : ""
-      }. Contacta a quien te emitió el link.`
+      }. Contacta a quien te emitió la orden.`
     )
     if (user.id !== resolved.creatorUserId) {
       createPaymentOrderNotification({

@@ -7,7 +7,11 @@ import {
   resolveSellerMpAccessToken,
 } from "@/server/mercadopago/tokens"
 import { findDepositsForPaymentOrderWindow } from "@/server/mercadopago/spei"
-import { paymentOrderConceptoVisible, paymentOrderMoney } from "@/lib/links-pago"
+import {
+  esConceptoLibre,
+  paymentOrderConceptoVisible,
+  paymentOrderMoney,
+} from "@/lib/links-pago"
 
 import { tryConfirmOrderDeposit, tryConfirmDepositPayment } from "./deposit-check"
 import { notifyDepositConfirmed } from "./notify"
@@ -117,7 +121,7 @@ function notifyEscalated(order: PaymentOrder): void {
       title: "Pago en revisión",
       body: `Aún no registramos la acreditación del depósito de ${paymentOrderMoney(
         order.amountMxn
-      )}${order.origin === "qr" ? "" : ` con el concepto de pago ${paymentOrderConceptoVisible(order)}`} (puede tardar según tu banco). Tu pago pasó a revisión: quien te emitió la orden te confirmará por este chat.`,
+      )}${esConceptoLibre(order) ? "" : ` con el concepto de pago ${paymentOrderConceptoVisible(order)}`} (puede tardar según tu banco). Tu pago pasó a revisión: quien te emitió la orden te confirmará por este chat.`,
     })
   }
 }
@@ -259,7 +263,7 @@ async function nudgeTick(): Promise<void> {
       title: "Comprobante pendiente",
       body: `¿Ya hiciste tu pago de ${paymentOrderMoney(
         order.amountMxn
-      )}?${order.origin === "qr" ? "" : ` Recuerda escribir ${paymentOrderConceptoVisible(order)} como *concepto de pago* y`} envíame en este chat la FOTO de tu comprobante para validar tu pago al instante.`,
+      )}?${esConceptoLibre(order) ? "" : ` Recuerda escribir ${paymentOrderConceptoVisible(order)} como *concepto de pago* y`} envíame en este chat la FOTO de tu comprobante para validar tu pago al instante.`,
     }).catch(() => {})
   }
 }

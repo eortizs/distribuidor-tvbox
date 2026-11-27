@@ -9,6 +9,7 @@ import {
   LandmarkIcon,
   MessageCircleIcon,
   MonitorDownIcon,
+  NotebookPenIcon,
   PackageIcon,
   PiggyBankIcon,
   PlugZapIcon,
@@ -191,6 +192,14 @@ export const MODULOS: Modulo[] = [
     href: "/modulos/alta-de-articulos",
     modulo: "core",
     icon: BoxesIcon,
+  },
+  {
+    title: "Nota Digital",
+    description:
+      "Arma una comanda desde el catálogo, genera un link de pago con QR y envía al pagador su nota desglosada por WhatsApp cuando el depósito se confirme.",
+    href: "/modulos/nota-digital",
+    modulo: "core",
+    icon: NotebookPenIcon,
   },
   {
     title: "Distribuidores",

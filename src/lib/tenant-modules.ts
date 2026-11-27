@@ -29,6 +29,7 @@ export const CORE_ROUTE_PREFIXES = [
   "/modulos/reporte-spei",
   "/modulos/calculadora",
   "/modulos/alta-de-articulos",
+  "/modulos/nota-digital",
   "/perfil",
   "/profile",
   "/users",

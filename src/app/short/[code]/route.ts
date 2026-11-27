@@ -73,12 +73,14 @@ function previewResponse(params: {
   amountMxn: number
   code: string
   waUrl: string
+  origin: "link" | "qr" | "nota"
 }): NextResponse {
   const html = buildPaymentOrderOgHtml({
     amountLabel: paymentOrderMoney(params.amountMxn),
     canonicalUrl: buildPaymentOrderShortLink(params.code),
     imageUrl: `${shortLinkBaseUrl()}/spei-link-og.png`,
     waUrl: params.waUrl,
+    origin: params.origin,
   })
   return withShortLinkHeaders(
     new NextResponse(html, {
@@ -135,6 +137,7 @@ export async function GET(
           amountMxn: order.amountMxn,
           code: order.code,
           number: waNumber,
+          origin: order.origin,
         })
       : null
     if (!target) return shortLinkUnavailable()
@@ -147,6 +150,7 @@ export async function GET(
         amountMxn: order.amountMxn,
         code: order.code,
         waUrl: target,
+        origin: order.origin,
       })
     }
 

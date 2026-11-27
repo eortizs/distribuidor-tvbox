@@ -12,7 +12,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { copyPaymentLink, sharePaymentLink } from "@/components/herramientas/links-pago/share-payment-link"
-import { paymentOrderMoney } from "@/lib/links-pago"
+import { paymentOrderMoney, type PaymentOrderOrigin } from "@/lib/links-pago"
 
 /*
  * Diálogo de link de pago creado: QR + datos SPEI + copiar/compartir link.
@@ -27,9 +27,12 @@ import { paymentOrderMoney } from "@/lib/links-pago"
 interface LinkCreadoDialogProps {
   order: CreatedPaymentOrder | null
   onClose: () => void
+  /** 'nota' omite el concepto: en la nota digital el concepto es libre. */
+  origin?: PaymentOrderOrigin
 }
 
-export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
+export function LinkCreadoDialog({ order, onClose, origin = "link" }: LinkCreadoDialogProps) {
+  const libre = origin === "nota" || origin === "qr"
   /**
    * Comparte el link corto del pago (mecánica compartida con la tarjeta del
    * QR fijo: ver share-payment-link.ts).
@@ -54,8 +57,9 @@ export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
             <DialogHeader>
               <DialogTitle>Link de pago {order.code}</DialogTitle>
               <DialogDescription>
-                Muestra el QR a tu cliente para que abra el chat con el mensaje
-                listo: ahí recibe el concepto de pago para pagar por SPEI.
+                {libre
+                  ? "Muestra el QR a tu cliente para que abra el chat con el mensaje listo: ahí recibe el importe y la CLABE para pagar por transferencia."
+                  : "Muestra el QR a tu cliente para que abra el chat con el mensaje listo: ahí recibe el concepto de pago para pagar por SPEI."}
               </DialogDescription>
             </DialogHeader>
             <div className="flex flex-col items-center gap-3">
@@ -87,10 +91,11 @@ export function LinkCreadoDialog({ order, onClose }: LinkCreadoDialogProps) {
                 <p>Banco: {order.bank.bank}</p>
                 <p>Cuenta: {order.bank.account}</p>
                 <p>Titular: {order.bank.holder}</p>
-                <p className="text-muted-foreground">
-                  El concepto de pago se lo entrega el agente por WhatsApp
-                  cuando solicite el pago.
-                </p>
+                 <p className="text-muted-foreground">
+                   {libre
+                     ? "El concepto de pago es libre: tu cliente lo elige al transferir y envía el comprobante por WhatsApp."
+                     : "El concepto de pago se lo entrega el agente por WhatsApp cuando solicite el pago."}
+                 </p>
               </div>
             </div>
             <div className="flex flex-col gap-2">

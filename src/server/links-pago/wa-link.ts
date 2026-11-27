@@ -1,7 +1,9 @@
 import {
   cobradorQrRequestText,
   cobradorQrShortPath,
+  notaDigitalRequestText,
   paymentOrderRequestText,
+  type PaymentOrderOrigin,
 } from "@/lib/links-pago"
 import { shortLinkBaseUrl } from "@/server/site-url"
 import { whatsappAgentNumber } from "@/server/whatsapp/config"
@@ -59,10 +61,14 @@ export function buildPaymentOrderWaLink(input: {
   amountMxn: number
   code: string
   number: string
+  /** Default 'link'. Las notas digitales llevan su propio texto de solicitud. */
+  origin?: PaymentOrderOrigin
 }): string {
-  return `https://wa.me/${input.number}?text=${encodeURIComponent(
-    paymentOrderRequestText(input.amountMxn, input.code)
-  )}`
+  const text =
+    input.origin === "nota"
+      ? notaDigitalRequestText(input.code, input.amountMxn)
+      : paymentOrderRequestText(input.amountMxn, input.code)
+  return `https://wa.me/${input.number}?text=${encodeURIComponent(text)}`
 }
 
 /**

@@ -12,6 +12,7 @@ import {
   COBRADOR_QR_CODE_LENGTH,
   isCobradorQrCode,
   normalizePaymentOrderPayerName,
+  NOTA_DIGITAL_REPORT_LABEL,
   PAYMENT_QR_REPORT_LABEL,
   PAYMENT_QR_REQUEST_WINDOW_MS,
   paymentOrderConceptAnchor,
@@ -141,7 +142,7 @@ export { PAYMENT_ORDER_MAX_MXN, PAYMENT_ORDER_MIN_MXN } from "@/lib/links-pago"
 export const MAX_PENDING_PAYMENT_ORDERS = 20
 
 /** 32 símbolos sin ambigüedad (mismo alfabeto que transfer_concepts). */
-const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+export const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const CODE_LENGTH = 4
 
 /** Reintentos ante colisión de código entre pendientes (probabilidad ínfima). */
@@ -176,7 +177,7 @@ export function checkRateLimitPaymentOrderCreation(userId: string): boolean {
   return bucket.count <= CREATE_RATE_LIMIT_MAX
 }
 
-function generateCode(): string {
+export function generateCode(): string {
   let code = ""
   for (let index = 0; index < CODE_LENGTH; index += 1) {
     code += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]
@@ -184,7 +185,7 @@ function generateCode(): string {
   return code
 }
 
-function isUniqueViolation(error: unknown): boolean {
+export function isUniqueViolation(error: unknown): boolean {
   return (
     typeof error === "object" &&
     error !== null &&
@@ -346,11 +347,11 @@ export async function ensurePaymentQrCode(userId: string): Promise<string> {
  * refresca el RSC — /modulos/links-de-pago se actualiza sin recargar.
  * Best-effort: jamás rompe la mutación que la origina.
  */
-function notifyPaymentOrderChange(orderId: string): void {
+export function notifyPaymentOrderChange(orderId: string): void {
   publishRealtimeDetached({ kind: "payment_order", entityId: orderId })
 }
 
-function mapRow(row: Record<string, unknown>): PaymentOrder {
+export function mapRow(row: Record<string, unknown>): PaymentOrder {
   return {
     id: String(row.id),
     code: String(row.code),
@@ -364,7 +365,7 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
         : String(row.creator_username),
     amountMxn: Number(row.amount_mxn),
     note: row.note === null || row.note === undefined ? null : String(row.note),
-    origin: row.origin === "qr" ? "qr" : "link",
+    origin: row.origin === "qr" ? "qr" : row.origin === "nota" ? "nota" : "link",
     status: row.status as PaymentOrderStatus,
     bank: {
       bank: String(row.bank_name),
@@ -416,20 +417,38 @@ function mapRow(row: Record<string, unknown>): PaymentOrder {
   }
 }
 
-const SELECT_COLUMNS = `
-  SELECT o.id, o.code, o.tenant_id, o.creator_user_id,
-         u.username AS creator_username,
-         o.amount_mxn, o.note, o.origin, o.status, o.bank_name, o.bank_account,
-         o.bank_holder, o.payer_phone, o.payer_name, o.link_opened_at,
-         o.payer_bound_at,
-         o.payer_nudged_at, o.ticket_file_id, o.ticket_sha256,
-         o.scan_status, o.scan_result, o.resolved_at, o.rejection_reason,
-         o.created_at, o.mp_payment_id, o.mp_deposit_at, o.verifying_since,
-         o.deposit_next_check_at, o.deposit_checks, o.deposit_escalated_at,
-         o.client_id, cl.name AS client_name
-    FROM payment_orders o
-    LEFT JOIN clients cl ON cl.id = o.client_id
-    LEFT JOIN users u ON u.id = o.creator_user_id`
+const SELECT_COLUMN_LIST = `o.id, o.code, o.tenant_id, o.creator_user_id,
+       u.username AS creator_username,
+       o.amount_mxn, o.note, o.origin, o.status, o.bank_name, o.bank_account,
+       o.bank_holder, o.payer_phone, o.payer_name, o.link_opened_at,
+       o.payer_bound_at,
+       o.payer_nudged_at, o.ticket_file_id, o.ticket_sha256,
+       o.scan_status, o.scan_result, o.resolved_at, o.rejection_reason,
+       o.created_at, o.mp_payment_id, o.mp_deposit_at, o.verifying_since,
+       o.deposit_next_check_at, o.deposit_checks, o.deposit_escalated_at,
+       o.client_id, cl.name AS client_name`
+
+const SELECT_FROM = `FROM payment_orders o
+       LEFT JOIN clients cl ON cl.id = o.client_id
+       LEFT JOIN users u ON u.id = o.creator_user_id`
+
+export const SELECT_COLUMNS = `SELECT ${SELECT_COLUMN_LIST} ${SELECT_FROM}`
+
+/** Igual que SELECT_COLUMNS, con los renglones congelados de una nota. */
+export const SELECT_NOTA_COLUMNS = `SELECT ${SELECT_COLUMN_LIST},
+       COALESCE(items.json, '[]'::json) AS nota_items
+       ${SELECT_FROM}
+       LEFT JOIN LATERAL (
+         SELECT json_agg(
+                  json_build_object(
+                    'sku', i.sku, 'nombre', i.nombre, 'um', i.um,
+                    'precio_unitario', i.precio_unitario, 'cantidad', i.cantidad,
+                    'importe_linea', i.importe_linea
+                  ) ORDER BY i.posicion ASC
+                ) AS json
+           FROM nota_digital_items i
+          WHERE i.payment_order_id = o.id
+       ) items ON true`
 
 /**
  * Crea la orden 'pending' con su código único entre pendientes y el
@@ -492,7 +511,7 @@ export async function createPaymentOrder(input: {
   }
 
   const amount = Math.round(input.amountMxn * 100) / 100
-  const origin: PaymentOrderOrigin = input.origin === "qr" ? "qr" : "link"
+  const origin: PaymentOrderOrigin = input.origin ?? "link"
   const payer = origin === "qr" ? (input.payer ?? null) : null
   // Solo el pago libre del QR fija el instante de la orden (cuando pagó).
   const createdAt =
@@ -1426,7 +1445,9 @@ export async function findPaymentOrdersByMpPaymentIds(
       String(row.mp_payment_id),
       row.origin === "qr"
         ? (row.note ?? "").trim() || PAYMENT_QR_REPORT_LABEL
-        : paymentOrderConceptAnchor({ note: row.note, code: String(row.code) })
+        : row.origin === "nota"
+          ? `${NOTA_DIGITAL_REPORT_LABEL} ${row.code}`
+          : paymentOrderConceptAnchor({ note: row.note, code: String(row.code) })
     )
   }
   return result

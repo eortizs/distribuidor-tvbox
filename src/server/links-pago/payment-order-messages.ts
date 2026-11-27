@@ -91,6 +91,27 @@ function respuestaDeLink(
 }
 
 /**
+ * Instrucciones de una NOTA DIGITAL: el pagador ya vio el desglose (o lo
+ * recibe con la nota al confirmarse); aquí solo necesita el TOTAL, la cuenta
+ * y la regla de que el concepto es LIBRE. El código de 4 del link es el folio
+ * y viaja en la solicitud prellenada, así que la orden queda ligada a su
+ * WhatsApp. Respondemos en DOS mensajes: instrucciones + CLABE sola.
+ */
+export function instruccionesNotaDigital(order: PaymentOrder): string {
+  return [
+    `Paga tu nota digital *${order.code}* por ${money(order.amountMxn)}:`,
+    "",
+    "1. Haz una transferencia SPEI por ese monto a la cuenta de abajo. El concepto de pago es libre, escribelo como quieras.",
+    "2. Envía en este chat la FOTO o el PDF de tu comprobante.",
+    "3. Recibirás aquí tu Nota Digital con el desglose cuando se confirme el pago.",
+    "",
+    "Banco: " + order.bank.bank,
+    "CLABE: " + order.bank.account,
+    "Titular: " + order.bank.holder,
+  ].join("\n")
+}
+
+/**
  * Respuesta con las instrucciones de una orden ACTIVA cuyo código acaba de
  * llegar por el chat. En una orden del QR fijo el pago ya llegó con su
  * comprobante: no se vuelven a pedir ni el concepto ni la transferencia,
@@ -100,6 +121,15 @@ export function respuestaConConcepto(
   order: PaymentOrder,
   inboundText: string
 ): PaymentOrderTurnResult {
+  if (order.origin === "nota") {
+    return {
+      text: instruccionesNotaDigital(order),
+      additionalTexts: [order.bank.account],
+      orderId: order.id,
+      inboundText,
+      mediaMime: null,
+    }
+  }
   if (order.origin === "qr") {
     return {
       text:
@@ -131,10 +161,18 @@ export function textoVerificandoDeposito(order: PaymentOrder): string {
 export function textoEstadoResuelto(order: PaymentOrder): string {
   const pago = `Tu pago de la orden *${order.code}* (${money(order.amountMxn)})`
   const revisar = "Si tu pago fue real, contacta a quien te cobró para revisar el caso."
+  const nota = order.origin === "nota"
+  const libre = order.origin === "qr" || nota
+  const nombre = nota ? "nota digital" : "orden"
   switch (order.status) {
     case "verifying":
       return textoVerificandoDeposito(order)
     case "paid":
+      if (nota) {
+        return `Tu nota digital *${order.code}* (${money(
+          order.amountMxn
+        )}) ya está pagada y tu comprobante de pago fue enviado por este chat.`
+      }
       if (order.origin === "qr") {
         return `${pago} ya está confirmado. No es necesario volver a enviar el comprobante.`
       }
@@ -146,15 +184,21 @@ export function textoEstadoResuelto(order: PaymentOrder): string {
         .filter((line) => line.length > 0)
         .join(" ")
     case "rejected":
+      if (nota) return `${pago} de tu nota digital fue rechazado. ${revisar}`
       return order.origin === "qr"
         ? `${pago} fue rechazado. ${revisar}`
         : `El link de pago *${order.code}* fue rechazado. Si tu pago fue real, contacta a quien te emitió la orden para revisar el caso.`
     case "cancelled":
+      if (nota) {
+        return `Tu nota digital *${order.code}* fue cancelada y el código ya no está activo. Pide una nota nueva a quien te cobró.`
+      }
       return order.origin === "qr"
         ? `${pago} fue cancelado. ${revisar}`
         : `El link de pago *${order.code}* fue cancelado y el código ya no está activo. Pide un link de pago nuevo.`
     default:
-      return `El link de pago *${order.code}* ya no está activo (estado: ${order.status}).`
+      return libre
+        ? `Tu ${nombre} *${order.code}* ya no está activa (estado: ${order.status}).`
+        : `El link de pago *${order.code}* ya no está activo (estado: ${order.status}).`
   }
 }
 

@@ -19,7 +19,9 @@ export interface PaymentOrderListItem {
   /**
    * 'link' = importe y concepto definidos por el cobrador; 'qr' = pago libre
    * del QR fijo (importe leído del comprobante; `note`, si existe, es el
-   * concepto libre que escribió el pagador, solo informativo).
+   * concepto libre que escribió el pagador, solo informativo); 'nota' = nota
+   * digital (importe congelado de una comanda; `note` siempre null, el
+   * concepto del comprobante es libre).
    */
   origin: PaymentOrderOrigin
   status: PaymentOrder["status"]
@@ -293,6 +295,8 @@ export const MAX_PAYMENT_ORDER_CODE_TOKENS = 5
 
 const PAYMENT_ORDER_REQUEST_RE =
   /solicito\s+(?:un[ao]?\s+)?(?:orden|liga|link)\s+de\s+pago\s+por\s+\$?\s*(\d[\d.,]*)/i
+const NOTA_DIGITAL_REQUEST_RE =
+  /solicito\s+pagar\s+mi\s+nota\s+digital\s+[A-HJ-NP-Z2-9]{4}\s+por\s+\$?\s*(\d[\d.,]*)/i
 
 /**
  * Primeros tokens del mensaje con FORMA de código de link, sin duplicados.
@@ -304,10 +308,13 @@ const PAYMENT_ORDER_REQUEST_RE =
 export function findPaymentOrderCodeTokens(text: string): string[] {
   // El importe de una solicitud nunca es un código: un monto con forma de
   // código («$2345.00») no debe poder señalar otra orden.
-  const sinImporte = text.replace(
-    PAYMENT_ORDER_REQUEST_RE,
-    (whole, amount) => whole.replace(amount, " ")
-  )
+  const sinImporte = text
+    .replace(PAYMENT_ORDER_REQUEST_RE, (whole, amount) =>
+      whole.replace(amount, " ")
+    )
+    .replace(NOTA_DIGITAL_REQUEST_RE, (whole, amount) =>
+      whole.replace(amount, " ")
+    )
   const tokens = sinImporte
     .toUpperCase()
     .split(/[^A-Z0-9]+/)
@@ -329,6 +336,22 @@ export function paymentOrderRequestText(
   return `Solicito un link de pago por ${paymentOrderMoney(
     amountMxn
   )} (código ${code})`
+}
+
+/**
+ * Texto prellenado de una NOTA DIGITAL: el pagador solicita pagar su comanda
+ * por su CÓDIGO (el folio de la nota). El código viaja en el mensaje para que
+ * `findPendingPaymentOrderByAnyCode` ligue el teléfono a ESA orden — con
+ * varias comandas del mismo importe no hay ambigüedad. El importe se muestra
+ * como referencia, nunca como identidad.
+ */
+export function notaDigitalRequestText(
+  code: string,
+  amountMxn: number
+): string {
+  return `Solicito pagar mi nota digital ${code} por ${paymentOrderMoney(
+    amountMxn
+  )}`
 }
 
 /**
@@ -357,12 +380,27 @@ export function parsePaymentOrderRequestAmount(text: string): number | null {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Origen de una orden de pago: 'link' es el link con importe y concepto que
- * define el cobrador; 'qr' nace del QR FIJO de un cobrador, donde el pagador
- * transfiere el MONTO que quiera con el CONCEPTO que quiera y la orden se
- * crea desde su comprobante (identificado por su teléfono de WhatsApp).
+ * Origen de una orden de pago:
+ *  - 'link': importe y concepto definidos por el cobrador;
+ *  - 'qr': pago libre del QR FIJO (importe y concepto del pagador, leídos de
+ *    su comprobante);
+ *  - 'nota': nota digital (importe congelado de una comanda del catálogo;
+ *    el concepto del comprobante es libre y `note` siempre es null).
  */
-export type PaymentOrderOrigin = "link" | "qr"
+export type PaymentOrderOrigin = "link" | "qr" | "nota"
+
+/**
+ * ¿El comprobante de esta orden tiene CONCEPTO LIBRE? En el QR fijo y en la
+ * nota digital el pagador escribe lo que quiera: solo se valida el IMPORTE
+ * exacto y la acreditación del depósito. Sustituye a los `origin !== "qr"`
+ * dispersos — agregar un origen nuevo no debe arrastrarlo al matching por
+ * concepto de los links.
+ */
+export function esConceptoLibre(order: {
+  origin: PaymentOrderOrigin
+}): boolean {
+  return order.origin === "qr" || order.origin === "nota"
+}
 
 /**
  * Código del QR FIJO de un cobrador: 6 caracteres del mismo alfabeto sin
@@ -568,6 +606,9 @@ export const PAYMENT_ORDER_NOTE_MAX = 120
  * vez de caer a la inferencia por ventana de las renovaciones.
  */
 export const PAYMENT_QR_REPORT_LABEL = "QR fijo"
+
+/** Rótulo del reporte SPEILink cuando el depósito confirmó una nota digital. */
+export const NOTA_DIGITAL_REPORT_LABEL = "Nota"
 
 /**
  * Concepto LIBRE impreso en el comprobante de un pago por QR fijo: se guarda

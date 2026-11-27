@@ -1,7 +1,9 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { runWithTenant } from "@/server/tenant/context"
-import { paymentOrderConceptoVisible } from "@/lib/links-pago"
+import { esConceptoLibre, paymentOrderConceptoVisible } from "@/lib/links-pago"
+import { formatearNotaDigital } from "@/lib/nota-digital"
+import { itemsDeNota } from "@/server/nota-digital/repository"
 
 import type { PaymentOrder } from "./repository"
 
@@ -14,6 +16,10 @@ import type { PaymentOrder } from "./repository"
  * (deposit-verifier.ts) y la rama webhook de depósitos (mercadopago/
  * service.ts → deposit-check.ts). Toda confirmación lleva comprobante
  * validado (la identificación del pagador por código es mandatoria).
+ *
+ * NOTA DIGITAL: al confirmarse, el WhatsApp al pagador se SUSTITUYE por la
+ * nota desglosada (folio, fecha, renglones y TOTAL). El tendero conserva su
+ * campana «cobro confirmado»; no se le reenvía la nota.
  */
 
 function money(amount: number): string {
@@ -22,6 +28,27 @@ function money(amount: number): string {
 
 function maskPhone(phone: string): string {
   return phone.length <= 4 ? phone : `${phone.slice(0, 3)}•••${phone.slice(-3)}`
+}
+
+/** Fecha legible de la nota, en hora de México (determinista). */
+function fechaNota(iso: string): string {
+  return new Intl.DateTimeFormat("es-MX", {
+    timeZone: "America/Mexico_City",
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(new Date(iso))
+}
+
+/** Texto de la Nota Digital desglosada de una orden ya pagada. */
+export async function notaDigitalTexto(order: PaymentOrder): Promise<string> {
+  const lineas = await itemsDeNota(order.id).catch(() => [])
+  return formatearNotaDigital({
+    code: order.code,
+    fecha: fechaNota(order.resolvedAt ?? order.createdAt),
+    negocio: order.creatorUsername?.trim() || "tu negocio",
+    lineas,
+    total: order.amountMxn,
+  })
 }
 
 /** Aviso al creador por campana (con espejo WhatsApp); nunca lanza. */
@@ -39,7 +66,11 @@ export function notifyCreator(
 }
 
 /** Confirmación DIRECTA al pagador por WhatsApp; nunca lanza. */
-function notifyPayer(order: PaymentOrder, title: string, body: string): void {
+function notifyPayer(
+  order: PaymentOrder,
+  title: string,
+  body: string
+): void {
   if (!order.payerPhone) return
   void enqueueWhatsAppForPhone({
     userId: order.creatorUserId,
@@ -57,12 +88,18 @@ function notifyPayer(order: PaymentOrder, title: string, body: string): void {
  * (`touchPaymentOrderPayer` devuelve true solo en el primer binding).
  */
 export function notifyPayerContacted(order: PaymentOrder, phone: string): void {
+  const entrega =
+    order.origin === "nota"
+      ? `abrió tu nota digital ${order.code} (${money(
+          order.amountMxn
+        )}) y recibió el importe y la CLABE.`
+      : `abrió tu link ${order.code} (${money(
+          order.amountMxn
+        )}) y recibió el concepto de pago ${paymentOrderConceptoVisible(order)} y la CLABE.`
   notifyCreator(
     order,
     "Pagador en contacto",
-    `El pagador (WhatsApp ${maskPhone(phone)}) abrió tu link ${order.code} (${money(
-      order.amountMxn
-    )}) y recibió el concepto de pago ${paymentOrderConceptoVisible(order)} y la CLABE. Te avisaremos cuando envíe su comprobante o cuando el pago se confirme.`
+    `El pagador (WhatsApp ${maskPhone(phone)}) ${entrega} Te avisaremos cuando envíe su comprobante o cuando el pago se confirme.`
   )
 }
 
@@ -78,7 +115,7 @@ export function notifyPayerContacted(order: PaymentOrder, phone: string): void {
  */
 export function notifyDepositConfirmed(order: PaymentOrder): void {
   void runWithTenant(order.tenantId, async () => {
-    notifyDepositConfirmedInTenant(order)
+    await notifyDepositConfirmedInTenant(order)
   }).catch((error: unknown) => {
     console.error(
       JSON.stringify({
@@ -91,20 +128,32 @@ export function notifyDepositConfirmed(order: PaymentOrder): void {
   })
 }
 
-function notifyDepositConfirmedInTenant(order: PaymentOrder): void {
+async function notifyDepositConfirmedInTenant(
+  order: PaymentOrder
+): Promise<void> {
   const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
   const deposito = order.mpDepositAt
     ? ` acreditado el ${new Date(order.mpDepositAt).toLocaleString("es-MX")}`
     : ""
-  // En el pago libre del QR fijo no hubo concepto que validar.
-  const libre = order.origin === "qr"
+  // En el pago libre (QR fijo y nota digital) no hubo concepto que validar.
+  const libre = esConceptoLibre(order)
   notifyCreator(
     order,
     "Cobro confirmado por depósito",
-    `El pagador${pagador} de tu orden ${order.code} pagó ${money(
-      order.amountMxn
-    )}: el comprobante pasó la validación automática (${libre ? "importe" : "concepto e importe"}) y el depósito quedó acreditado en tu cuenta${deposito}.`
+    order.origin === "nota"
+      ? `El pagador${pagador} pagó tu nota digital ${order.code} (${money(
+          order.amountMxn
+        )}): el comprobante pasó la validación por importe y el depósito quedó acreditado en tu cuenta${deposito}.`
+      : `El pagador${pagador} de tu orden ${order.code} pagó ${money(
+          order.amountMxn
+        )}: el comprobante pasó la validación automática (${libre ? "importe" : "concepto e importe"}) y el depósito quedó acreditado en tu cuenta${deposito}.`
   )
+
+  if (order.origin === "nota") {
+    notifyPayer(order, "Tu Nota Digital", await notaDigitalTexto(order))
+    return
+  }
+
   notifyPayer(
     order,
     "Pago confirmado",

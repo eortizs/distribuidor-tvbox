@@ -10,7 +10,10 @@ import {
 } from "@/server/transferencias/scan"
 import { evaluarCondiciones } from "@/server/transferencias/verificar"
 import { conceptoImpresoCoincide } from "@/server/asistente/renovacion"
-import { paymentOrderConceptAnchor } from "@/lib/links-pago"
+import {
+  esConceptoLibre,
+  paymentOrderConceptAnchor,
+} from "@/lib/links-pago"
 import { notifyCreator, notifyDepositConfirmed } from "./notify"
 
 import {
@@ -227,10 +230,12 @@ export async function reviewPaymentReceipt(input: {
   }
 
   // El ancla de conciliación es el CONCEPTO DE PAGO de la orden (el código
-  // del link en las órdenes de la era previa). En los pagos por QR fijo el
-  // concepto es LIBRE —lo escribe el pagador como quiera—: no se evalúa; la
-  // prueba es el IMPORTE exacto del comprobante y, después, el depósito.
-  const ancla = order.origin === "qr" ? "" : paymentOrderConceptAnchor(order)
+  // del link en las órdenes de la era previa). En el QR fijo y en la nota
+  // digital el concepto es LIBRE —lo escribe el pagador como quiera—: no se
+  // evalúa; la prueba es el IMPORTE exacto del comprobante y, después, el
+  // depósito.
+  const libre = esConceptoLibre(order)
+  const ancla = libre ? "" : paymentOrderConceptAnchor(order)
   const checks = evaluarCondiciones({
     datos: extraccion.datos,
     conceptCode: ancla,
@@ -293,35 +298,44 @@ export async function reviewPaymentReceipt(input: {
   }
 
   const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
-  // En el QR fijo no hay concepto que validar ni link que marcar.
-  const verificado = order.origin === "qr" ? "importe" : "concepto e importe"
-  const porPagar = order.origin === "qr" ? "la orden" : "el link"
+  // En el pago libre (QR fijo y nota digital) no hay concepto que validar.
+  const verificado = libre ? "importe" : "concepto e importe"
+  const porPagar =
+    order.origin === "qr"
+      ? "la orden"
+      : order.origin === "nota"
+        ? "la nota"
+        : "el link"
+  const genero = order.origin === "link" ? "o" : "a"
+  const modulo = order.origin === "nota" ? "Nota Digital" : "SPEILink"
 
   if (!scan.ok) {
-  const persisted = await savePaymentOrderScan({
-    orderId: order.id,
-    scanStatus: "rejected",
-    scanResult: scan as unknown as Record<string, unknown>,
-    scanModel: extraccion.modelo,
-    ticketFileId: input.ticketFileId,
-    ticketSha256: sha256,
-  }).catch(() => false)
-  logEvent("orden_pago.review_rejected", {
-    order_id: order.id,
-    code: order.code,
-    reasons,
-    persisted,
-  })
-  notifyPaymentOrderCreator(
-    order,
-    sha256,
-    "Link de pago por revisar",
-    `El comprobante del pagador${pagador} de tu orden ${order.code} (${money(
-      order.amountMxn
-    )}) no pasó la validación automática.${
-      reasons.length > 0 ? ` Motivo(s): ${reasons.slice(0, 4).join("; ")}.` : ""
-    } Revísala en Módulos → SPEILink.`
-  )
+    const persisted = await savePaymentOrderScan({
+      orderId: order.id,
+      scanStatus: "rejected",
+      scanResult: scan as unknown as Record<string, unknown>,
+      scanModel: extraccion.modelo,
+      ticketFileId: input.ticketFileId,
+      ticketSha256: sha256,
+    }).catch(() => false)
+    logEvent("orden_pago.review_rejected", {
+      order_id: order.id,
+      code: order.code,
+      reasons,
+      persisted,
+    })
+    notifyPaymentOrderCreator(
+      order,
+      sha256,
+      order.origin === "nota" ? "Nota digital por revisar" : "Link de pago por revisar",
+      `El comprobante del pagador${pagador} de tu ${
+        order.origin === "nota" ? "nota digital" : "orden"
+      } ${order.code} (${money(
+        order.amountMxn
+      )}) no pasó la validación automática.${
+        reasons.length > 0 ? ` Motivo(s): ${reasons.slice(0, 4).join("; ")}.` : ""
+      } Revísala en Módulos → ${modulo}.`
+    )
   return { review: "auto_rejected", scan }
   }
 
@@ -356,9 +370,11 @@ export async function reviewPaymentReceipt(input: {
     notifyCreator(
       order,
       "Comprobante validado",
-      `El pagador${pagador} de tu orden ${order.code} (${money(
+      `El pagador${pagador} de tu ${
+        order.origin === "nota" ? "nota digital" : "orden"
+      } ${order.code} (${money(
         order.amountMxn
-      )}) envió un comprobante válido (${verificado}). Confirma la recepción del depósito en TU cuenta y marca ${porPagar} como pagad${order.origin === "qr" ? "a" : "o"} en Módulos → SPEILink.`
+      )}) envió un comprobante válido (${verificado}). Confirma la recepción del depósito en TU cuenta y marca ${porPagar} como pagad${genero} en Módulos → ${modulo}.`
     )
     return { review: "awaiting_creator" }
   }
