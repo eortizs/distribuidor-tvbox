@@ -581,9 +581,13 @@ export function NotaDigitalView({
         </TabsList>
 
         <TabsContent value="crear">
-          <Frame spacing="default" variant="ghost" className="w-full">
-            <FramePanel className="border-0 px-0 shadow-none before:hidden">
-              <FrameHeader className="flex-row items-center justify-between gap-2">
+          <Frame
+            spacing="default"
+            variant="ghost"
+            className="w-full gap-3 rounded-none bg-transparent p-0"
+          >
+            <FramePanel className="border-0 px-0 rounded-none bg-transparent shadow-none before:hidden">
+              <FrameHeader className="flex-row items-center justify-between gap-2 px-0">
                 <FrameTitle className="text-lg font-semibold">
                   Nueva nota digital
                 </FrameTitle>
@@ -597,7 +601,7 @@ export function NotaDigitalView({
                 </InfoHint>
               </FrameHeader>
 
-              <div className="flex flex-col gap-3 px-4">
+              <div className="flex flex-col gap-3">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="buscar-articulo-nota">
                     Buscar artículos o servicios
@@ -668,15 +672,13 @@ export function NotaDigitalView({
                     Ningún artículo coincide con «{busqueda.trim()}».
                   </p>
                 ) : (
-                  <div className="-mx-4">
-                    <ArticulosAccordion
-                      articulos={articulosFiltrados}
-                      modo="seleccion"
-                      onAgregar={agregarAlCarrito}
-                      cantidadEnComanda={cantidadEnComanda}
-                      sinDivideres
-                    />
-                  </div>
+                  <ArticulosAccordion
+                    articulos={articulosFiltrados}
+                    modo="seleccion"
+                    onAgregar={agregarAlCarrito}
+                    cantidadEnComanda={cantidadEnComanda}
+                    sinDivideres
+                  />
                 )}
 
                 {cart.length === 0 ? (
@@ -809,7 +811,7 @@ export function NotaDigitalView({
                 ) : null}
               </div>
 
-              <FrameFooter className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <FrameFooter className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between px-0">
                 <div className="flex items-baseline gap-2">
                   <span className="text-muted-foreground text-sm">Total</span>
                   <span className="text-2xl font-semibold tracking-tight tabular-nums">
@@ -830,9 +832,13 @@ export function NotaDigitalView({
         </TabsContent>
 
         <TabsContent value="notas">
-          <Frame spacing="default" variant="ghost" className="w-full">
-            <FramePanel className="border-0 p-0 shadow-none before:hidden">
-              <FrameHeader className="flex-row items-center justify-between gap-2">
+          <Frame
+            spacing="default"
+            variant="ghost"
+            className="w-full gap-3 rounded-none bg-transparent p-0"
+          >
+            <FramePanel className="border-0 p-0 rounded-none bg-transparent shadow-none before:hidden">
+              <FrameHeader className="flex-row items-center justify-between gap-2 px-0">
                 <FrameTitle className="text-lg font-semibold">
                   Mis notas digitales
                   {notas.length > 0 && (
@@ -861,7 +867,7 @@ export function NotaDigitalView({
                     <DataGridTable />
                   </DataGridScrollArea>
                 </DataGridContainer>
-                <div className="px-4 pb-3">
+                <div className="px-0 pb-3">
                   <DataGridPagination />
                 </div>
               </DataGrid>

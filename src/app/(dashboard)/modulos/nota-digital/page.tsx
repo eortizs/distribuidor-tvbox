@@ -37,7 +37,7 @@ export default async function NotaDigitalPage() {
   }))
 
   return (
-    <div className="flex flex-1 flex-col gap-6 p-4 md:p-6">
+    <div className="flex flex-1 flex-col gap-6 px-2 py-4 sm:px-4 md:px-6 md:py-6">
       <h1 className="sr-only">Nota Digital</h1>
       <NotaDigitalView
         initialNotas={notas}
