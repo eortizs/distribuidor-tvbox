@@ -42,7 +42,7 @@ const STEPS = [
     icon: QrCodeIcon,
     title: "Crea tu link",
     description:
-      "Escribe el monto y el concepto de pago, genera tu link o QR desde la app y compártelo por WhatsApp o muéstralo en tu mostrador.",
+      "Ingresa el monto o arma la comanda de tu cliente ligada a un número de orden (ej. ORD104). Genera tu link o QR desde la app y compártelo por WhatsApp o muéstralo en tu mostrador.",
   },
   {
     step: "02",
@@ -225,8 +225,8 @@ export function Landing({ affiliate }: LandingProps) {
                 100% automatizado.
               </span>
               <h1 className="mt-5 text-3xl leading-[1.1] font-extrabold tracking-[-0.02em] text-balance text-[#0F172A] sm:text-4xl lg:text-5xl">
-                Acepta pagos por WhatsApp y confirma la transferencia{" "}
-                <span className="text-[#059669]">al instante.</span>
+                Recibe transferencias por WhatsApp con{" "}
+                <span className="text-[#059669]">comprobación</span> inmediata.
               </h1>
               <p className="mt-4 max-w-xl text-base leading-relaxed text-pretty text-slate-600 sm:text-lg">
                 Todo ocurre en automático, sin que tengas que dictar tu CLABE,
@@ -516,7 +516,7 @@ export function Landing({ affiliate }: LandingProps) {
               />
               <div className="relative z-10 mx-auto flex max-w-2xl flex-col items-center gap-4">
                 <h2 className="text-2xl font-extrabold tracking-[-0.02em] text-balance sm:text-4xl">
-                  Sin revisar tu banco en cada transferencia.
+                  No necesitas revisar tu banco en cada transferencia.
                 </h2>
                 <p className="text-sm leading-relaxed text-slate-300 sm:text-base">
                   Empieza a cobrar hoy por WhatsApp con confirmación automática al

@@ -1,4 +1,5 @@
 import {
+  CheckCircle2Icon,
   CheckIcon,
   MessageCircleCheckIcon,
   ReceiptTextIcon,
@@ -70,6 +71,64 @@ export function CustomerDataValue() {
               </div>
             </div>
           ))}
+        </div>
+
+        <div className="mt-8 grid grid-cols-1 items-center gap-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm md:p-8 lg:grid-cols-12">
+          <div className="flex flex-col gap-4 lg:col-span-7">
+            <span className="inline-flex w-fit items-center rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+              Control de pedidos + Nota Digital
+            </span>
+            <h3 className="text-lg font-bold tracking-[-0.01em] text-[#0F172A] sm:text-xl">
+              Controla tus pedidos y entrega su Nota Digital en automático
+            </h3>
+            <p className="text-sm leading-relaxed text-slate-600 sm:text-base">
+              Ideal para cafeterías, misceláneas y negocios de mostrador: arma
+              el pedido desde la app, liga el cobro al número de orden como
+              concepto SPEI y lleva el control exacto de qué está pagado. Al
+              acreditarse la transferencia, tu cliente recibe automáticamente
+              su nota desglosada directo en su WhatsApp.
+            </p>
+            <ul className="flex flex-col gap-2">
+              <li className="flex items-start gap-2 text-sm text-[#1E293B]">
+                <CheckCircle2Icon
+                  className="mt-0.5 size-4 shrink-0 text-[#059669]"
+                  aria-hidden="true"
+                />
+                Conciliación exacta por número de orden sin confusiones entre
+                cuentas.
+              </li>
+              <li className="flex items-start gap-2 text-sm text-[#1E293B]">
+                <CheckCircle2Icon
+                  className="mt-0.5 size-4 shrink-0 text-[#059669]"
+                  aria-hidden="true"
+                />
+                Comprobante digital desglosado que eleva la confianza de tu
+                comprador.
+              </li>
+            </ul>
+          </div>
+          <div className="lg:col-span-5">
+            <div className="rounded-2xl border border-emerald-200/80 bg-[#DCF8C6] p-4 text-sm text-slate-800 shadow-sm">
+              <p className="font-bold">✅ ¡Pago verificado! · Orden ORD104</p>
+              <ul className="mt-3 flex flex-col gap-2">
+                <li className="flex justify-between gap-3 border-b border-dashed border-emerald-300/70 pb-2">
+                  <span>2x Capuchino grande</span>
+                  <span className="tabular-nums">$110.00</span>
+                </li>
+                <li className="flex justify-between gap-3 border-b border-dashed border-emerald-300/70 pb-2">
+                  <span>1x Rol de canela</span>
+                  <span className="tabular-nums">$35.00</span>
+                </li>
+              </ul>
+              <p className="mt-2 flex justify-between border-t border-emerald-300/60 pt-2 font-bold tabular-nums">
+                <span>Total pagado</span>
+                <span>$145.00 MXN</span>
+              </p>
+              <p className="mt-1 text-right text-xs text-slate-500">
+                Nota digital enviada automáticamente · 10:36 ✓✓
+              </p>
+            </div>
+          </div>
         </div>
 
         <div className="mt-8 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
