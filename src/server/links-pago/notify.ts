@@ -1,7 +1,7 @@
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { runWithTenant } from "@/server/tenant/context"
-import { esConceptoLibre, paymentOrderConceptoVisible } from "@/lib/links-pago"
+import { paymentOrderConceptoVisible } from "@/lib/links-pago"
 import { formatearNotaDigital } from "@/lib/nota-digital"
 import { itemsDeNota } from "@/server/nota-digital/repository"
 
@@ -15,7 +15,7 @@ import type { PaymentOrder } from "./repository"
  * importación: el chequeo inmediato y el verificador en background
  * (deposit-verifier.ts) y la rama webhook de depósitos (mercadopago/
  * service.ts → deposit-check.ts). Toda confirmación lleva comprobante
- * validado (la identificación del pagador por código es mandatoria).
+ * validado por IMPORTE y depósito acreditado (el concepto de pago es libre).
  *
  * NOTA DIGITAL: al confirmarse, el WhatsApp al pagador se SUSTITUYE por la
  * nota desglosada (folio, fecha, renglones y TOTAL). El tendero conserva su
@@ -135,8 +135,6 @@ async function notifyDepositConfirmedInTenant(
   const deposito = order.mpDepositAt
     ? ` acreditado el ${new Date(order.mpDepositAt).toLocaleString("es-MX")}`
     : ""
-  // En el pago libre (QR fijo y nota digital) no hubo concepto que validar.
-  const libre = esConceptoLibre(order)
   notifyCreator(
     order,
     "Cobro confirmado por depósito",
@@ -146,7 +144,7 @@ async function notifyDepositConfirmedInTenant(
         )}): el comprobante pasó la validación por importe y el depósito quedó acreditado en tu cuenta${deposito}.`
       : `El pagador${pagador} de tu orden ${order.code} pagó ${money(
           order.amountMxn
-        )}: el comprobante pasó la validación automática (${libre ? "importe" : "concepto e importe"}) y el depósito quedó acreditado en tu cuenta${deposito}.`
+        )}: el comprobante pasó la validación automática (importe) y el depósito quedó acreditado en tu cuenta${deposito}.`
   )
 
   if (order.origin === "nota") {
@@ -159,6 +157,6 @@ async function notifyDepositConfirmedInTenant(
     "Pago confirmado",
     `Recibimos tu comprobante y confirmamos el depósito de ${money(
       order.amountMxn
-    )}${libre ? "" : ` con el concepto de pago ${paymentOrderConceptoVisible(order)}`} en la cuenta. Tu pago quedó validado. Gracias.`
+    )} en la cuenta. Tu pago quedó validado. Gracias.`
   )
 }

@@ -39,9 +39,11 @@ import {
 import { normalizarTexto } from "@/server/transferencias/verificar"
 import { getUserFile, userFilePath } from "@/server/storage/user-files"
 import {
+  findActivePaymentOrderOfCreatorForReceipt,
   findPaymentOrderForReceiptConcept,
   maybeHandlePaymentOrderReceipt,
 } from "@/server/links-pago/whatsapp"
+import { listActivePaymentOrdersOfCreator } from "@/server/links-pago/repository"
 
 import { appendConversationMessage, type AssistantChannel } from "./conversations"
 import type { AssistantAttachmentMeta } from "./attachments"
@@ -546,10 +548,17 @@ export async function maybeHandleRenewalReceipt(input: {
  * comprobante (impreso o escrito) NO pertenece a ninguna renovación propia
  * pero SÍ a una orden de pago — los dos formatos de pago por transferencia
  * comparten este interceptor y el concepto decide a cuál pertenece el
- * comprobante. Persiste el turno del usuario con su adjunto, corre el canal
- * del pagador con la extracción ya hecha (sin segundo gasto de visión) y
- * persiste la respuesta en la historia. Null = el concepto no corresponde a
- * ninguna orden de pago (el turno sigue el curso de renovación).
+ * comprobante. Con el CONCEPTO DE PAGO ya LIBRE, si el impreso no calza con
+ * ningún concepto (`creatorFallback`) el comprobante se atribuye al cobro
+ * activo del propio usuario que explica el importe leído — su ÚNICO cobro
+ * activo, o el ÚNICO con ese importe exacto (reenvío del comprobante de su
+ * pagador; caso real: el pagador escribe «Jose Luis» como concepto y el
+ * creador del link reenvía la foto a su chat). Con 0 o varias coincidencias
+ * no se atribuye nada (fail-closed): la guía sugiere reenviar con el código.
+ * Persiste el turno del usuario con su adjunto, corre el canal del pagador
+ * con la extracción ya hecha (sin segundo gasto de visión) y persiste la
+ * respuesta en la historia. Null = el comprobante no corresponde a ninguna
+ * orden de pago (el turno sigue el curso de renovación).
  */
 async function delegarAOrdenDePago(
   input: {
@@ -559,21 +568,35 @@ async function delegarAOrdenDePago(
     channel: AssistantChannel
     phone: string | null
   },
-  concepto: string,
+  concepto: string | null,
   ticket: AssistantAttachmentMeta,
   bytes: Uint8Array,
-  preextracted: ExtraccionLLM | null
+  preextracted: ExtraccionLLM | null,
+  creatorFallback: boolean
 ): Promise<string | null> {
   if (!input.phone) return null
-  const order = await findPaymentOrderForReceiptConcept(concepto).catch(
-    () => null
-  )
-  if (!order) return null
+  const order = concepto
+    ? await findPaymentOrderForReceiptConcept(concepto).catch(() => null)
+    : null
+  let atribuida: "concepto" | "creador" | null = order ? "concepto" : null
+  let hint: Awaited<
+    ReturnType<typeof findActivePaymentOrderOfCreatorForReceipt>
+  > = null
+  if (!order && creatorFallback) {
+    hint = await findActivePaymentOrderOfCreatorForReceipt({
+      creatorUserId: input.user.id,
+      importeTexto: preextracted?.datos?.importe ?? null,
+    }).catch(() => null)
+    if (hint) atribuida = "creador"
+  }
+  if (!order && !hint) return null
+  const objetivo = order ?? hint
   logEvent("asistente.renovar_receipt_delegada_orden_pago", {
     actor: `user:${input.user.username}`,
-    order_id: order.id,
-    code: order.code,
-    status: order.status,
+    order_id: objetivo!.id,
+    code: objetivo!.code,
+    status: objetivo!.status,
+    via: atribuida,
   })
   // El turno del usuario (con su comprobante) se persiste ANTES de correr
   // el canal de órdenes de pago: la historia queda completa pase lo que
@@ -594,6 +617,12 @@ async function delegarAOrdenDePago(
       bytes,
     },
     preextracted: preextracted ?? undefined,
+    // Solo la atribución por CREADOR va con orden prefijada: la por
+    // concepto re-descubre adentro (desambiguación completa del canal).
+    orderHint: hint ?? undefined,
+    // El remitente registrado: cuando es el CREADOR de la orden descubierta,
+    // el canal le salta las guardias de evidencia ajena.
+    senderUserId: input.user.id,
   })
   const text =
     reply?.text ??
@@ -668,7 +697,10 @@ async function handleComprobanteConCodigo(
           code,
           ticket,
           new Uint8Array(bytes),
-          null
+          null,
+          // El usuario escribió un código EXPLÍCITO que no es de orden de
+          // pago: sin atribución por creador (contradeciría su señal).
+          false
         )
         if (delegada !== null) return delegada
       }
@@ -869,17 +901,22 @@ async function handleComprobanteSinMensaje(input: {
     // El concepto impreso no es de renovación: ¿es una ORDEN DE PAGO? Con
     // teléfono disponible se delega al canal del pagador (el MISMO archivo
     // ya fue leído: sin segundo gasto de visión); sin él, la guía de
-    // siempre.
-    if (conceptoImpreso) {
-      const delegada = await delegarAOrdenDePago(
-        input,
-        conceptoImpreso,
-        ticket,
-        bytes,
-        extraccion
-      )
-      if (delegada !== null) return delegada
-    }
+    // siempre. El concepto de pago de los cobros es LIBRE: con o sin
+    // concepto legible, si el comprobante no calza con ninguna renovación
+    // propia se atribuye al ÚNICO cobro abierto del usuario (reenvío del
+    // comprobante de su pagador).
+    const delegada = await delegarAOrdenDePago(
+      input,
+      conceptoImpreso,
+      ticket,
+      bytes,
+      extraccion,
+      true
+    )
+    if (delegada !== null) return delegada
+    const cobrosAbiertos = await listActivePaymentOrdersOfCreator(
+      input.user.id
+    ).catch(() => [])
     const reply = [
       conceptoImpreso
         ? `El comprobante trae el concepto de pago «${conceptoImpreso}», que **no corresponde a ningún concepto activo tuyo**. No se creó ninguna orden y no se cobró nada.`
@@ -889,6 +926,12 @@ async function handleComprobanteSinMensaje(input: {
       listaConceptos(activeConcepts),
       "",
       "Si el concepto impreso es otro, generó uno nuevo con `/tv3<usuario>` (ej. `/tv3baltazar`). Si el pago fue real con un concepto ya usado, contacta al administrador.",
+      ...(cobrosAbiertos.length > 0
+        ? [
+            "",
+            "Si este comprobante es el pago de tu cliente de SPEILink (un link o tu QR de cobro), ya no depende del concepto escrito: reenvíame el comprobante junto con el CÓDIGO del cobro (las 4 letras del enlace) y lo valido aquí mismo, o márcalo pagado en **Módulos → SPEILink** cuando veas el depósito en tu cuenta.",
+          ]
+        : []),
     ].join("\n")
     await persistTurns({
       userId: input.user.id,

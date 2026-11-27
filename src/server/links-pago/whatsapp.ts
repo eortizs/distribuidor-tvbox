@@ -10,15 +10,17 @@ import {
 import { saveUserFile } from "@/server/storage/user-files"
 
 import {
+  amountsEqualCents,
   desambiguarComprobantePorConcepto,
-  esConceptoLibre,
   findPaymentOrderCodeTokens,
+  leerImporteDeComprobante,
   MAX_PAYMENT_ORDER_CODE_TOKENS,
   parsePaymentOrderRequestAmount,
   paymentOrderConceptAnchor,
   paymentOrderConceptoVisible,
   PAYMENT_ORDER_CONCEPTO_MAX,
   PAYMENT_ORDER_CONCEPTO_MIN,
+  sugiereConceptoDePago,
 } from "@/lib/links-pago"
 import {
   findActivePaymentOrdersByPayerPhone,
@@ -27,6 +29,7 @@ import {
   findResolvedPaymentOrderByAnyCode,
   findResolvedPaymentOrderByAnyConcepto,
   hasPaymentQrRequestHistory,
+  listActivePaymentOrdersOfCreator,
   listOpenPaymentQrRequestsForPayer,
   listPendingPaymentOrders,
   listPendingPaymentOrdersByAmount,
@@ -81,14 +84,20 @@ import {
  *     del link solo identifica y desambigua.
  *   - Comprobante (foto/PDF solo o con caption): el CONCEPTO DE PAGO
  *     IMPRESO en el comprobante descubre la orden entre las pendientes
- *     (mismo criterio de match que distribuidor y clientes); con varias
- *     órdenes de la misma palabra, el código del caption, el importe leído y
- *     el teléfono del pagador ligado a UNA de ellas desambiguan; sin
- *     impresión legible manda el código del caption, y sin ambos, el teléfono
- *     de un pagador ya conocido. El escaneo valida (concepto, importe) y
+ *     (es una señal: el pagador puede escribir el concepto que quiera — la
+ *     validación es SOLO por importe exacto y depósito acreditado); con
+ *     varias órdenes de la misma palabra, el código del caption, el importe
+ *     leído y el teléfono del pagador ligado a UNA de ellas desambiguan;
+ *     sin impresión legible manda el código del caption, y sin ambos, el
+ *     teléfono de un pagador ya conocido. El escaneo valida el IMPORTE y
  *     responde el veredicto; sin verificador, el archivo queda ligado a la
  *     orden para revisión manual del creador — el comprobante nunca se
  *     pierde.
+ *
+ *  El canal también atiende el comprobante DELEGADO POR EL CREADOR de la
+ *  orden (reenvío del comprobante de su pagador desde el chat del
+ *  Asistente — `orderHint`): la puerta de delegación lo atribuyó al ÚNICO
+ *  cobro activo del creador y aquí corre la revisión de siempre.
  *
  * Guardas anti-fraude del binding: un mensaje grande no sondea la tabla
  * token a token (tope de tokens + UNA consulta ANY), y una orden cuyo código
@@ -235,9 +244,9 @@ async function maybeHandlePaymentConfirmation(input: {
       "*¡Gracias por avisar!* Para confirmar tu pago necesito tu comprobante:",
       "",
       `Adjunta en este chat la FOTO o el PDF de tu transferencia${
-        esConceptoLibre(order)
-          ? ""
-          : ` (con el concepto de pago ${paymentOrderConceptoVisible(order)})`
+        sugiereConceptoDePago(order)
+          ? ` (con el concepto de pago ${paymentOrderConceptoVisible(order)})`
+          : ""
       } y la valido al instante. Sin el comprobante no puedo confirmar tu pago de ${money(order.amountMxn)}.`,
     ].join("\n"),
     orderId: order.id,
@@ -470,30 +479,29 @@ function textoVeredicto(input: {
   outcome: Awaited<ReturnType<typeof reviewPaymentReceipt>>
 }): string {
   const orden = `orden *${input.order.code}* (${money(input.order.amountMxn)})`
-  // En los pagos libres (QR fijo y nota digital) no hay concepto que validar
-  // (ni código que pedir en el QR).
-  const libre = esConceptoLibre(input.order)
-  const validado = libre ? "importe correcto" : "concepto e importe correctos"
+  // El concepto de pago es LIBRE en todos los cobros: lo que se valida del
+  // comprobante es el IMPORTE exacto (y después el depósito en la cuenta).
+  const esLink = input.order.origin === "link"
   switch (input.outcome.review) {
     case "auto_approved":
       return [
-        `*Pago confirmado* — el comprobante de tu ${orden} pasó la verificación (${libre ? "importe" : "concepto e importe"}) y el depósito quedó acreditado en la cuenta.`,
+        `*Pago confirmado* — el comprobante de tu ${orden} pasó la verificación (importe) y el depósito quedó acreditado en la cuenta.`,
         "",
         "Gracias. Este es tu comprobante de pago confirmado.",
       ].join("\n")
     case "verifying_deposit":
       return [
-        `Comprobante recibido y validado para tu ${orden}: ${validado}.`,
+        `Comprobante recibido y validado para tu ${orden}: importe correcto.`,
         "",
         "Estoy confirmando la acreditación de tu depósito en la cuenta; te aviso aquí mismo en cuanto se confirme (suele tardar minutos, según tu banco puede tardar más).",
       ].join("\n")
     case "awaiting_creator":
       return [
-        `Comprobante recibido y validado para tu ${orden}: ${validado}.`,
+        `Comprobante recibido y validado para tu ${orden}: importe correcto.`,
         "",
-        libre
-          ? "Quien te cobró confirmará la recepción de tu pago y te avisará por este chat."
-          : "Quien emitió la orden confirmará la recepción de tu pago y te avisará por este chat.",
+        esLink
+          ? "Quien emitió la orden confirmará la recepción de tu pago y te avisará por este chat."
+          : "Quien te cobró confirmará la recepción de tu pago y te avisará por este chat.",
       ].join("\n")
     case "auto_rejected": {
       const reasons = input.outcome.scan.reasons
@@ -519,9 +527,9 @@ function textoVeredicto(input: {
         status: input.outcome.status,
       })
     case "not_a_receipt":
-      return libre
-        ? "El archivo que enviaste no parece un comprobante de transferencia. Envía SOLO la foto o el PDF del comprobante de tu pago."
-        : "El archivo que enviaste no parece un comprobante de transferencia. Envía SOLO la foto o el PDF del comprobante del pago (puedes escribir el código como mensaje si lo tienes a la mano)."
+      return esLink
+        ? "El archivo que enviaste no parece un comprobante de transferencia. Envía SOLO la foto o el PDF del comprobante del pago (puedes escribir el código como mensaje si lo tienes a la mano)."
+        : "El archivo que enviaste no parece un comprobante de transferencia. Envía SOLO la foto o el PDF del comprobante de tu pago."
   }
 }
 
@@ -738,6 +746,120 @@ async function atenderComprobanteLibre(
 }
 
 /**
+ * Guarda (o REUSA) el comprobante en el almacenamiento del creador y corre
+ * la revisión contra la orden. Error `ticket` = no se pudo guardar el
+ * archivo (el llamador responde el reintento amable; la orden no se toca).
+ */
+async function revisarComprobanteDeOrden(input: {
+  order: PaymentOrder
+  bytes: Uint8Array
+  mimeType: string
+  fileName: string | null
+  sha256: string
+  preextracted?: ExtraccionLLM
+}): Promise<
+  { outcome: Awaited<ReturnType<typeof reviewPaymentReceipt>> } | { error: "ticket" }
+> {
+  // Reenvío del MISMO archivo ya ligado a esta orden: no guardar otra copia
+  // del ticket (el sha coincide con el registrado).
+  const shaYaRegistrado =
+    input.order.ticketSha256 === input.sha256 &&
+    input.order.ticketFileId !== null
+  const ticketFileId = shaYaRegistrado
+    ? input.order.ticketFileId
+    : (
+        await saveUserFile({
+          userId: input.order.creatorUserId,
+          kind: "attachment",
+          fileName: input.fileName ?? "comprobante",
+          mimeType: input.mimeType,
+          bytes: input.bytes,
+        }).catch(() => null)
+      )?.id ?? null
+  if (!ticketFileId) return { error: "ticket" }
+  const outcome = await reviewPaymentReceipt({
+    order: input.order,
+    bytes: input.bytes,
+    mimeType: input.mimeType,
+    ticketFileId,
+    preextracted: input.preextracted,
+  })
+  return { outcome }
+}
+
+/**
+ * COMPROBANTE delegado por el CREADOR de la orden (reenvío del comprobante
+ * de su pagador desde el chat del Asistente): la puerta de delegación ya
+ * atribuyó el pago a su cobro (el único activo, o el único de ese importe)
+ * y aquí corre la revisión de siempre — importe exacto y depósito
+ * acreditado. El creador es la autoridad de su cobro: sin las guardias de
+ * pagador ajeno (él puede resolverla a mano) y SIN tocar el binding del
+ * pagador (su teléfono jamás suplanta al comprador).
+ */
+async function atenderComprobanteDelegadoPorCreador(input: {
+  order: PaymentOrder
+  phone: string
+  text: string
+  media: { mimeType: string; fileName: string | null; bytes: Uint8Array }
+  preextracted?: ExtraccionLLM
+}): Promise<PaymentOrderTurnResult> {
+  const base = {
+    inboundText: input.text,
+    mediaMime: input.media.mimeType,
+  }
+  if (!checkPaymentOrderScanQuota(input.phone)) {
+    return {
+      text: "Alcanzaste el límite de verificaciones por minuto. Espera unos segundos y vuelve a enviar el comprobante.",
+      orderId: input.order.id,
+      ...base,
+    }
+  }
+  // Orden ya EN VERIFICACIÓN de depósito (comprobante aprobado antes):
+  // replay del estado sin re-escanear.
+  if (input.order.status === "verifying") {
+    logEvent("orden_pago.whatsapp_verifying_replay", {
+      phone: maskPhone(input.phone),
+      order_id: input.order.id,
+      code: input.order.code,
+      creador: true,
+    })
+    return {
+      text: textoVerificandoDeposito(input.order),
+      orderId: input.order.id,
+      ...base,
+    }
+  }
+  const sha256 = sha256Of(input.media.bytes)
+  const revisado = await revisarComprobanteDeOrden({
+    order: input.order,
+    bytes: input.media.bytes,
+    mimeType: input.media.mimeType,
+    fileName: input.media.fileName,
+    sha256,
+    preextracted: input.preextracted,
+  })
+  if ("error" in revisado) {
+    return {
+      text: "No pude registrar el comprobante en este momento. Vuelve a enviarlo en unos minutos.",
+      orderId: input.order.id,
+      ...base,
+    }
+  }
+  logEvent("orden_pago.whatsapp_receipt", {
+    phone: maskPhone(input.phone),
+    order_id: input.order.id,
+    code: input.order.code,
+    review: revisado.outcome.review,
+    creador: true,
+  })
+  return {
+    text: textoVeredicto({ order: input.order, outcome: revisado.outcome }),
+    orderId: input.order.id,
+    ...base,
+  }
+}
+
+/**
  * Turno de COMPROBANTE del pagador (foto/PDF, solo o con caption). El
  * código IMPRESO descubre la orden; si la lectura falla, el código del
  * caption; si tampoco hay, el teléfono de un pagador ya conocido. Null =
@@ -754,7 +876,33 @@ export async function maybeHandlePaymentOrderReceipt(input: {
    * segundo gasto de visión.
    */
   preextracted?: ExtraccionLLM
+  /**
+   * Orden ya atribuida por la puerta de delegación (reenvío del CREADOR:
+   * su ÚNICO cobro activo o el único de ese importe). Corta el
+   * descubrimiento y corre la revisión directa contra ella.
+   */
+  orderHint?: PaymentOrder
+  /**
+   * ID del usuario registrado que envía el comprobante (delegación del
+   * canal de renovación). Cuando es el CREADOR de la orden descubierta, es
+   * la autoridad de su cobro: se le saltan las guardias de evidencia ajena
+   * (puede resolverla a mano) y su teléfono jamás suplanta el binding del
+   * pagador.
+   */
+  senderUserId?: string | null
 }): Promise<PaymentOrderTurnResult | null> {
+  // Delegación del creador: la atribución ya está resuelta — sin
+  // descubrimiento, sin guardias de pagador ajeno (el creador es la
+  // autoridad de su cobro) y sin gasto extra de consultas.
+  if (input.orderHint) {
+    return atenderComprobanteDelegadoPorCreador({
+      order: input.orderHint,
+      phone: input.phone,
+      text: input.text,
+      media: input.media,
+      preextracted: input.preextracted,
+    })
+  }
   // Pendientes y tokens primero (baratos): con la tabla vacía de activas
   // (pending + verifying) y sin tokens en el caption no hay nada que
   // descubrir — ni gasto de visión ni consultas extra. Con extracción
@@ -1046,15 +1194,23 @@ export async function maybeHandlePaymentOrderReceipt(input: {
   // del QR FIJO solo llegan aquí por su código explícito y se exceptúan de
   // la primera: su código nunca se entrega como evidencia (el pagador se
   // identifica por su teléfono), así que uno reciclado no señala a otra
-  // orden.
+  // orden. EXCEPCIÓN: el remitente es el CREADOR de la orden (reenvío del
+  // comprobante de su pagador desde el chat del Asistente) — es la
+  // autoridad de su cobro y puede resolverla a mano; la autoconfirmación
+  // sigue exigiendo el depósito acreditado en ventana.
+  const esElCreador =
+    input.senderUserId != null && candidate.creatorUserId === input.senderUserId
   const sha256 = sha256Of(input.media.bytes)
   const codigoReasignado =
+    !esElCreador &&
     candidate.origin !== "qr" &&
     (await findResolvedPaymentOrderByAnyCode([candidate.code]).catch(
       () => null
     )) !== null
   const pagadorDistinto =
-    candidate.payerPhone !== null && candidate.payerPhone !== input.phone
+    !esElCreador &&
+    candidate.payerPhone !== null &&
+    candidate.payerPhone !== input.phone
   if (codigoReasignado || pagadorDistinto) {
     return revisarManualConAviso({
       order: candidate,
@@ -1067,11 +1223,15 @@ export async function maybeHandlePaymentOrderReceipt(input: {
     })
   }
 
-  await touchPaymentOrderPayer(
-    candidate.id,
-    input.phone,
-    input.payerName
-  ).catch(() => {})
+  // El creador que reenvía jamás reclama el binding del pagador (su
+  // teléfono no es el del comprador).
+  if (!esElCreador) {
+    await touchPaymentOrderPayer(
+      candidate.id,
+      input.phone,
+      input.payerName
+    ).catch(() => {})
+  }
 
   // Orden ya EN VERIFICACIÓN de depósito (comprobante aprobado por el
   // escaneo): replay del estado SIN re-escanear — ni gasto de visión ni
@@ -1145,22 +1305,15 @@ export async function maybeHandlePaymentOrderReceipt(input: {
     }
   }
 
-  // Reenvío del MISMO archivo ya ligado a esta orden: no guardar otra copia
-  // del ticket (el sha coincide con el registrado).
-  const shaYaRegistrado =
-    candidate.ticketSha256 === sha256 && candidate.ticketFileId !== null
-  const ticketFileId = shaYaRegistrado
-    ? candidate.ticketFileId
-    : (
-        await saveUserFile({
-          userId: candidate.creatorUserId,
-          kind: "attachment",
-          fileName: input.media.fileName ?? "comprobante",
-          mimeType: input.media.mimeType,
-          bytes: input.media.bytes,
-        }).catch(() => null)
-      )?.id ?? null
-  if (!ticketFileId) {
+  const revisado = await revisarComprobanteDeOrden({
+    order: candidate,
+    bytes: input.media.bytes,
+    mimeType: input.media.mimeType,
+    fileName: input.media.fileName,
+    sha256,
+    preextracted: extraccion ?? undefined,
+  })
+  if ("error" in revisado) {
     return {
       text: "No pude registrar el comprobante en este momento. Vuelve a enviarlo en unos minutos.",
       orderId: candidate.id,
@@ -1168,22 +1321,14 @@ export async function maybeHandlePaymentOrderReceipt(input: {
       mediaMime: input.media.mimeType,
     }
   }
-
-  const outcome = await reviewPaymentReceipt({
-    order: candidate,
-    bytes: input.media.bytes,
-    mimeType: input.media.mimeType,
-    ticketFileId,
-    preextracted: extraccion,
-  })
   logEvent("orden_pago.whatsapp_receipt", {
     phone: maskPhone(input.phone),
     order_id: candidate.id,
     code: candidate.code,
-    review: outcome.review,
+    review: revisado.outcome.review,
   })
   return {
-    text: textoVeredicto({ order: candidate, outcome }),
+    text: textoVeredicto({ order: candidate, outcome: revisado.outcome }),
     orderId: candidate.id,
     inboundText: input.text,
     mediaMime: input.media.mimeType,
@@ -1228,4 +1373,32 @@ export async function findPaymentOrderForReceiptConcept(
       () => null
     ))
   )
+}
+
+/**
+ * El cobro ACTIVO del creador al que atribuir un comprobante reenviado por
+ * él mismo desde su chat (la puerta de delegación del canal de renovaciones):
+ * con el concepto de pago LIBRE, el impreso ya no identifica la orden, así
+ * que la atribución sale de sus cobros abiertos y del IMPORTE leído del
+ * comprobante — único activo → ese; importe legible que calza con UNO solo →
+ * ese; de lo contrario null (0 o varias coincidencias: jamás se arriesga la
+ * orden equivocada — el creador reenvía con el código o resuelve a mano).
+ */
+export async function findActivePaymentOrderOfCreatorForReceipt(input: {
+  creatorUserId: string
+  /** Importe IMPRESO en el comprobante (texto crudo; null si no se leyó). */
+  importeTexto: string | null
+}): Promise<PaymentOrder | null> {
+  const propias = await listActivePaymentOrdersOfCreator(
+    input.creatorUserId
+  ).catch(() => [])
+  if (propias.length === 0) return null
+  const importe = leerImporteDeComprobante(input.importeTexto)
+  if (importe !== null) {
+    const porImporte = propias.filter((order) =>
+      amountsEqualCents(order.amountMxn, importe)
+    )
+    return porImporte.length === 1 ? porImporte[0] : null
+  }
+  return propias.length === 1 ? propias[0] : null
 }

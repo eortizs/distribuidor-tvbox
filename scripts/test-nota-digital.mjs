@@ -22,7 +22,7 @@ import {
   validarComanda,
 } from "../src/lib/nota-digital.ts"
 import {
-  esConceptoLibre,
+  sugiereConceptoDePago,
   findPaymentOrderCodeTokens,
   notaDigitalRequestText,
 } from "../src/lib/links-pago.ts"
@@ -223,10 +223,10 @@ check("un importe con forma de código no se confunde con el folio", () => {
   assert.deepEqual(tokens, ["AB23"])
 })
 
-check("esConceptoLibre: qr y nota sí, link no", () => {
-  assert.equal(esConceptoLibre({ origin: "qr" }), true)
-  assert.equal(esConceptoLibre({ origin: "nota" }), true)
-  assert.equal(esConceptoLibre({ origin: "link" }), false)
+check("sugiereConceptoDePago: solo el link sugiere concepto (el concepto es libre en todos)", () => {
+  assert.equal(sugiereConceptoDePago({ origin: "link" }), true)
+  assert.equal(sugiereConceptoDePago({ origin: "qr" }), false)
+  assert.equal(sugiereConceptoDePago({ origin: "nota" }), false)
 })
 
 console.log(`\n${passed} pruebas de Nota Digital OK`)

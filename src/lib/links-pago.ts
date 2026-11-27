@@ -132,14 +132,16 @@ export function conceptoPagoDeOrden(raw: string): string | null {
 }
 
 /**
- * Ancla de CONCILIACIÓN de una orden: el concepto de pago (forma NORMALIZADA,
- * mayúsculas y sin acentos) que el pagador escribe en su SPEI y que el
- * escaneo valida en el comprobante — el match ignora caseo y acentos por
- * ambos lados, así que la forma guardada nunca importa aquí. Las órdenes
- * nuevas lo traen en `note` (palabra obligatoria del creador); las de la era
- * previa (sin palabra válida) conservan el CÓDIGO del link como ancla — su
- * pagador ya lo recibió así. El código sigue existiendo siempre como
- * identificador del link corto (spei.link/CÓDIGO) y desambiguador.
+ * Ancla de DESCUBRIMIENTO de una orden: el concepto de pago (forma
+ * NORMALIZADA, mayúsculas y sin acentos) que el pagador SUGERIMOS escribir
+ * en su SPEI — cuando el comprobante lo trae impreso, identifica la orden
+ * entre las pendientes (el canal de WhatsApp lo usa para descubrir, jamás
+ * para rechazar: el concepto es libre y la validación es solo por importe).
+ * El match ignora caseo y acentos por ambos lados. Las órdenes nuevas lo
+ * traen en `note` (palabra del creador); las de la era previa (sin palabra
+ * válida) conservan el CÓDIGO del link como ancla. El código sigue
+ * existiendo siempre como identificador del link corto (spei.link/CÓDIGO) y
+ * desambiguador.
  */
 export function paymentOrderConceptAnchor(order: {
   note: string | null
@@ -381,25 +383,33 @@ export function parsePaymentOrderRequestAmount(text: string): number | null {
 
 /**
  * Origen de una orden de pago:
- *  - 'link': importe y concepto definidos por el cobrador;
+ *  - 'link': importe y concepto definidos por el cobrador (el concepto es
+ *    una SUGERENCIA: el pagador puede escribir otro y el cobro se valida
+ *    igual);
  *  - 'qr': pago libre del QR FIJO (importe y concepto del pagador, leídos de
  *    su comprobante);
  *  - 'nota': nota digital (importe congelado de una comanda del catálogo;
  *    el concepto del comprobante es libre y `note` siempre es null).
+ *
+ * En TODOS los orígenes el concepto impreso del comprobante es libre: la
+ * validación es SOLO por importe exacto y acreditación del depósito. La
+ * palabra del creador queda como señal de DESCUBRIMIENTO del comprobante
+ * (`paymentOrderConceptAnchor`), nunca como requisito.
  */
 export type PaymentOrderOrigin = "link" | "qr" | "nota"
 
 /**
- * ¿El comprobante de esta orden tiene CONCEPTO LIBRE? En el QR fijo y en la
- * nota digital el pagador escribe lo que quiera: solo se valida el IMPORTE
- * exacto y la acreditación del depósito. Sustituye a los `origin !== "qr"`
- * dispersos — agregar un origen nuevo no debe arrastrarlo al matching por
- * concepto de los links.
+ * ¿La orden SUGIERE un concepto de pago al pagador? Los links entregan la
+ * palabra del creador por WhatsApp: escribirla ayuda a identificar el cobro
+ * (descubrimiento del comprobante y columna «Concepto» del reporte
+ * SPEILink), pero ya NO es obligatoria — la validación del comprobante es
+ * SOLO por importe exacto + depósito acreditado. El QR fijo y la nota
+ * digital son pago libre puro: sin concepto sugerido.
  */
-export function esConceptoLibre(order: {
+export function sugiereConceptoDePago(order: {
   origin: PaymentOrderOrigin
 }): boolean {
-  return order.origin === "qr" || order.origin === "nota"
+  return order.origin === "link"
 }
 
 /**

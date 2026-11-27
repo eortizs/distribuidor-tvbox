@@ -683,6 +683,28 @@ export async function listPendingPaymentOrders(limit = 200): Promise<PaymentOrde
   return result.rows.map(mapRow)
 }
 
+/**
+ * Las órdenes ACTIVAS (pending + verifying) creadas por UN usuario, del más
+ * viejo al más nuevo, con tope de seguridad. Es la base de la atribución por
+ * CREADOR de la delegación del canal de renovaciones: un comprobante que no
+ * calza con ningún concepto (el concepto de pago es libre) se atribuye al
+ * ÚNICO cobro abierto del usuario — su reenvío del comprobante de su
+ * pagador.
+ */
+export async function listActivePaymentOrdersOfCreator(
+  creatorUserId: string,
+  limit = 200
+): Promise<PaymentOrder[]> {
+  const capped = Math.min(Math.max(Math.trunc(limit), 1), 500)
+  const result = await pool.query<Record<string, unknown>>(
+    `${SELECT_COLUMNS}
+      WHERE o.status IN ('pending','verifying') AND o.creator_user_id = $1::uuid
+      ORDER BY o.created_at ASC LIMIT $2`,
+    [creatorUserId, capped]
+  )
+  return result.rows.map(mapRow)
+}
+
 /** Últimas órdenes (del creador o todas para el admin), más nuevas primero. */
 export async function listPaymentOrders(input: {
   creatorUserId?: string

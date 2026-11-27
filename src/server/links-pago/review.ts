@@ -9,11 +9,6 @@ import {
   type ScanResult,
 } from "@/server/transferencias/scan"
 import { evaluarCondiciones } from "@/server/transferencias/verificar"
-import { conceptoImpresoCoincide } from "@/server/asistente/renovacion"
-import {
-  esConceptoLibre,
-  paymentOrderConceptAnchor,
-} from "@/lib/links-pago"
 import { notifyCreator, notifyDepositConfirmed } from "./notify"
 
 import {
@@ -28,20 +23,19 @@ import { resolvePaymentOrderDepositToken } from "@/server/mercadopago/tokens"
 /*
  * Revisión del comprobante de una orden de pago: el MISMO motor de
  * extracción LLM del flujo de transferencias (RECEIPT_SCAN_MODEL) pero con
- * la validación REDUCIDA del cobro libre (`evaluarCondiciones` modo
- * "pago_libre"):
+ * la validación del cobro libre (`evaluarCondiciones` modo "pago_libre"):
  *
- *  1. Concepto impreso con el CONCEPTO DE PAGO de la orden (la palabra que
- *      el pagador recibió por WhatsApp y escribió como concepto en su
- *      SPEI; en las órdenes de la era previa el ancla sigue siendo el
- *      código del link).
- *   2. Importe EXACTO al monto congelado de la orden (a centavos — el mismo
+ *   1. Importe EXACTO al monto congelado de la orden (a centavos — el mismo
  *      criterio del casado del depósito).
  *
- * Fecha y beneficiario NO se evalúan: el comprobante de un pagador externo
- * no siempre los imprime, y la confirmación real del dinero la da el
- * DEPÓSITO acreditado en la cuenta (ver deposit-check.ts), no el papel.
- * Las renovaciones de FlujoTV conservan la validación completa.
+ * El CONCEPTO DE PAGO es LIBRE en todos los cobros (link, QR fijo y nota
+ * digital): el pagador escribe el concepto que quiera y la palabra del
+ * creador es solo una SUGERENCIA — señal de descubrimiento del comprobante
+ * en el canal de WhatsApp, jamás un requisito. Fecha y beneficiario NO se
+ * evalúan: el comprobante de un pagador externo no siempre los imprime, y
+ * la confirmación real del dinero la da el DEPÓSITO acreditado en la cuenta
+ * (ver deposit-check.ts), no el papel. Las renovaciones de FlujoTV
+ * conservan la validación completa.
  *
  * Con el comprobante válido la orden NO se declara `paid`. GATE DE CUENTA:
  * la verificación de depósito consulta la cuenta de Mercado Pago donde el
@@ -229,39 +223,16 @@ export async function reviewPaymentReceipt(input: {
     }
   }
 
-  // El ancla de conciliación es el CONCEPTO DE PAGO de la orden (el código
-  // del link en las órdenes de la era previa). En el QR fijo y en la nota
-  // digital el concepto es LIBRE —lo escribe el pagador como quiera—: no se
-  // evalúa; la prueba es el IMPORTE exacto del comprobante y, después, el
-  // depósito.
-  const libre = esConceptoLibre(order)
-  const ancla = libre ? "" : paymentOrderConceptAnchor(order)
+  // CONCEPTO LIBRE: el pagador escribe el concepto que quiera — la palabra
+  // del creador solo ayuda a DESCUBRIR la orden en el canal (nunca a
+  // rechazar). La prueba del comprobante es el IMPORTE EXACTO (a centavos)
+  // y, después, el DEPÓSITO acreditado en la cuenta.
   const checks = evaluarCondiciones({
     datos: extraccion.datos,
-    conceptCode: ancla,
+    conceptCode: "",
     amountMxn: order.amountMxn,
     modo: "pago_libre",
   })
-
-  // Transición de mecánica: una orden de palabra cuyo comprobante trae
-  // impreso el CÓDIGO del link (pagador instruido antes del cambio, o quien
-  // lo leyó del propio enlace) pasa la condición de concepto — el código
-  // identifica esta orden con la misma fuerza (único entre activas).
-  if (ancla.length > 0 && ancla !== order.code) {
-    const codigoCheck = checks.find((check) => check.key === "codigo")
-    if (codigoCheck && !codigoCheck.passed) {
-      const codigoYaImpreso = conceptoImpresoCoincide(
-        order.code,
-        extraccion.datos.concepto
-      )
-      if (codigoYaImpreso) {
-        codigoCheck.passed = true
-        codigoCheck.detail = `esperado '${ancla}'; leído ${
-          extraccion.datos.concepto ? `«${extraccion.datos.concepto}»` : "ilegible"
-        } (código del link — orden previa al concepto de pago)`
-      }
-    }
-  }
 
   const reasons = checks
     .filter((check) => !check.passed)
@@ -298,8 +269,8 @@ export async function reviewPaymentReceipt(input: {
   }
 
   const pagador = order.payerPhone ? ` (WhatsApp ${maskPhone(order.payerPhone)})` : ""
-  // En el pago libre (QR fijo y nota digital) no hay concepto que validar.
-  const verificado = libre ? "importe" : "concepto e importe"
+  // En el pago libre no hay concepto que validar: solo el importe exacto.
+  const verificado = "importe"
   const porPagar =
     order.origin === "qr"
       ? "la orden"

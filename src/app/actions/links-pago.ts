@@ -14,8 +14,6 @@ import { resolveCreatorBankData } from "@/server/links-pago/bank"
 import { renderPaymentQrLink, type PaymentQrLink } from "@/server/links-pago/qr-asset"
 import {
   conceptoPagoDeOrden,
-  esConceptoLibre,
-  paymentOrderConceptoVisible,
   PAYMENT_ORDER_CONCEPTO_ERROR,
 } from "@/lib/links-pago"
 import { notaDigitalTexto } from "@/server/links-pago/notify"
@@ -371,7 +369,7 @@ export async function resolvePaymentOrderAction(input: {
       notifyPayerOfResolution(
         resolved,
         "Pago confirmado",
-        `Confirmamos tu pago de ${money(resolved.amountMxn)} con el concepto de pago ${paymentOrderConceptoVisible(resolved)}. Gracias.`
+        `Confirmamos tu pago de ${money(resolved.amountMxn)}. Gracias.`
       )
     }
     if (user.id !== resolved.creatorUserId) {
@@ -386,11 +384,7 @@ export async function resolvePaymentOrderAction(input: {
     notifyPayerOfResolution(
       resolved,
       "Pago no confirmado",
-      `${
-        esConceptoLibre(resolved)
-          ? `El comprobante de tu pago de ${money(resolved.amountMxn)}`
-          : `El comprobante con el concepto de pago ${paymentOrderConceptoVisible(resolved)}`
-      } no fue aceptado${
+      `El comprobante de tu pago de ${money(resolved.amountMxn)} no fue aceptado${
         reason ? `: ${reason}` : ""
       }. Contacta a quien te emitió la orden.`
     )

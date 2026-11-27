@@ -8,9 +8,9 @@ import {
 } from "@/server/mercadopago/tokens"
 import { findDepositsForPaymentOrderWindow } from "@/server/mercadopago/spei"
 import {
-  esConceptoLibre,
   paymentOrderConceptoVisible,
   paymentOrderMoney,
+  sugiereConceptoDePago,
 } from "@/lib/links-pago"
 
 import { tryConfirmOrderDeposit, tryConfirmDepositPayment } from "./deposit-check"
@@ -121,7 +121,7 @@ function notifyEscalated(order: PaymentOrder): void {
       title: "Pago en revisión",
       body: `Aún no registramos la acreditación del depósito de ${paymentOrderMoney(
         order.amountMxn
-      )}${esConceptoLibre(order) ? "" : ` con el concepto de pago ${paymentOrderConceptoVisible(order)}`} (puede tardar según tu banco). Tu pago pasó a revisión: quien te emitió la orden te confirmará por este chat.`,
+      )} (puede tardar según tu banco). Tu pago pasó a revisión: quien te emitió la orden te confirmará por este chat.`,
     })
   }
 }
@@ -243,8 +243,8 @@ async function verifyTick(): Promise<void> {
  * comprobante, el link pide su comprobante por WhatsApp (UNA sola vez por
  * orden, dedupe por `payer_nudged_at`). Cierra el ciclo de los pagadores
  * que pagan y se van sin enviar la foto (casos Z93K/PLJ7/6HMR): sin el
- * comprobante no hay identificación por código y la confirmación no puede
- * salir. Nunca lanza.
+ * comprobante validado la orden no entra en verificación de depósito y la
+ * confirmación no puede salir. Nunca lanza.
  */
 async function nudgeTick(): Promise<void> {
   const due = await listDuePayerNudgeOrders().catch(() => [])
@@ -263,7 +263,7 @@ async function nudgeTick(): Promise<void> {
       title: "Comprobante pendiente",
       body: `¿Ya hiciste tu pago de ${paymentOrderMoney(
         order.amountMxn
-      )}?${esConceptoLibre(order) ? "" : ` Recuerda escribir ${paymentOrderConceptoVisible(order)} como *concepto de pago* y`} envíame en este chat la FOTO de tu comprobante para validar tu pago al instante.`,
+      )}?${sugiereConceptoDePago(order) ? ` Recuerda escribir ${paymentOrderConceptoVisible(order)} como *concepto de pago* y` : ""} envíame en este chat la FOTO de tu comprobante para validar tu pago al instante.`,
     }).catch(() => {})
   }
 }

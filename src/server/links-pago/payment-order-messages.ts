@@ -40,12 +40,12 @@ export function money(amount: number): string {
  * previa (sin palabra) el ancla sigue siendo el CÓDIGO del link y el texto
  * lo nombra como tal.
  *
- * La identificación del pagador por el CONCEPTO DE PAGO es MANDATORIA en los
- * links: el comprobante (con el concepto escrito como concepto e impreso en
- * el ticket) es la única evidencia que confirma la orden automáticamente —
- * sin él el pago queda para revisión del creador, aunque el depósito acredite.
- * Así dos cobros del mismo importe (sucursales distintas, sin coordinación
- * de centavos) jamás se confunden de pagador.
+ * El CONCEPTO DE PAGO se SUGIERE al pagador (escribirlo ayuda a identificar
+ * el cobro: descubre el comprobante y alimenta la columna «Concepto» del
+ * reporte SPEILink), pero ya NO es obligatorio — el concepto es libre y la
+ * validación del comprobante es SOLO por importe exacto + depósito
+ * acreditado. Así el pagador que escribe otro concepto (su nombre, por
+ * ejemplo) paga igual de fluido.
  */
 export function instruccionesDePago(order: PaymentOrder): string {
   // El concepto se entrega tal como lo escribió el creador
