@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation"
 
 export type RealtimeKind =
   | "clients"
+  | "articulos"
   | "entity"
   | "mp_order"
   | "payment_order"
@@ -56,6 +57,7 @@ const RECONNECT_MAX_MS = 30_000
 
 const KINDS: RealtimeKind[] = [
   "clients",
+  "articulos",
   "entity",
   "mp_order",
   "payment_order",

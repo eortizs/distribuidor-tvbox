@@ -55,6 +55,7 @@ const TABLES = [
   "signup_handoffs",
   "wa_contacts",
   "payment_qr_requests",
+  "articulos",
   "affiliates",
   "tenants",
 ]
@@ -222,6 +223,19 @@ try {
     fail(
       "payment_qr_requests",
       `sin contexto se ven ${anonQrRequests.rows[0].n} filas (debe ser 0)`
+    )
+  }
+
+  // 8. articulos (catálogo de Alta de Artículos/Servicios): con RLS (arriba),
+  // SIN contexto el rol de la app no ve ninguna; el DELETE está revocado
+  // (archivar es un UPDATE) y lo ejercita scripts/verify-articulos.mjs.
+  const anonArticulos = await client.query(
+    "SELECT count(*)::int AS n FROM articulos"
+  )
+  if (anonArticulos.rows[0].n !== 0) {
+    fail(
+      "articulos",
+      `sin contexto se ven ${anonArticulos.rows[0].n} filas (debe ser 0)`
     )
   }
 

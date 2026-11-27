@@ -118,9 +118,9 @@ export interface PaymentOrderOgInput {
  * importe (es un pago libre: el pagador transfiere lo que quiera), así que
  * la tarjeta explica eso en lugar de anunciar un monto.
  */
-export const PAYMENT_QR_OG_TITLE = "Link de pago SPEILink: tú defines el monto"
+export const PAYMENT_QR_OG_TITLE = "Link de pago SPEILink."
 export const PAYMENT_QR_OG_DESCRIPTION =
-  "Abre el link, recibe por WhatsApp la CLABE, transfiere por SPEI el monto que quieras y envía el comprobante."
+  "Abre el link, solicita realizar el pago por WhatsApp, transfiere por SPEI el monto deseado y envía el comprobante."
 
 interface OgPageInput {
   title: string

@@ -18,6 +18,7 @@ import { pool, type PoolClientLike } from "@/server/db"
 
 export type RealtimeKind =
   | "clients"
+  | "articulos"
   | "entity"
   | "mp_order"
   | "payment_order"
@@ -88,23 +89,31 @@ function logError(context: string, error: unknown): void {
   )
 }
 
+// Registro EXHAUSTIVO de kinds: TypeScript obliga a que toda kind nueva de
+// RealtimeKind se dé de alta aquí — si falta, el SSE la descartaría en
+// silencio (bug 2026-11-27: `clients`/`articulos` no estaban y el fan-out
+// llegaba muerto al stream).
+const KIND_REGISTRY: Record<RealtimeKind, true> = {
+  clients: true,
+  articulos: true,
+  entity: true,
+  mp_order: true,
+  payment_order: true,
+  expenses: true,
+  users: true,
+  prefs: true,
+  notifications: true,
+  alerts: true,
+  assistant: true,
+}
+
 function parsePayload(raw: string | undefined): RealtimeEvent | null {
   if (!raw) return null
   try {
     const parsed = JSON.parse(raw) as unknown
     if (typeof parsed !== "object" || parsed === null) return null
     const candidate = parsed as RealtimeEvent
-    if (
-      candidate.kind !== "entity" &&
-      candidate.kind !== "mp_order" &&
-      candidate.kind !== "payment_order" &&
-      candidate.kind !== "expenses" &&
-      candidate.kind !== "users" &&
-      candidate.kind !== "prefs" &&
-      candidate.kind !== "notifications" &&
-      candidate.kind !== "alerts" &&
-      candidate.kind !== "assistant"
-    ) {
+    if (typeof candidate.kind !== "string" || !Object.hasOwn(KIND_REGISTRY, candidate.kind)) {
       return null
     }
     return candidate

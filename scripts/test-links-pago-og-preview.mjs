@@ -201,20 +201,26 @@ const QR_INPUT = {
   waUrl: "https://wa.me/525540049353?text=Solicito%20realizar%20un%20pago.",
 }
 
-check("QR fijo: el titulo dice que el monto lo define el pagador", () => {
+check("QR fijo: el titulo anuncia el link de pago SPEILink", () => {
   const html = buildPaymentQrOgHtml(QR_INPUT)
-  assert.equal(PAYMENT_QR_OG_TITLE, "Link de pago SPEILink: tú defines el monto")
+  assert.equal(PAYMENT_QR_OG_TITLE, "Link de pago SPEILink.")
   assert.ok(
     html.includes(
-      `<meta property="og:title" content="Link de pago SPEILink: tú defines el monto" />`
+      `<meta property="og:title" content="Link de pago SPEILink." />`
     )
   )
   assert.ok(!html.includes("$100.00"))
 })
 
-check("QR fijo: la descripcion explica el pago libre (monto que quieras, CLABE, comprobante)", () => {
-  assert.match(PAYMENT_QR_OG_DESCRIPTION, /el monto que quieras/)
-  assert.match(PAYMENT_QR_OG_DESCRIPTION, /CLABE/)
+check("QR fijo: la descripcion pide el pago, transfiere el monto deseado y envia el comprobante", () => {
+  // Una sola oración fluida: una coma, nunca un punto con minúscula después
+  // (la tarjeta la ve el pagador en la vista previa de WhatsApp).
+  assert.equal(
+    PAYMENT_QR_OG_DESCRIPTION,
+    "Abre el link, solicita realizar el pago por WhatsApp, transfiere por SPEI el monto deseado y envía el comprobante."
+  )
+  assert.match(PAYMENT_QR_OG_DESCRIPTION, /solicita realizar el pago/)
+  assert.match(PAYMENT_QR_OG_DESCRIPTION, /transfiere por SPEI el monto deseado/)
   assert.match(PAYMENT_QR_OG_DESCRIPTION, /comprobante/)
   // Pago libre: no se pide declarar monto ni concepto por chat.
   assert.doesNotMatch(PAYMENT_QR_OG_DESCRIPTION, /escribe por WhatsApp/)

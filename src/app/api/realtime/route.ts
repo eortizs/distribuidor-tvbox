@@ -83,6 +83,10 @@ function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
     // tenant de la sesión (RLS) — avisar a todos los del tenant es seguro.
     case "clients":
       return true
+    // Catálogo de artículos del tenant: mismo criterio que `clients` —
+    // compartido por todo el tenant y el refetch ya llega filtrado por RLS.
+    case "articulos":
+      return true
     case "expenses":
       return event.distribuidorId === scope.userId
     // Usuarios/permisos: solo los que tocan la propia cuenta.

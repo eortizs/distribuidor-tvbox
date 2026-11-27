@@ -2,6 +2,7 @@ import type { TenantModule } from "@/lib/tenant-modules"
 import { tenantAllows } from "@/lib/tenant-modules"
 import {
   BellRingIcon,
+  BoxesIcon,
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
@@ -182,6 +183,14 @@ export const MODULOS: Modulo[] = [
     href: "/modulos/reporte-spei",
     modulo: "core",
     icon: LandmarkIcon,
+  },
+  {
+    title: "Alta de Artículos/Servicios",
+    description:
+      "Catálogo de productos y servicios del negocio: SKU, unidad de medida, precio unitario, categoría y disponibilidad, con plantilla e importación por CSV.",
+    href: "/modulos/alta-de-articulos",
+    modulo: "core",
+    icon: BoxesIcon,
   },
   {
     title: "Distribuidores",
