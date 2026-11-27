@@ -74,7 +74,6 @@ export async function listNotaOrders(input: {
   if (input.creatorUserId) {
     where.push(`o.creator_user_id = ${p(input.creatorUserId)}::uuid`)
   }
-  params.push(capped)
   const result = await pool.query<Record<string, unknown>>(
     `${SELECT_NOTA_COLUMNS}
       WHERE ${where.join(" AND ")}
