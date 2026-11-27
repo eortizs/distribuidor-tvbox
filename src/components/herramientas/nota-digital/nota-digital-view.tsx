@@ -639,15 +639,15 @@ export function NotaDigitalView({
                   </EmptyMedia>
                   <EmptyTitle>Sin artículos en el catálogo</EmptyTitle>
                   <EmptyDescription>
-                    Da de alta tus productos o servicios en Alta de Artículos
-                    para poder armar la comanda.
+                    Da de alta tus productos o servicios en
+                    Artículos/Servicios para poder armar la comanda.
                   </EmptyDescription>
                 </EmptyHeader>
                 <Button
                   variant="outline"
                   onClick={() => router.push("/modulos/alta-de-articulos")}
                 >
-                  Ir a Alta de Artículos
+                  Ir a Artículos/Servicios
                 </Button>
               </Empty>
             ) : articulosFiltrados.length === 0 ? (

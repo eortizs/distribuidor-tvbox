@@ -10,7 +10,7 @@ import {
 import { requireUser } from "@/server/auth/guards"
 
 export const metadata: Metadata = {
-  title: "Alta de Artículos/Servicios",
+  title: "Artículos/Servicios",
 }
 
 export default async function AltaArticulosPage() {
@@ -35,7 +35,7 @@ export default async function AltaArticulosPage() {
 
   return (
     <div className="flex flex-1 flex-col p-4 md:p-6">
-      <h1 className="sr-only">Alta de Artículos/Servicios</h1>
+      <h1 className="sr-only">Artículos/Servicios</h1>
       <ArticulosView
         inicial={inicial}
         categoriasIniciales={categoriasIniciales}

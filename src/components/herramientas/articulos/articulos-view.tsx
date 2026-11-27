@@ -1,10 +1,12 @@
 "use client"
 
 import * as React from "react"
+import type { ReactNode } from "react"
 
 import { toast } from "sonner"
 import {
   DownloadIcon,
+  InfoIcon,
   PackageIcon,
   PlusIcon,
   SearchIcon,
@@ -77,6 +79,14 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet"
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
@@ -133,6 +143,41 @@ async function leerRespuesta(response: Response) {
   } catch {
     return null
   }
+}
+
+function InfoHint({
+  label,
+  titulo,
+  children,
+}: {
+  label: string
+  titulo: string
+  children: ReactNode
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            className="relative after:content-[''] after:absolute after:-inset-2 shrink-0"
+          />
+        }
+      >
+        <InfoIcon aria-hidden="true" />
+      </PopoverTrigger>
+      <PopoverContent align="end" side="bottom" className="max-w-[16rem]">
+        <PopoverHeader>
+          <PopoverTitle>{titulo}</PopoverTitle>
+          <PopoverDescription className="text-sm leading-snug">
+            {children}
+          </PopoverDescription>
+        </PopoverHeader>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 function borradorDe(articulo: Articulo): Borrador {
@@ -701,15 +746,16 @@ export function ArticulosView({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h2 className="text-xl font-semibold">
-          Alta de Artículos/Servicios
-        </h2>
-        <p className="text-muted-foreground text-sm">
-          Catálogo de productos y servicios del negocio: SKU, unidad de
-          medida, precio unitario, categoría y disponibilidad. Es compartido:
+      <div className="flex items-center gap-1">
+        <h2 className="text-xl font-semibold">Artículos/Servicios</h2>
+        <InfoHint
+          label="Más información sobre Artículos/Servicios"
+          titulo="Artículos/Servicios"
+        >
+          Catálogo de productos y servicios del negocio: SKU, unidad de medida,
+          precio unitario, categoría y disponibilidad. Es compartido:
           propietario y sucursales ven y editan lo mismo.
-        </p>
+        </InfoHint>
       </div>
 
       <div className="flex items-center gap-2">

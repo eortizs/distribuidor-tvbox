@@ -2,11 +2,11 @@ import type { TenantModule } from "@/lib/tenant-modules"
 import { tenantAllows } from "@/lib/tenant-modules"
 import {
   BellRingIcon,
-  BoxesIcon,
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
   LandmarkIcon,
+  ListTodoIcon,
   MessageCircleIcon,
   MonitorDownIcon,
   NotebookPenIcon,
@@ -186,12 +186,12 @@ export const MODULOS: Modulo[] = [
     icon: LandmarkIcon,
   },
   {
-    title: "Alta de Artículos/Servicios",
+    title: "Artículos/Servicios",
     description:
       "Catálogo de productos y servicios del negocio: SKU, unidad de medida, precio unitario, categoría y disponibilidad, con plantilla e importación por CSV.",
     href: "/modulos/alta-de-articulos",
     modulo: "core",
-    icon: BoxesIcon,
+    icon: ListTodoIcon,
   },
   {
     title: "Pedidos",
