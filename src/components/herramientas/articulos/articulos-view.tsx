@@ -66,6 +66,7 @@ import { Input } from "@/components/ui/input"
 import {
   InputGroup,
   InputGroupAddon,
+  InputGroupButton,
   InputGroupInput,
   InputGroupTextarea,
 } from "@/components/ui/input-group"
@@ -706,7 +707,7 @@ export function ArticulosView({
     categoriaFiltro !== ""
 
   return (
-    <Frame spacing="default" className="w-full">
+    <Frame spacing="default" variant="ghost" className="w-full">
       <FrameHeader>
         <FrameTitle className="text-xl font-semibold">
           Alta de Artículos/Servicios
@@ -718,21 +719,31 @@ export function ArticulosView({
         </FrameDescription>
       </FrameHeader>
 
-      <FramePanel>
+      <FramePanel className="border-0">
         <div className="flex flex-wrap items-center gap-2">
-          <InputGroup className="min-w-44 flex-1 sm:max-w-xs">
-            <InputGroupAddon align="inline-start">
-              <SearchIcon
-                aria-hidden="true"
-                className="size-4 text-muted-foreground"
-              />
+          <InputGroup className="h-12 min-w-44 flex-1 rounded-full border-0 bg-muted sm:max-w-xs">
+            <InputGroupAddon align="inline-start" className="pl-3.5">
+              <SearchIcon aria-hidden="true" />
             </InputGroupAddon>
             <InputGroupInput
               aria-label="Buscar artículos"
               placeholder="Buscar por SKU, nombre o categoría…"
               value={busqueda}
               onChange={(event) => setBusqueda(event.target.value)}
+              className="h-full text-base"
             />
+            {busqueda ? (
+              <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
+                <InputGroupButton
+                  size="icon-sm"
+                  className="size-9 rounded-full"
+                  onClick={() => setBusqueda("")}
+                  aria-label="Limpiar búsqueda"
+                >
+                  <XIcon aria-hidden="true" />
+                </InputGroupButton>
+              </InputGroupAddon>
+            ) : null}
           </InputGroup>
           <Select
             value={estadoFiltro}
@@ -816,7 +827,7 @@ export function ArticulosView({
         ) : null}
       </FramePanel>
 
-      <FramePanel>
+      <FramePanel className="border-0">
         {filas === null && !cargaFallida ? (
           <div className="flex flex-col gap-3" aria-hidden>
             <Skeleton className="h-14 w-full" />

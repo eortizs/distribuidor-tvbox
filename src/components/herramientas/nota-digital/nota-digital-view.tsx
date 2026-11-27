@@ -581,8 +581,8 @@ export function NotaDigitalView({
         </TabsList>
 
         <TabsContent value="crear">
-          <Frame spacing="default" className="w-full">
-            <FramePanel>
+          <Frame spacing="default" variant="ghost" className="w-full">
+            <FramePanel className="border-0">
               <FrameHeader className="flex-row items-center justify-between gap-2">
                 <FrameTitle className="text-lg font-semibold">
                   Nueva nota digital
@@ -827,8 +827,8 @@ export function NotaDigitalView({
         </TabsContent>
 
         <TabsContent value="notas">
-          <Frame spacing="default" className="w-full">
-            <FramePanel className="p-0">
+          <Frame spacing="default" variant="ghost" className="w-full">
+            <FramePanel className="border-0 p-0">
               <FrameHeader className="flex-row items-center justify-between gap-2">
                 <FrameTitle className="text-lg font-semibold">
                   Mis notas digitales
