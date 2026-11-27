@@ -194,10 +194,10 @@ export const MODULOS: Modulo[] = [
     icon: BoxesIcon,
   },
   {
-    title: "Nota Digital",
+    title: "Pedidos",
     description:
       "Arma una comanda desde el catálogo, genera un link de pago con QR y envía al pagador su nota desglosada por WhatsApp cuando el depósito se confirme.",
-    href: "/modulos/nota-digital",
+    href: "/modulos/pedidos",
     modulo: "core",
     icon: NotebookPenIcon,
   },

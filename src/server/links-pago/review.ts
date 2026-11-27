@@ -307,7 +307,7 @@ export async function reviewPaymentReceipt(input: {
         ? "la nota"
         : "el link"
   const genero = order.origin === "link" ? "o" : "a"
-  const modulo = order.origin === "nota" ? "Nota Digital" : "SPEILink"
+  const modulo = order.origin === "nota" ? "Pedidos" : "SPEILink"
 
   if (!scan.ok) {
     const persisted = await savePaymentOrderScan({

@@ -55,6 +55,13 @@ const nextConfig: NextConfig = {
         destination: "/modulos/links-de-pago",
         permanent: false,
       },
+      {
+        // Rebautizo «Nota Digital» → «Pedidos» (2026-11-27): la URL
+        // anterior sigue viva para los enlaces guardados.
+        source: "/modulos/nota-digital",
+        destination: "/modulos/pedidos",
+        permanent: false,
+      },
     ];
   },
   experimental: {

@@ -12,10 +12,10 @@ import { resolvePaymentOrderWhatsAppNumber } from "@/server/links-pago/wa-link"
 import { receiptScanConfigured } from "@/server/transferencias/scan"
 
 export const metadata: Metadata = {
-  title: "Nota Digital",
+  title: "Pedidos",
 }
 
-export default async function NotaDigitalPage() {
+export default async function PedidosPage() {
   const user = await requireUser("core")
 
   // Degrada a estado de error en la vista sin romper el render (misma
@@ -38,7 +38,7 @@ export default async function NotaDigitalPage() {
 
   return (
     <div className="flex flex-1 flex-col p-4 md:p-6">
-      <h1 className="sr-only">Nota Digital</h1>
+      <h1 className="sr-only">Pedidos</h1>
       <NotaDigitalView
         initialNotas={notas}
         initialArticulos={catalogo ? catalogo.articulos : null}

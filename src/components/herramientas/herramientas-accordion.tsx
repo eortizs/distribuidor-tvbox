@@ -22,7 +22,8 @@
  * de limpieza visible solo con texto.
  * **Filtros** (`/clientes` como referencia): barra de vistas sobre el
  * listado — «Todos», «Favoritos», los filtros creados por el usuario y el
- * botón «Crear filtro» (círculo «+»). Cada vista lleva su contador en un
+ * botón «Crear filtro» (círculo «+»). La vista activa por defecto es
+ * «Favoritos». Cada vista lleva su contador en un
  * Badge; la activa se pinta con el foreground del tema; volver a pulsar la
  * vista activa no la suelta (radio fijo).
  *
@@ -176,7 +177,7 @@ export function HerramientasAccordion({
   const [assignments, setAssignments] = useState<Asignaciones>(
     initialPrefs?.assignments ?? {}
   )
-  const [view, setView] = useState<string>("todos")
+  const [view, setView] = useState<string>("favoritos")
   const [searchInput, setSearchInput] = useState("")
   const [createOpen, setCreateOpen] = useState(false)
   const [assignTarget, setAssignTarget] = useState<{

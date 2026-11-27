@@ -566,10 +566,10 @@ export function NotaDigitalView({
       <Tabs value={tab} onValueChange={(v) => setTab(v as "crear" | "notas")}>
         <TabsList variant="line" className="mb-4 w-full">
           <TabsTrigger value="crear">
-            <PlusIcon /> Nueva nota
+            <PlusIcon /> Crear
           </TabsTrigger>
           <TabsTrigger value="notas">
-            <ReceiptTextIcon /> Mis notas
+            <ReceiptTextIcon /> Pedidos
           </TabsTrigger>
         </TabsList>
 
@@ -837,7 +837,7 @@ export function NotaDigitalView({
               recordCount={notas.length}
               onRowClick={(nota) => setSelectedId(nota.id)}
               tableLayout={{ dense: true }}
-              emptyMessage="Aún no hay notas digitales. Crea la primera en «Nueva nota»."
+              emptyMessage="Aún no hay notas digitales. Crea la primera en «Crear»."
             >
               <DataGridContainer>
                 <DataGridScrollArea>

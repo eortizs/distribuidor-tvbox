@@ -82,7 +82,7 @@ export async function createNotaDigitalAction(input: {
     })
     const qrDataUrl = await QRCode.toDataURL(shortUrl, { margin: 1, width: 320 })
 
-    revalidatePath("/modulos/nota-digital")
+    revalidatePath("/modulos/pedidos")
     return {
       error: null,
       order: createdPaymentOrder(created, shortUrl, waUrl, qrDataUrl),
