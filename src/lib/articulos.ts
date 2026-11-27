@@ -26,6 +26,14 @@ export const ARTICULO_UM_MAX = 30
 /** Tope del precio unitario en MXN (espejo del CHECK). */
 export const ARTICULO_PRECIO_MAX = 1_000_000
 
+/**
+ * Descripción que viaja en los LISTADOS: el detalle completo (≤2000 chars)
+ * se lee bajo demanda en `/api/articulos/[id]` al editar. Recortarla aquí
+ * mantiene el payload del acordeón acotado aunque el negocio tenga 5000
+ * artículos. NUNCA se usa en escrituras: el PATCH necesita el texto completo.
+ */
+export const ARTICULO_LISTA_DESCRIPCION_MAX = 240
+
 /** Tope de artículos por tenant (lo aplica el repositorio en transacción). */
 export const ARTICULOS_MAX_POR_TENANT = 5000
 
@@ -38,9 +46,11 @@ export const IMPORT_MAX_BYTES = 2 * 1024 * 1024
 /** Mínimo de caracteres para disparar la búsqueda al servidor. */
 export const ARTICULOS_BUSQUEDA_MIN = 2
 
-/** Tamaño de página del listado (servidor). */
+/** Tamaño de página del listado (servidor). El tope permite pedir el
+ * catálogo completo de una sola vez: los acordeones de Alta de Artículos y
+ * Nota Digital no paginan. */
 export const ARTICULOS_PAGE_SIZE_DEFAULT = 25
-export const ARTICULOS_PAGE_SIZE_MAX = 100
+export const ARTICULOS_PAGE_SIZE_MAX = ARTICULOS_MAX_POR_TENANT
 
 /**
  * Unidades de medida de la lista fija. `um` se guarda como código; «Otro»
@@ -396,6 +406,24 @@ export function articuloDeRow(row: Record<string, unknown>): Articulo {
       row.updated_at instanceof Date
         ? row.updated_at.toISOString()
         : String(row.updated_at ?? ""),
+  }
+}
+
+/**
+ * Row cruda de Postgres → Articulo para el listado: la descripción llega
+ * recortada para no multiplicar el payload por 5000 filas. La edición usa
+ * `articuloDeRow` (sin recortar) leyendo el registro individual.
+ */
+export function articuloResumenDeRow(row: Record<string, unknown>): Articulo {
+  const articulo = articuloDeRow(row)
+  if (articulo.descripcion.length <= ARTICULO_LISTA_DESCRIPCION_MAX) {
+    return articulo
+  }
+  return {
+    ...articulo,
+    descripcion: `${articulo.descripcion
+      .slice(0, ARTICULO_LISTA_DESCRIPCION_MAX)
+      .trimEnd()}…`,
   }
 }
 

@@ -4,27 +4,19 @@ import * as React from "react"
 
 import { toast } from "sonner"
 import {
-  ArchiveIcon,
-  ArchiveRestoreIcon,
   DownloadIcon,
-  PencilIcon,
+  PackageIcon,
   PlusIcon,
   SearchIcon,
   TriangleAlertIcon,
   UploadIcon,
   XIcon,
 } from "lucide-react"
-import {
-  useTable,
-  type ColumnDef,
-  type PaginationState,
-  type SortingState,
-} from "@tanstack/react-table"
 
 import {
   ARTICULO_DESCRIPCION_MAX,
+  ARTICULOS_MAX_POR_TENANT,
   IMPORT_MAX_BYTES,
-  umEtiqueta,
   UM_OPCIONES,
   UM_OTRO,
   validarArticuloInput,
@@ -36,7 +28,6 @@ import {
   Alert,
   AlertDescription,
 } from "@/components/reui/alert"
-import { Badge } from "@/components/reui/badge"
 import {
   Autocomplete,
   AutocompleteContent,
@@ -46,22 +37,13 @@ import {
   AutocompleteList,
 } from "@/components/reui/autocomplete"
 import {
-  DataGrid,
-  DataGridContainer,
-  dataGridFeatures,
-  type DataGridFeatures,
-} from "@/components/reui/data-grid/data-grid"
-import { DataGridColumnHeader } from "@/components/reui/data-grid/data-grid-column-header"
-import { DataGridPagination } from "@/components/reui/data-grid/data-grid-pagination"
-import { DataGridScrollArea } from "@/components/reui/data-grid/data-grid-scroll-area"
-import { DataGridTable } from "@/components/reui/data-grid/data-grid-table"
-import {
   Frame,
   FrameDescription,
   FrameHeader,
   FramePanel,
   FrameTitle,
 } from "@/components/reui/frame"
+import { ArticulosAccordion } from "@/components/herramientas/articulos/articulos-accordion"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -73,6 +55,13 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import {
   InputGroup,
@@ -152,28 +141,6 @@ async function leerRespuesta(response: Response) {
   }
 }
 
-/**
- * Fecha corta determinista (misma en servidor y cliente): CDMX fija. Los
- * formateadores viven a nivel de módulo — construir un Intl por fila y
- * render es caro en móvil.
- */
-const montoFmt = new Intl.NumberFormat("es-MX", {
-  style: "currency",
-  currency: "MXN",
-})
-
-const fechaFmt = new Intl.DateTimeFormat("es-MX", {
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-  timeZone: "America/Mexico_City",
-})
-
-function fechaCorta(iso: string): string {
-  const fecha = new Date(iso)
-  return Number.isNaN(fecha.getTime()) ? "—" : fechaFmt.format(fecha)
-}
-
 function borradorDe(articulo: Articulo): Borrador {
   const esCodigoFijo = UM_OPCIONES.some(
     (opcion) => opcion.code === articulo.um
@@ -232,7 +199,6 @@ export function ArticulosView({
     inicial?.articulos ?? null
   )
   const [total, setTotal] = React.useState(inicial?.total ?? 0)
-  const [cargando, setCargando] = React.useState(false)
   const [cargaFallida, setCargaFallida] = React.useState(cargaFallidaInicial)
   const [aviso, setAviso] = React.useState<Aviso>(null)
   const [categorias, setCategorias] = React.useState(categoriasIniciales)
@@ -242,13 +208,6 @@ export function ArticulosView({
   const [terminoAplicado, setTerminoAplicado] = React.useState("")
   const [estadoFiltro, setEstadoFiltro] = React.useState<FiltroEstado>("active")
   const [categoriaFiltro, setCategoriaFiltro] = React.useState("")
-  const [pagination, setPagination] = React.useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 25,
-  })
-  const [sorting, setSorting] = React.useState<SortingState>([
-    { id: "updatedAt", desc: true },
-  ])
 
   // Editor (sheet).
   const [editor, setEditor] = React.useState<
@@ -290,19 +249,13 @@ export function ArticulosView({
 
   const load = React.useCallback(async () => {
     const seq = ++cargaSeqRef.current
-    setCargando(true)
     try {
       const params = new URLSearchParams()
       if (terminoAplicado) params.set("q", terminoAplicado)
       params.set("status", estadoFiltro)
       if (categoriaFiltro) params.set("categoria", categoriaFiltro)
-      params.set("page", String(pagination.pageIndex + 1))
-      params.set("pageSize", String(pagination.pageSize))
-      const orden = sorting[0]
-      if (orden) {
-        params.set("sort", orden.id)
-        params.set("dir", orden.desc ? "desc" : "asc")
-      }
+      // El acordeón muestra el catálogo completo: sin paginación ni orden.
+      params.set("pageSize", String(ARTICULOS_MAX_POR_TENANT))
       const response = await fetch(`/api/articulos?${params.toString()}`, {
         cache: "no-store",
       })
@@ -325,16 +278,11 @@ export function ArticulosView({
           texto: "No se pudo refrescar el catálogo. Revisa tu conexión.",
         })
       }
-    } finally {
-      if (seq === cargaSeqRef.current) setCargando(false)
     }
-  }, [terminoAplicado, estadoFiltro, categoriaFiltro, pagination, sorting])
+  }, [terminoAplicado, estadoFiltro, categoriaFiltro])
 
   // Búsqueda con debounce (el timer mantiene el setState fuera del cuerpo
-  // sincrónico del efecto: regla react-hooks/set-state-in-effect). Al aplicar
-  // un término nuevo la página vuelve a 1: sin esto, buscar desde la página
-  // 2+ pedía una página que ya no existe y mostraba un vacío falso con
-  // total 0 (el total viaja en la primera fila devuelta).
+  // sincrónico del efecto: regla react-hooks/set-state-in-effect).
   const terminoAplicadoRef = React.useRef("")
   React.useEffect(() => {
     const trimmed = busqueda.trim()
@@ -342,15 +290,11 @@ export function ArticulosView({
       if (terminoAplicadoRef.current === trimmed) return
       terminoAplicadoRef.current = trimmed
       setTerminoAplicado(trimmed)
-      setPagination((prev) =>
-        prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 }
-      )
     }, 300)
     return () => clearTimeout(timer)
   }, [busqueda])
 
-  // Recarga al cambiar filtros/página/orden. El primer render ya trae datos
-  // del servidor: no volver a pedirlos.
+  // Recarga al cambiar filtros. El primer render ya trae datos del servidor.
   React.useEffect(() => {
     if (skipPrimeraCarga.current) {
       skipPrimeraCarga.current = false
@@ -393,10 +337,6 @@ export function ArticulosView({
     }
     void recargarCategorias()
   }, [recargarCategorias])
-
-  const resetPagina = React.useCallback(() => {
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }))
-  }, [])
 
   /* ------------------------------ editor ------------------------------ */
 
@@ -555,18 +495,28 @@ export function ArticulosView({
     setAplicandoAccion(true)
     const { articulo, accion } = pendienteAccion
     try {
+      // El listado trae la descripción recortada: el PATCH reemplaza el
+      // contenido completo, así que se lee la fila vigente antes de archivar.
+      const lectura = await fetch(`/api/articulos/${articulo.id}`, {
+        cache: "no-store",
+      })
+      const leido = await leerRespuesta(lectura)
+      if (!lectura.ok || !leido?.ok) {
+        throw new Error(leido?.error?.code ?? "load_error")
+      }
+      const completa = leido.data as Articulo
       const response = await fetch(`/api/articulos/${articulo.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sku: articulo.sku,
-          nombre: articulo.nombre,
-          descripcion: articulo.descripcion,
-          um: articulo.um,
-          precioUnitario: articulo.precioUnitario,
-          categoria: articulo.categoria,
-          disponible: articulo.disponible,
-          version: articulo.version,
+          sku: completa.sku,
+          nombre: completa.nombre,
+          descripcion: completa.descripcion,
+          um: completa.um,
+          precioUnitario: completa.precioUnitario,
+          categoria: completa.categoria,
+          disponible: completa.disponible,
+          version: completa.version,
           status: accion === "archivar" ? "archived" : "active",
         }),
       })
@@ -725,12 +675,7 @@ export function ArticulosView({
     uploadActions,
   ])
 
-  /* --------------------------------- tabla --------------------------------- */
-
-  const abrirEdicionRef = React.useRef(abrirEdicion)
-  React.useEffect(() => {
-    abrirEdicionRef.current = abrirEdicion
-  }, [abrirEdicion])
+  /* ------------------------------ acordeón ----------------------------- */
 
   const pedirAccion = React.useCallback(
     (articulo: Articulo, accion: "archivar" | "restaurar") => {
@@ -738,198 +683,14 @@ export function ArticulosView({
     },
     []
   )
-
-  const columns = React.useMemo<ColumnDef<DataGridFeatures, Articulo>[]>(
-    () => [
-      {
-        accessorKey: "sku",
-        id: "sku",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="SKU" />
-        ),
-        cell: ({ row }) => (
-          <span className="text-foreground font-mono text-xs font-medium tracking-wider">
-            {row.original.sku}
-          </span>
-        ),
-        size: 130,
-        meta: { skeleton: <Skeleton className="h-4 w-16" /> },
-      },
-      {
-        accessorKey: "nombre",
-        id: "nombre",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Nombre" />
-        ),
-        cell: ({ row }) => (
-          <div
-            className="flex min-w-0 flex-col"
-            title={row.original.descripcion || undefined}
-          >
-            <span className="text-foreground truncate text-sm font-medium">
-              {row.original.nombre}
-            </span>
-            {row.original.descripcion ? (
-              <span className="text-muted-foreground line-clamp-1 text-xs">
-                {row.original.descripcion}
-              </span>
-            ) : null}
-          </div>
-        ),
-        size: 260,
-        meta: { skeleton: <Skeleton className="h-4 w-32" /> },
-      },
-      {
-        accessorKey: "um",
-        id: "um",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="U.M." />
-        ),
-        cell: ({ row }) => (
-          <span className="text-muted-foreground text-xs">
-            {umEtiqueta(row.original.um)}
-          </span>
-        ),
-        size: 100,
-        meta: { skeleton: <Skeleton className="h-4 w-12" /> },
-      },
-      {
-        accessorKey: "precioUnitario",
-        id: "precioUnitario",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="P.U." />
-        ),
-        cell: ({ row }) => (
-          <span className="text-foreground text-sm font-medium tabular-nums">
-            {montoFmt.format(row.original.precioUnitario)}
-          </span>
-        ),
-        size: 130,
-        meta: { skeleton: <Skeleton className="h-4 w-20" /> },
-      },
-      {
-        accessorKey: "categoria",
-        id: "categoria",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Categoría" />
-        ),
-        cell: ({ row }) =>
-          row.original.categoria ? (
-            <Badge size="xs" radius="full" variant="outline">
-              {row.original.categoria}
-            </Badge>
-          ) : (
-            <span className="text-muted-foreground text-xs">—</span>
-          ),
-        size: 150,
-        meta: { skeleton: <Skeleton className="h-4 w-16" /> },
-      },
-      {
-        accessorKey: "disponible",
-        id: "disponible",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Estado" />
-        ),
-        cell: ({ row }) =>
-          row.original.status === "archived" ? (
-            <Badge size="xs" radius="full" variant="outline">
-              Archivado
-            </Badge>
-          ) : row.original.disponible ? (
-            <Badge size="xs" radius="full" variant="success-light">
-              Disponible
-            </Badge>
-          ) : (
-            <Badge size="xs" radius="full" variant="secondary">
-              No disponible
-            </Badge>
-          ),
-        size: 130,
-        meta: { skeleton: <Skeleton className="h-4 w-20" /> },
-      },
-      {
-        accessorKey: "updatedAt",
-        id: "updatedAt",
-        header: ({ column }) => (
-          <DataGridColumnHeader column={column} title="Actualizado" />
-        ),
-        cell: ({ row }) => (
-          <span className="text-muted-foreground text-xs tabular-nums">
-            {fechaCorta(row.original.updatedAt)}
-          </span>
-        ),
-        size: 130,
-        meta: { skeleton: <Skeleton className="h-4 w-16" /> },
-      },
-      {
-        id: "actions",
-        header: () => <span className="sr-only">Acciones</span>,
-        enableSorting: false,
-        cell: ({ row }) => {
-          const articulo = row.original
-          const archivado = articulo.status === "archived"
-          return (
-            <div className="flex items-center justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="relative after:absolute after:content-[''] after:-inset-2"
-                onClick={() => void abrirEdicionRef.current(articulo)}
-                aria-label={`Editar ${articulo.nombre}`}
-                title="Editar"
-              >
-                <PencilIcon className="size-4" aria-hidden="true" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className={
-                  archivado
-                    ? "relative after:absolute after:content-[''] after:-inset-2 text-primary"
-                    : "relative after:absolute after:content-[''] after:-inset-2 text-muted-foreground hover:text-foreground"
-                }
-                onClick={() =>
-                  pedirAccion(articulo, archivado ? "restaurar" : "archivar")
-                }
-                aria-label={
-                  archivado
-                    ? `Restaurar ${articulo.nombre}`
-                    : `Archivar ${articulo.nombre}`
-                }
-                title={archivado ? "Restaurar" : "Archivar"}
-              >
-                {archivado ? (
-                  <ArchiveRestoreIcon className="size-4" aria-hidden="true" />
-                ) : (
-                  <ArchiveIcon className="size-4" aria-hidden="true" />
-                )}
-              </Button>
-            </div>
-          )
-        },
-        size: 100,
-      },
-    ],
+  const archivar = React.useCallback(
+    (articulo: Articulo) => pedirAccion(articulo, "archivar"),
     [pedirAccion]
   )
-
-  const table = useTable({
-    features: dataGridFeatures,
-    columns,
-    data: filas ?? [],
-    getRowId: (row: Articulo) => row.id,
-    manualPagination: true,
-    manualSorting: true,
-    autoResetPageIndex: false,
-    rowCount: total,
-    pageCount: Math.max(1, Math.ceil(total / pagination.pageSize)),
-    state: { sorting, pagination },
-    onSortingChange: (updater) => {
-      setSorting(updater)
-      resetPagina()
-    },
-    onPaginationChange: setPagination,
-  })
+  const restaurar = React.useCallback(
+    (articulo: Articulo) => pedirAccion(articulo, "restaurar"),
+    [pedirAccion]
+  )
 
   const itemsCategoria = React.useMemo(
     () => categorias.map((categoria) => ({ value: categoria })),
@@ -943,23 +704,6 @@ export function ArticulosView({
     terminoAplicado !== "" ||
     estadoFiltro !== "active" ||
     categoriaFiltro !== ""
-
-  const mensajeVacio = cargaFallida ? (
-    <div className="flex flex-col items-center gap-2 py-2">
-      <p className="text-muted-foreground text-sm">
-        No se pudieron cargar los artículos.
-      </p>
-      <Button variant="outline" size="sm" onClick={() => void load()}>
-        Reintentar
-      </Button>
-    </div>
-  ) : filas !== null && total === 0 && conFiltros ? (
-    "Sin artículos que coincidan con los filtros."
-  ) : filas !== null && total === 0 ? (
-    "Sin artículos en esta vista. Crea el primero con «Nuevo artículo» o importa tu catálogo por CSV."
-  ) : (
-    "Sin artículos que coincidan con los filtros."
-  )
 
   return (
     <Frame spacing="default" className="w-full">
@@ -994,7 +738,6 @@ export function ArticulosView({
             value={estadoFiltro}
             onValueChange={(value) => {
               setEstadoFiltro((value ?? "active") as FiltroEstado)
-              resetPagina()
             }}
           >
             <SelectTrigger className="w-32" aria-label="Filtrar por estado">
@@ -1011,7 +754,6 @@ export function ArticulosView({
               value={categoriaFiltro}
               onValueChange={(value) => {
                 setCategoriaFiltro(value ?? "")
-                resetPagina()
               }}
             >
               <SelectTrigger
@@ -1060,6 +802,12 @@ export function ArticulosView({
             </Button>
           </div>
         </div>
+        {filas !== null ? (
+          <p className="text-muted-foreground mt-2 text-xs tabular-nums">
+            {total.toLocaleString("es-MX")}{" "}
+            {total === 1 ? "artículo" : "artículos"}
+          </p>
+        ) : null}
         {aviso ? (
           <Alert variant="destructive" className="mt-3">
             <TriangleAlertIcon />
@@ -1068,23 +816,54 @@ export function ArticulosView({
         ) : null}
       </FramePanel>
 
-      <FramePanel className="p-0">
-        <DataGrid
-          table={table}
-          recordCount={total}
-          isLoading={cargando && filas === null}
-          tableLayout={{ dense: true }}
-          emptyMessage={mensajeVacio}
-        >
-          <DataGridContainer>
-            <DataGridScrollArea>
-              <DataGridTable />
-            </DataGridScrollArea>
-          </DataGridContainer>
-          <div className="px-4 pb-3">
-            <DataGridPagination />
+      <FramePanel>
+        {filas === null && !cargaFallida ? (
+          <div className="flex flex-col gap-3" aria-hidden>
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
+            <Skeleton className="h-14 w-full" />
           </div>
-        </DataGrid>
+        ) : filas === null || filas.length === 0 ? (
+          <Empty className="border-0 py-6">
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <PackageIcon />
+              </EmptyMedia>
+              <EmptyTitle>
+                {cargaFallida
+                  ? "No se pudieron cargar los artículos"
+                  : conFiltros
+                    ? "Sin artículos con esos filtros"
+                    : "Tu catálogo está vacío"}
+              </EmptyTitle>
+              <EmptyDescription>
+                {cargaFallida
+                  ? "Revisa tu conexión e inténtalo de nuevo."
+                  : conFiltros
+                    ? "Prueba con otra búsqueda, categoría o estado."
+                    : "Crea el primer artículo o importa tu catálogo por CSV."}
+              </EmptyDescription>
+            </EmptyHeader>
+            {cargaFallida ? (
+              <Button variant="outline" onClick={() => void load()}>
+                Reintentar
+              </Button>
+            ) : (
+              <Button onClick={abrirNueva}>
+                <PlusIcon aria-hidden="true" />
+                Nuevo artículo
+              </Button>
+            )}
+          </Empty>
+        ) : (
+          <ArticulosAccordion
+            articulos={filas}
+            modo="gestion"
+            onEditar={abrirEdicion}
+            onArchivar={archivar}
+            onRestaurar={restaurar}
+          />
+        )}
       </FramePanel>
 
       {/* ------------------------------ editor ------------------------------ */}

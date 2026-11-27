@@ -1,9 +1,9 @@
 "use client"
 
 import {
-  useEffect,
+  useCallback,
+  useDeferredValue,
   useMemo,
-  useRef,
   useState,
   useTransition,
   type ReactNode,
@@ -18,8 +18,10 @@ import {
   PlusIcon,
   QrCodeIcon,
   ReceiptTextIcon,
+  SearchIcon,
   Trash2Icon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react"
 
 import {
@@ -28,14 +30,6 @@ import {
   AlertTitle,
 } from "@/components/reui/alert"
 import { Badge } from "@/components/reui/badge"
-import {
-  Autocomplete,
-  AutocompleteContent,
-  AutocompleteEmpty,
-  AutocompleteInput,
-  AutocompleteItem,
-  AutocompleteList,
-} from "@/components/reui/autocomplete"
 import {
   Frame,
   FrameFooter,
@@ -74,6 +68,7 @@ import {
 import { Input } from "@/components/ui/input"
 import {
   InputGroup,
+  InputGroupAddon,
   InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
@@ -103,6 +98,7 @@ import {
 } from "@/components/ui/tabs"
 
 import { LinkCreadoDialog } from "@/components/herramientas/links-pago/link-creado-dialog"
+import { ArticulosAccordion } from "@/components/herramientas/articulos/articulos-accordion"
 import {
   cancelPaymentOrderAction,
   getPaymentOrderLinkAction,
@@ -110,7 +106,11 @@ import {
   type CreatedPaymentOrder,
 } from "@/app/actions/links-pago"
 import { createNotaDigitalAction } from "@/app/actions/nota-digital"
-import type { Articulo } from "@/lib/articulos"
+import {
+  ARTICULOS_BUSQUEDA_MIN,
+  normalizarTexto,
+  type Articulo,
+} from "@/lib/articulos"
 import {
   paymentOrderMoney,
   paymentOrderStatusLabel,
@@ -157,6 +157,8 @@ interface CartItem {
 
 interface NotaDigitalViewProps {
   initialNotas: NotaDigitalListItem[]
+  /** Catálogo activo y disponible servido por la RSC; null = carga fallida. */
+  initialArticulos: Articulo[] | null
   isAdmin: boolean
   whatsappConfigured: boolean
   scanConfigured: boolean
@@ -246,6 +248,7 @@ function notaOptimista(
 
 export function NotaDigitalView({
   initialNotas,
+  initialArticulos,
   isAdmin,
   whatsappConfigured,
   scanConfigured,
@@ -264,10 +267,48 @@ export function NotaDigitalView({
     setNotas(initialNotas)
   }
 
+  const [articulos, setArticulos] = useState<Articulo[]>(initialArticulos ?? [])
+  const [serverArticulos, setServerArticulos] = useState<Articulo[] | null>(
+    initialArticulos
+  )
+  const catalogoFallido = initialArticulos === null
+  // Adopción del snapshot de la RSC: el RealtimeProvider ya refresca la ruta
+  // con cada evento `articulos`. El setState corre durante el render.
+  if (serverArticulos !== initialArticulos) {
+    setServerArticulos(initialArticulos)
+    setArticulos(initialArticulos ?? [])
+  }
+
   const [busqueda, setBusqueda] = useState("")
-  const [resultados, setResultados] = useState<Articulo[]>([])
-  const [buscando, setBuscando] = useState(false)
+  const terminoDiferido = useDeferredValue(busqueda)
+  // Índice normalizado calculado UNA vez por catálogo: escribir no vuelve a
+  // normalizar 5000 descripciones en cada tecla.
+  const indiceBusqueda = useMemo(
+    () =>
+      articulos.map((articulo) => ({
+        articulo,
+        texto: normalizarTexto(
+          `${articulo.nombre} ${articulo.sku} ${articulo.categoria ?? ""} ${articulo.descripcion}`
+        ),
+      })),
+    [articulos]
+  )
+  const articulosFiltrados = useMemo(() => {
+    const termino = normalizarTexto(terminoDiferido.trim())
+    if (termino.length < ARTICULOS_BUSQUEDA_MIN) return articulos
+    return indiceBusqueda
+      .filter((entrada) => entrada.texto.includes(termino))
+      .map((entrada) => entrada.articulo)
+  }, [articulos, indiceBusqueda, terminoDiferido])
   const [cart, setCart] = useState<CartItem[]>([])
+  const cantidadesEnComanda = useMemo(
+    () => new Map(cart.map((item) => [item.articulo.id, item.cantidad])),
+    [cart]
+  )
+  const cantidadEnComanda = useCallback(
+    (id: string) => cantidadesEnComanda.get(id) ?? 0,
+    [cantidadesEnComanda]
+  )
   const [formError, setFormError] = useState<string | null>(null)
   const [created, setCreated] = useState<CreatedPaymentOrder | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -276,45 +317,8 @@ export function NotaDigitalView({
   const [rejectReason, setRejectReason] = useState("")
   const [cancelTarget, setCancelTarget] = useState<NotaDigitalListItem | null>(null)
   const [linkOrderId, setLinkOrderId] = useState<string | null>(null)
-  const seqRef = useRef(0)
 
-  // El timer mantiene el setState fuera del cuerpo sincrónico del efecto
-  // (regla react-hooks/set-state-in-effect): la búsqueda corre 300 ms después
-  // de dejar de escribir, con guardia de secuencia para descartar respuestas
-  // tardías de un término anterior.
-  useEffect(() => {
-    const termino = busqueda.trim()
-    const timer = setTimeout(() => {
-      if (termino.length < 2) {
-        setResultados([])
-        setBuscando(false)
-        return
-      }
-      const seq = ++seqRef.current
-      setBuscando(true)
-      const params = new URLSearchParams({
-        q: termino,
-        status: "active",
-        disponible: "true",
-        pageSize: "20",
-      })
-      fetch(`/api/articulos?${params.toString()}`, { cache: "no-store" })
-        .then((response) => response.json())
-        .then((json: { data?: Articulo[] }) => {
-          if (seq !== seqRef.current) return
-          setResultados(Array.isArray(json?.data) ? json.data : [])
-        })
-        .catch(() => {
-          if (seq === seqRef.current) setResultados([])
-        })
-        .finally(() => {
-          if (seq === seqRef.current) setBuscando(false)
-        })
-    }, 300)
-    return () => clearTimeout(timer)
-  }, [busqueda])
-
-  function agregarAlCarrito(articulo: Articulo) {
+  const agregarAlCarrito = useCallback((articulo: Articulo) => {
     if (cart.length >= NOTA_MAX_RENGLONES) {
       toast.error(`Una comanda puede tener hasta ${NOTA_MAX_RENGLONES} renglones.`)
       return
@@ -346,9 +350,8 @@ export function NotaDigitalView({
       ]
     })
     setBusqueda("")
-    setResultados([])
     setFormError(null)
-  }
+  }, [cart])
 
   function cambiarCantidad(id: string, delta: number) {
     setCart((prev) =>
@@ -599,50 +602,79 @@ export function NotaDigitalView({
                   <Label htmlFor="buscar-articulo-nota">
                     Buscar artículos o servicios
                   </Label>
-                  <Autocomplete
-                    items={resultados}
-                    value={busqueda}
-                    onValueChange={setBusqueda}
-                    autoHighlight="always"
-                    itemToStringValue={(articulo) => articulo.nombre}
-                  >
-                    <AutocompleteInput
+                  <InputGroup className="h-12 min-w-0 rounded-full border-0 bg-muted">
+                    <InputGroupAddon align="inline-start" className="pl-3.5">
+                      <SearchIcon aria-hidden="true" />
+                    </InputGroupAddon>
+                    <InputGroupInput
                       id="buscar-articulo-nota"
                       aria-label="Buscar artículos o servicios del catálogo"
-                      placeholder="Escribe el nombre o SKU (mínimo 2 letras)"
+                      placeholder="Busca por nombre, SKU, categoría o descripción"
+                      value={busqueda}
+                      onChange={(event) => setBusqueda(event.target.value)}
+                      className="h-full text-base"
                     />
-                    <AutocompleteContent>
-                      <AutocompleteEmpty>
-                        {buscando
-                          ? "Buscando…"
-                          : resultados.length === 0
-                            ? "Sin artículos disponibles con esa búsqueda."
-                            : "Sin resultados."}
-                      </AutocompleteEmpty>
-                      <AutocompleteList>
-                        {(articulo) => (
-                          <AutocompleteItem
-                            key={articulo.id}
-                            value={articulo}
-                            className="min-h-11"
-                            onClick={() => agregarAlCarrito(articulo)}
-                          >
-                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                              <span className="truncate text-sm font-medium">
-                                {articulo.nombre}
-                              </span>
-                              <span className="text-muted-foreground text-xs">
-                                {articulo.sku} · {articulo.um} ·{" "}
-                                {paymentOrderMoney(articulo.precioUnitario)}
-                              </span>
-                            </span>
-                            <PlusIcon className="size-4" aria-hidden="true" />
-                          </AutocompleteItem>
-                        )}
-                      </AutocompleteList>
-                    </AutocompleteContent>
-                  </Autocomplete>
+                    {busqueda ? (
+                      <InputGroupAddon align="inline-end" className="mr-0 pr-2.5">
+                        <InputGroupButton
+                          size="icon-sm"
+                          className="size-9 rounded-full"
+                          onClick={() => setBusqueda("")}
+                          aria-label="Limpiar búsqueda"
+                        >
+                          <XIcon aria-hidden="true" />
+                        </InputGroupButton>
+                      </InputGroupAddon>
+                    ) : null}
+                  </InputGroup>
                 </div>
+
+                {catalogoFallido ? (
+                  <Empty className="border-0 py-6">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <TriangleAlertIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>No se pudo cargar el catálogo</EmptyTitle>
+                      <EmptyDescription>
+                        Revisa tu conexión e inténtalo de nuevo.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                    <Button variant="outline" onClick={() => router.refresh()}>
+                      Reintentar
+                    </Button>
+                  </Empty>
+                ) : articulos.length === 0 ? (
+                  <Empty className="border-0 py-6">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <ReceiptTextIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>Sin artículos en el catálogo</EmptyTitle>
+                      <EmptyDescription>
+                        Da de alta tus productos o servicios en Alta de Artículos
+                        para poder armar la comanda.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                    <Button
+                      variant="outline"
+                      onClick={() => router.push("/modulos/alta-de-articulos")}
+                    >
+                      Ir a Alta de Artículos
+                    </Button>
+                  </Empty>
+                ) : articulosFiltrados.length === 0 ? (
+                  <p role="status" className="text-muted-foreground text-sm">
+                    Ningún artículo coincide con «{busqueda.trim()}».
+                  </p>
+                ) : (
+                  <ArticulosAccordion
+                    articulos={articulosFiltrados}
+                    modo="seleccion"
+                    onAgregar={agregarAlCarrito}
+                    cantidadEnComanda={cantidadEnComanda}
+                  />
+                )}
 
                 {cart.length === 0 ? (
                   <Empty className="border-0 py-6">

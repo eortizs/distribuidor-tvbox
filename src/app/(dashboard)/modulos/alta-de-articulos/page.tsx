@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 
 import { ArticulosView } from "@/components/herramientas/articulos/articulos-view"
+import { ARTICULOS_MAX_POR_TENANT } from "@/lib/articulos"
 import type { ListadoArticulos } from "@/server/articulos/repository"
 import {
   listarArticulos,
@@ -15,15 +16,15 @@ export const metadata: Metadata = {
 export default async function AltaArticulosPage() {
   await requireUser("core")
 
-  // Primer pintado con el listado real, sin parpadeo de carga. Un fallo de
-  // base de datos no tumba la página: la vista muestra su estado de error
-  // con reintentar (mismo contrato que Notas).
+  // Primer pintado con el catálogo COMPLETO: la lista en acordeón no pagina.
+  // Un fallo de base de datos no tumba la página: la vista muestra su estado
+  // de error con reintentar (mismo contrato que Notas).
   let inicial: ListadoArticulos | null = null
   let categoriasIniciales: string[] = []
   let cargaFallida = false
   try {
     const [listado, categorias] = await Promise.all([
-      listarArticulos({}),
+      listarArticulos({ pageSize: ARTICULOS_MAX_POR_TENANT }),
       listarCategorias(),
     ])
     inicial = listado

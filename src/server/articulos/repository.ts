@@ -1,5 +1,6 @@
 import {
   articuloDeRow,
+  articuloResumenDeRow,
   ARTICULOS_BUSQUEDA_MIN,
   ARTICULOS_MAX_POR_TENANT,
   ARTICULOS_PAGE_SIZE_DEFAULT,
@@ -108,7 +109,7 @@ export async function listarArticulos(
   )
 
   return {
-    articulos: rows.map(articuloDeRow),
+    articulos: rows.map(articuloResumenDeRow),
     total: Number(rows[0]?.total ?? 0),
   }
 }
