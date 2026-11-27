@@ -63,7 +63,7 @@ ALTER TABLE payment_orders ADD COLUMN IF NOT EXISTS origin
   text NOT NULL DEFAULT 'link';
 ALTER TABLE payment_orders DROP CONSTRAINT IF EXISTS payment_orders_origin_check;
 ALTER TABLE payment_orders ADD CONSTRAINT payment_orders_origin_check
-  CHECK (origin IN ('link','qr'));
+  CHECK (origin IN ('link','qr','nota'));
 
 -- Índices de la versión con caducidad de solicitudes declaradas (ya no
 -- aplica: la orden nace del comprobante, no hay solicitudes sin comprobante).

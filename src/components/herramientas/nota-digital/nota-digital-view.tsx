@@ -1,17 +1,25 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState, useTransition } from "react"
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+  type ReactNode,
+} from "react"
 import { useRouter } from "next/navigation"
 import { toast } from "sonner"
 import { useTable, type ColumnDef } from "@tanstack/react-table"
 import {
   ChevronRightIcon,
+  InfoIcon,
   MinusIcon,
   PlusIcon,
   QrCodeIcon,
+  ReceiptTextIcon,
   Trash2Icon,
   TriangleAlertIcon,
-  XIcon,
 } from "lucide-react"
 
 import {
@@ -30,7 +38,6 @@ import {
 } from "@/components/reui/autocomplete"
 import {
   Frame,
-  FrameDescription,
   FrameFooter,
   FrameHeader,
   FramePanel,
@@ -57,9 +64,43 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
+import {
+  InputGroup,
+  InputGroupButton,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { Label } from "@/components/ui/label"
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 
 import { LinkCreadoDialog } from "@/components/herramientas/links-pago/link-creado-dialog"
 import {
@@ -126,6 +167,41 @@ function maskPhone(phone: string | null): string {
   return phone.length <= 4 ? phone : `${phone.slice(0, 3)}•••${phone.slice(-3)}`
 }
 
+function InfoHint({
+  label,
+  titulo,
+  children,
+}: {
+  label: string
+  titulo: string
+  children: ReactNode
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={label}
+            className="relative after:content-[''] after:absolute after:-inset-2 shrink-0"
+          />
+        }
+      >
+        <InfoIcon aria-hidden="true" />
+      </PopoverTrigger>
+      <PopoverContent align="end" side="bottom" className="max-w-[16rem]">
+        <PopoverHeader>
+          <PopoverTitle>{titulo}</PopoverTitle>
+          <PopoverDescription className="text-sm leading-snug">
+            {children}
+          </PopoverDescription>
+        </PopoverHeader>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 /** Fila optimista para que la nota creada aparezca antes del RSC. */
 function notaOptimista(
   order: CreatedPaymentOrder,
@@ -176,6 +252,7 @@ export function NotaDigitalView({
 }: NotaDigitalViewProps) {
   const router = useRouter()
   const [isPending, startTransition] = useTransition()
+  const [tab, setTab] = useState<"crear" | "notas">("crear")
 
   const [notas, setNotas] = useState(initialNotas)
   const [serverNotas, setServerNotas] = useState(initialNotas)
@@ -339,6 +416,7 @@ export function NotaDigitalView({
         toast.error(resultado.error ?? "No se pudo abrir el link.")
         return
       }
+      setSelectedId(null)
       setCreated(resultado.order)
     })
   }
@@ -361,6 +439,7 @@ export function NotaDigitalView({
       )
       setRejectTarget(null)
       setRejectReason("")
+      setSelectedId(null)
       router.refresh()
     })
   }
@@ -376,6 +455,7 @@ export function NotaDigitalView({
       }
       toast.success("Nota cancelada.")
       setCancelTarget(null)
+      setSelectedId(null)
       router.refresh()
     })
   }
@@ -487,390 +567,459 @@ export function NotaDigitalView({
 
   return (
     <>
-      <Frame className="flex flex-1 flex-col">
-      <FramePanel>
-        <FrameHeader>
-          <FrameTitle>Nueva nota digital</FrameTitle>
-          <FrameDescription>
-            Arma la comanda con artículos de tu catálogo y genera un link de
-            pago con QR. Cuando se confirme el depósito, el pagador recibe su
-            nota desglosada por WhatsApp.
-          </FrameDescription>
-        </FrameHeader>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as "crear" | "notas")}>
+        <TabsList variant="line" className="mb-4 w-full">
+          <TabsTrigger value="crear">
+            <PlusIcon /> Nueva nota
+          </TabsTrigger>
+          <TabsTrigger value="notas">
+            <ReceiptTextIcon /> Mis notas
+          </TabsTrigger>
+        </TabsList>
 
-        <div className="p-5">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="buscar-articulo-nota">Buscar artículos o servicios</Label>
-            <Autocomplete
-              items={resultados}
-              value={busqueda}
-              onValueChange={setBusqueda}
-              autoHighlight="always"
-              itemToStringValue={(articulo) => articulo.nombre}
-            >
-              <AutocompleteInput
-                id="buscar-articulo-nota"
-                aria-label="Buscar artículos o servicios del catálogo"
-                placeholder="Escribe el nombre o SKU (mínimo 2 letras)"
-              />
-              <AutocompleteContent>
-                <AutocompleteEmpty>
-                  {buscando
-                    ? "Buscando…"
-                    : resultados.length === 0
-                      ? "Sin artículos disponibles con esa búsqueda."
-                      : "Sin resultados."}
-                </AutocompleteEmpty>
-                <AutocompleteList>
-                  {(articulo) => (
-                    <AutocompleteItem
-                      key={articulo.id}
-                      value={articulo}
-                      className="min-h-11"
-                      onClick={() => agregarAlCarrito(articulo)}
-                    >
-                      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <span className="truncate text-sm font-medium">
-                          {articulo.nombre}
-                        </span>
-                        <span className="text-muted-foreground text-xs">
-                          {articulo.sku} · {articulo.um} ·{" "}
-                          {paymentOrderMoney(articulo.precioUnitario)}
-                        </span>
-                      </span>
-                      <PlusIcon className="size-4" aria-hidden="true" />
-                    </AutocompleteItem>
-                  )}
-                </AutocompleteList>
-              </AutocompleteContent>
-            </Autocomplete>
-          </div>
-
-          {cart.length === 0 ? (
-            <p className="text-muted-foreground mt-4 text-sm">
-              Aún no hay renglones. Busca un artículo y toca el resultado para
-              agregarlo a la comanda.
-            </p>
-          ) : (
-            <ul className="mt-4 flex flex-col gap-2">
-              {cart.map((item) => (
-                <li
-                  key={item.articulo.id}
-                  className="bg-muted/50 flex items-center gap-3 rounded-lg p-3"
+        <TabsContent value="crear">
+          <Frame spacing="default" className="w-full">
+            <FramePanel>
+              <FrameHeader className="flex-row items-center justify-between gap-2">
+                <FrameTitle className="text-lg font-semibold">
+                  Nueva nota digital
+                </FrameTitle>
+                <InfoHint
+                  label="Más información sobre cómo funciona la nota digital"
+                  titulo="Nueva nota digital"
                 >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-medium">
-                      {item.articulo.nombre}
-                    </p>
-                    <p className="text-muted-foreground text-xs">
-                      {item.articulo.sku} ·{" "}
-                      {paymentOrderMoney(item.articulo.precioUnitario)} c/u
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Quitar una unidad de ${item.articulo.nombre}`}
-                      className="relative after:content-[''] after:absolute after:-inset-2"
-                      onClick={() => cambiarCantidad(item.articulo.id, -1)}
-                    >
-                      <MinusIcon />
-                    </Button>
-                    <Input
-                      type="number"
-                      min="0.001"
-                      max="9999.999"
-                      step="0.1"
-                      value={String(item.cantidad)}
-                      aria-label={`Cantidad de ${item.articulo.nombre}`}
-                      className="h-9 w-20 text-center tabular-nums"
-                      onChange={(event) => {
-                        const valor = Number(event.target.value)
-                        if (!Number.isFinite(valor)) return
-                        const cantidad = Math.min(9999.999, Math.max(0, valor))
-                        setCart((prev) =>
-                          prev
-                            .map((cartItem) =>
-                              cartItem.articulo.id === item.articulo.id
-                                ? { ...cartItem, cantidad }
-                                : cartItem
-                            )
-                            .filter((cartItem) => cartItem.cantidad > 0)
-                        )
-                      }}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon-sm"
-                      aria-label={`Agregar una unidad de ${item.articulo.nombre}`}
-                      className="relative after:content-[''] after:absolute after:-inset-2"
-                      onClick={() => cambiarCantidad(item.articulo.id, 1)}
-                    >
-                      <PlusIcon />
-                    </Button>
-                  </div>
-                  <span className="w-24 shrink-0 text-right text-sm font-medium tabular-nums">
-                    {paymentOrderMoney(calcularLinea(item.articulo.precioUnitario, item.cantidad))}
-                  </span>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    aria-label={`Quitar ${item.articulo.nombre} de la comanda`}
-                    className="relative after:content-[''] after:absolute after:-inset-2"
-                    onClick={() =>
-                      setCart((prev) =>
-                        prev.filter((cartItem) => cartItem.articulo.id !== item.articulo.id)
-                      )
-                    }
+                  Arma la comanda con artículos de tu catálogo y genera un link
+                  de pago con QR. Cuando se confirme el depósito, el pagador
+                  recibe su nota desglosada por WhatsApp.
+                </InfoHint>
+              </FrameHeader>
+
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-2">
+                  <Label htmlFor="buscar-articulo-nota">
+                    Buscar artículos o servicios
+                  </Label>
+                  <Autocomplete
+                    items={resultados}
+                    value={busqueda}
+                    onValueChange={setBusqueda}
+                    autoHighlight="always"
+                    itemToStringValue={(articulo) => articulo.nombre}
                   >
-                    <Trash2Icon />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
+                    <AutocompleteInput
+                      id="buscar-articulo-nota"
+                      aria-label="Buscar artículos o servicios del catálogo"
+                      placeholder="Escribe el nombre o SKU (mínimo 2 letras)"
+                    />
+                    <AutocompleteContent>
+                      <AutocompleteEmpty>
+                        {buscando
+                          ? "Buscando…"
+                          : resultados.length === 0
+                            ? "Sin artículos disponibles con esa búsqueda."
+                            : "Sin resultados."}
+                      </AutocompleteEmpty>
+                      <AutocompleteList>
+                        {(articulo) => (
+                          <AutocompleteItem
+                            key={articulo.id}
+                            value={articulo}
+                            className="min-h-11"
+                            onClick={() => agregarAlCarrito(articulo)}
+                          >
+                            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                              <span className="truncate text-sm font-medium">
+                                {articulo.nombre}
+                              </span>
+                              <span className="text-muted-foreground text-xs">
+                                {articulo.sku} · {articulo.um} ·{" "}
+                                {paymentOrderMoney(articulo.precioUnitario)}
+                              </span>
+                            </span>
+                            <PlusIcon className="size-4" aria-hidden="true" />
+                          </AutocompleteItem>
+                        )}
+                      </AutocompleteList>
+                    </AutocompleteContent>
+                  </Autocomplete>
+                </div>
 
-          {formError ? (
-            <Alert variant="destructive" className="mt-4">
-              <TriangleAlertIcon />
-              <AlertDescription>{formError}</AlertDescription>
-            </Alert>
-          ) : null}
-          {!whatsappConfigured ? (
-            <Alert className="mt-4">
-              <TriangleAlertIcon />
-              <AlertTitle>Canal no vinculado</AlertTitle>
-              <AlertDescription>
-                Vincula el WhatsApp de tu negocio en Módulos → WhatsApp para
-                poder crear notas digitales.
-              </AlertDescription>
-            </Alert>
-          ) : null}
-          {!scanConfigured ? (
-            <p className="text-muted-foreground mt-3 text-xs">
-              Sin modelo de lectura de comprobantes, las notas quedan en
-              revisión manual para que las confirmes desde el detalle.
-            </p>
-          ) : null}
-        </div>
+                {cart.length === 0 ? (
+                  <Empty className="border-0 py-6">
+                    <EmptyHeader>
+                      <EmptyMedia variant="icon">
+                        <ReceiptTextIcon />
+                      </EmptyMedia>
+                      <EmptyTitle>Aún no hay artículos</EmptyTitle>
+                      <EmptyDescription>
+                        Busca un artículo o servicio del catálogo y toca el
+                        resultado para agregarlo.
+                      </EmptyDescription>
+                    </EmptyHeader>
+                  </Empty>
+                ) : (
+                  <ul className="flex flex-col gap-2">
+                    {cart.map((item) => (
+                      <li
+                        key={item.articulo.id}
+                        className="bg-muted/50 flex flex-col gap-3 rounded-lg p-3 sm:flex-row sm:items-center sm:gap-4"
+                      >
+                        <div className="flex min-w-0 flex-1 items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium leading-snug break-words">
+                              {item.articulo.nombre}
+                            </p>
+                            <p className="text-muted-foreground mt-0.5 text-xs">
+                              {item.articulo.sku} ·{" "}
+                              {paymentOrderMoney(item.articulo.precioUnitario)} c/u
+                            </p>
+                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Quitar ${item.articulo.nombre} de la comanda`}
+                            className="relative after:content-[''] after:absolute after:-inset-2 shrink-0"
+                            onClick={() =>
+                              setCart((prev) =>
+                                prev.filter(
+                                  (cartItem) =>
+                                    cartItem.articulo.id !== item.articulo.id
+                                )
+                              )
+                            }
+                          >
+                            <Trash2Icon />
+                          </Button>
+                        </div>
 
-        <FrameFooter className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-baseline gap-2">
-            <span className="text-muted-foreground text-sm">Total</span>
-            <span className="text-xl font-semibold tabular-nums">
-              {paymentOrderMoney(total)}
-            </span>
-          </div>
-          <Button size="lg" onClick={crearNota} disabled={!puedeCrear || isPending}>
-            {isPending && cart.length > 0 ? "Creando…" : "Crear link de pago"}
-          </Button>
-        </FrameFooter>
-      </FramePanel>
+                        <div className="flex items-center justify-between gap-3 sm:justify-end sm:gap-4">
+                          <InputGroup className="h-10 w-36 shrink-0">
+                            <InputGroupButton
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Quitar una unidad de ${item.articulo.nombre}`}
+                              className="relative after:content-[''] after:absolute after:-inset-2"
+                              onClick={() => cambiarCantidad(item.articulo.id, -1)}
+                            >
+                              <MinusIcon />
+                            </InputGroupButton>
+                            <InputGroupInput
+                              type="number"
+                              min="0.001"
+                              max="9999.999"
+                              step="0.1"
+                              value={String(item.cantidad)}
+                              aria-label={`Cantidad de ${item.articulo.nombre}`}
+                              className="text-center tabular-nums"
+                              onChange={(event) => {
+                                const valor = Number(event.target.value)
+                                if (!Number.isFinite(valor)) return
+                                const cantidad = Math.min(9999.999, Math.max(0, valor))
+                                setCart((prev) =>
+                                  prev
+                                    .map((cartItem) =>
+                                      cartItem.articulo.id === item.articulo.id
+                                        ? { ...cartItem, cantidad }
+                                        : cartItem
+                                    )
+                                    .filter((cartItem) => cartItem.cantidad > 0)
+                                )
+                              }}
+                            />
+                            <InputGroupButton
+                              variant="ghost"
+                              size="icon-sm"
+                              aria-label={`Agregar una unidad de ${item.articulo.nombre}`}
+                              className="relative after:content-[''] after:absolute after:-inset-2"
+                              onClick={() => cambiarCantidad(item.articulo.id, 1)}
+                            >
+                              <PlusIcon />
+                            </InputGroupButton>
+                          </InputGroup>
+                          <span className="shrink-0 text-right text-base font-semibold tabular-nums">
+                            {paymentOrderMoney(
+                              calcularLinea(
+                                item.articulo.precioUnitario,
+                                item.cantidad
+                              )
+                            )}
+                          </span>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
 
-      <FramePanel className="p-0">
-        <FrameHeader>
-          <FrameTitle>Mis notas digitales</FrameTitle>
-          <FrameDescription>
-            Folio, estado y total de cada comanda. Toca una fila para ver el
-            desglose y sus acciones.
-          </FrameDescription>
-        </FrameHeader>
-        <DataGrid
-          table={table}
-          recordCount={notas.length}
-          onRowClick={(nota) => setSelectedId(nota.id)}
-          tableLayout={{ dense: true }}
-          emptyMessage="Aún no hay notas digitales. Arma tu primera comanda arriba."
-        >
-          <DataGridContainer>
-            <DataGridScrollArea>
-              <DataGridTable />
-            </DataGridScrollArea>
-          </DataGridContainer>
-          <div className="px-4 pb-3">
-            <DataGridPagination />
-          </div>
-        </DataGrid>
-      </FramePanel>
+                {formError ? (
+                  <Alert variant="destructive">
+                    <TriangleAlertIcon />
+                    <AlertDescription>{formError}</AlertDescription>
+                  </Alert>
+                ) : null}
+                {!whatsappConfigured ? (
+                  <Alert>
+                    <TriangleAlertIcon />
+                    <AlertTitle>Canal no vinculado</AlertTitle>
+                    <AlertDescription>
+                      Vincula el WhatsApp de tu negocio en Módulos → WhatsApp para
+                      poder crear notas digitales.
+                    </AlertDescription>
+                  </Alert>
+                ) : null}
+                {!scanConfigured ? (
+                  <p className="text-muted-foreground text-xs">
+                    Sin modelo de lectura de comprobantes, las notas quedan en
+                    revisión manual para que las confirmes desde el detalle.
+                  </p>
+                ) : null}
+              </div>
 
-      {selected ? (
-        <FramePanel>
-          <FrameHeader className="flex-row items-start justify-between gap-3">
-            <div>
-              <FrameTitle>Nota {selected.code}</FrameTitle>
-              <FrameDescription>
-                {dateFormatter.format(new Date(selected.createdAt))} ·{" "}
-                {isAdmin && selected.creatorUsername
-                  ? `${selected.creatorUsername} · `
-                  : ""}
+              <FrameFooter className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-muted-foreground text-sm">Total</span>
+                  <span className="text-2xl font-semibold tracking-tight tabular-nums">
+                    {paymentOrderMoney(total)}
+                  </span>
+                </div>
+                <Button
+                  size="lg"
+                  className="w-full px-4 sm:w-auto"
+                  onClick={crearNota}
+                  disabled={!puedeCrear || isPending}
+                >
+                  {isPending && cart.length > 0 ? "Creando…" : "Crear link de pago"}
+                </Button>
+              </FrameFooter>
+            </FramePanel>
+          </Frame>
+        </TabsContent>
+
+        <TabsContent value="notas">
+          <Frame spacing="default" className="w-full">
+            <FramePanel className="p-0">
+              <FrameHeader className="flex-row items-center justify-between gap-2">
+                <FrameTitle className="text-lg font-semibold">
+                  Mis notas digitales
+                  {notas.length > 0 && (
+                    <span className="ml-2 font-normal text-muted-foreground text-sm">
+                      {notas.length}
+                    </span>
+                  )}
+                </FrameTitle>
+                <InfoHint
+                  label="Más información sobre el listado de notas"
+                  titulo="Mis notas digitales"
+                >
+                  Folio, estado y total de cada comanda. Toca una fila para ver
+                  el desglose y sus acciones.
+                </InfoHint>
+              </FrameHeader>
+              <DataGrid
+                table={table}
+                recordCount={notas.length}
+                onRowClick={(nota) => setSelectedId(nota.id)}
+                tableLayout={{ dense: true }}
+                emptyMessage="Aún no hay notas digitales. Crea la primera en «Nueva nota»."
+              >
+                <DataGridContainer>
+                  <DataGridScrollArea>
+                    <DataGridTable />
+                  </DataGridScrollArea>
+                </DataGridContainer>
+                <div className="px-4 pb-3">
+                  <DataGridPagination />
+                </div>
+              </DataGrid>
+            </FramePanel>
+          </Frame>
+        </TabsContent>
+      </Tabs>
+
+      <Sheet
+        open={selected !== null}
+        onOpenChange={(open) => {
+          if (!open) setSelectedId(null)
+        }}
+      >
+        <SheetContent side="bottom" className="mx-auto max-w-lg gap-0 rounded-t-xl">
+          <SheetHeader className="pr-12">
+            <SheetTitle>Nota {selected?.code}</SheetTitle>
+            <SheetDescription>
+              {selected ? dateFormatter.format(new Date(selected.createdAt)) : ""} ·{" "}
+              {isAdmin && selected?.creatorUsername
+                ? `${selected.creatorUsername} · `
+                : ""}
+              {selected && (
                 <Badge
                   variant={STATUS_BADGE[selected.status].variant}
                   size="sm"
                 >
                   {paymentOrderStatusLabel(selected.status)}
                 </Badge>
-              </FrameDescription>
-            </div>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Cerrar el detalle"
-              className="relative after:content-[''] after:absolute after:-inset-2"
-              onClick={() => setSelectedId(null)}
-            >
-              <XIcon />
-            </Button>
-          </FrameHeader>
+              )}
+            </SheetDescription>
+          </SheetHeader>
 
-          {selected.items.length === 0 ? (
-            <Skeleton className="mx-5 h-20" />
-          ) : (
-            <ul className="mx-5 flex flex-col gap-2">
-              {selected.items.map((linea, indice) => (
-                <li
-                  key={`${linea.sku}-${indice}`}
-                  className="flex items-center justify-between gap-3 text-sm"
-                >
-                  <span className="min-w-0 flex-1 truncate">
-                    {cantidadTexto(linea.cantidad)} {linea.um} × {linea.nombre}
-                  </span>
-                  <span className="text-muted-foreground shrink-0 text-xs">
-                    {paymentOrderMoney(linea.precioUnitario)} c/u
-                  </span>
-                  <span className="shrink-0 font-medium tabular-nums">
-                    {paymentOrderMoney(linea.importeLinea)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="mx-5 mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3">
-            <span className="text-muted-foreground text-sm">
-              Pagador: {maskPhone(selected.payerPhone)}
-            </span>
-            <span className="text-lg font-semibold tabular-nums">
-              {paymentOrderMoney(selected.amountMxn)}
-            </span>
+          <div className="max-h-[70dvh] overflow-y-auto px-4 pb-2">
+            {selected && selected.items.length === 0 ? (
+              <Skeleton className="h-20 w-full" aria-hidden />
+            ) : (
+              <ul className="flex flex-col divide-y">
+                {selected?.items.map((linea, indice) => (
+                  <li
+                    key={`${linea.sku}-${indice}`}
+                    className="flex items-start justify-between gap-3 py-2.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium leading-snug break-words">
+                        {cantidadTexto(linea.cantidad)} {linea.um} × {linea.nombre}
+                      </p>
+                      <p className="text-muted-foreground mt-0.5 text-xs">
+                        {paymentOrderMoney(linea.precioUnitario)} c/u
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-sm font-semibold tabular-nums">
+                      {paymentOrderMoney(linea.importeLinea)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {selected && (
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 mt-2">
+                <span className="text-muted-foreground text-sm">
+                  Pagador: {maskPhone(selected.payerPhone)}
+                </span>
+                <span className="text-lg font-semibold tabular-nums">
+                  {paymentOrderMoney(selected.amountMxn)}
+                </span>
+              </div>
+            )}
           </div>
 
-          <FrameFooter className="flex flex-wrap items-center justify-end gap-2">
-            {activa ? (
-              <Button
-                variant="outline"
-                size="lg"
-                onClick={() => abrirLink(selected)}
-                disabled={linkOrderId === selected.id || isPending}
-              >
-                <QrCodeIcon data-icon="inline-start" />
-                {linkOrderId === selected.id ? "Cargando…" : "Ver QR y link"}
-              </Button>
-            ) : null}
-            {activa ? (
+          <SheetFooter>
+            {activa && (
               <>
                 <Button
                   variant="outline"
                   size="lg"
-                  onClick={() => {
-                    setRejectReason("")
-                    setRejectTarget(selected)
-                  }}
-                  disabled={busyOrderId === selected.id || isPending}
+                  className="w-full"
+                  onClick={() => abrirLink(selected!)}
+                  disabled={linkOrderId === selected!.id || isPending}
                 >
-                  Rechazar
+                  <QrCodeIcon data-icon="inline-start" />
+                  {linkOrderId === selected!.id ? "Cargando…" : "Ver QR y link"}
                 </Button>
-                <Button
-                  size="lg"
-                  onClick={() => resolver(selected, "approve")}
-                  disabled={busyOrderId === selected.id || isPending}
-                >
-                  Marcar pagada
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="flex-1"
+                    onClick={() => {
+                      setRejectReason("")
+                      setRejectTarget(selected!)
+                      setSelectedId(null)
+                    }}
+                    disabled={busyOrderId === selected!.id || isPending}
+                  >
+                    Rechazar
+                  </Button>
+                  <Button
+                    size="lg"
+                    className="flex-1"
+                    onClick={() => resolver(selected!, "approve")}
+                    disabled={busyOrderId === selected!.id || isPending}
+                  >
+                    Marcar pagada
+                  </Button>
+                </div>
                 <Button
                   variant="ghost"
                   size="lg"
-                  onClick={() => setCancelTarget(selected)}
-                  disabled={busyOrderId === selected.id || isPending}
+                  className="w-full"
+                  onClick={() => {
+                    setCancelTarget(selected!)
+                    setSelectedId(null)
+                  }}
+                  disabled={busyOrderId === selected!.id || isPending}
                 >
                   Cancelar
                 </Button>
               </>
-            ) : null}
-          </FrameFooter>
-        </FramePanel>
-      ) : null}
-    </Frame>
+            )}
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
-    <LinkCreadoDialog
-      order={created}
-      origin="nota"
-      onClose={() => setCreated(null)}
-    />
+      <LinkCreadoDialog
+        order={created}
+        origin="nota"
+        onClose={() => setCreated(null)}
+      />
 
-    <AlertDialog
-      open={rejectTarget !== null}
-      onOpenChange={(open) => {
-        if (!open) setRejectTarget(null)
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Rechazar la nota {rejectTarget?.code}</AlertDialogTitle>
-          <AlertDialogDescription>
-            El pagador será avisado por WhatsApp. Describe el motivo para que
-            pueda corregir su pago.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="motivo-rechazo-nota">Motivo</Label>
-          <Input
-            id="motivo-rechazo-nota"
-            value={rejectReason}
-            maxLength={300}
-            placeholder="Ej. El comprobante no coincide con el monto"
-            onChange={(event) => setRejectReason(event.target.value)}
-          />
-        </div>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancelar</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={() => {
-              if (rejectTarget) resolver(rejectTarget, "reject", rejectReason)
-            }}
-          >
-            Rechazar nota
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      <AlertDialog
+        open={rejectTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setRejectTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Rechazar la nota {rejectTarget?.code}</AlertDialogTitle>
+            <AlertDialogDescription>
+              El pagador será avisado por WhatsApp. Describe el motivo para que
+              pueda corregir su pago.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="motivo-rechazo-nota">Motivo</Label>
+            <Input
+              id="motivo-rechazo-nota"
+              value={rejectReason}
+              maxLength={300}
+              placeholder="Ej. El comprobante no coincide con el monto"
+              onChange={(event) => setRejectReason(event.target.value)}
+            />
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (rejectTarget) resolver(rejectTarget, "reject", rejectReason)
+              }}
+            >
+              Rechazar nota
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
-    <AlertDialog
-      open={cancelTarget !== null}
-      onOpenChange={(open) => {
-        if (!open) setCancelTarget(null)
-      }}
-    >
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Cancelar la nota {cancelTarget?.code}</AlertDialogTitle>
-          <AlertDialogDescription>
-            El código quedará libre. El pagador que llegue tarde verá que la
-            nota ya no está activa. Esta acción no se puede deshacer.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Volver</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={() => {
-              if (cancelTarget) cancelar(cancelTarget)
-            }}
-          >
-            Cancelar nota
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+      <AlertDialog
+        open={cancelTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setCancelTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancelar la nota {cancelTarget?.code}</AlertDialogTitle>
+            <AlertDialogDescription>
+              El código quedará libre. El pagador que llegue tarde verá que la
+              nota ya no está activa. Esta acción no se puede deshacer.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Volver</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (cancelTarget) cancelar(cancelTarget)
+              }}
+            >
+              Cancelar nota
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
