@@ -3,6 +3,7 @@
 import { memo, useState } from "react"
 import { ArchiveIcon, ArchiveRestoreIcon, PackageIcon, PencilIcon, PlusIcon } from "lucide-react"
 
+import { cn } from "cn"
 import { Badge } from "@/components/reui/badge"
 import {
   Accordion,
@@ -44,6 +45,7 @@ function ArticulosAccordionBase({
   onRestaurar,
   onAgregar,
   cantidadEnComanda,
+  sinDivideres = false,
 }: {
   articulos: Articulo[]
   modo: "gestion" | "seleccion"
@@ -52,6 +54,7 @@ function ArticulosAccordionBase({
   onRestaurar?: (articulo: Articulo) => void
   onAgregar?: (articulo: Articulo) => void
   cantidadEnComanda?: (id: string) => number
+  sinDivideres?: boolean
 }) {
   // El catálogo completo puede tener hasta 5000 filas: se pintan por tandas
   // para no reconcilar miles de acordeones de una vez. Al cambiar la lista
@@ -74,7 +77,10 @@ function ArticulosAccordionBase({
           <AccordionItem
             key={articulo.id}
             value={articulo.id}
-            className="bg-transparent p-0"
+            className={cn(
+              "bg-transparent p-0",
+              sinDivideres && "not-last:border-b-0"
+            )}
           >
             <AccordionTrigger className="items-center gap-3 px-1.5 py-2.5 hover:no-underline">
               <div

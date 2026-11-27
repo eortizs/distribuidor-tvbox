@@ -582,7 +582,7 @@ export function NotaDigitalView({
 
         <TabsContent value="crear">
           <Frame spacing="default" variant="ghost" className="w-full">
-            <FramePanel className="border-0">
+            <FramePanel className="border-0 px-0 shadow-none before:hidden">
               <FrameHeader className="flex-row items-center justify-between gap-2">
                 <FrameTitle className="text-lg font-semibold">
                   Nueva nota digital
@@ -597,7 +597,7 @@ export function NotaDigitalView({
                 </InfoHint>
               </FrameHeader>
 
-              <div className="flex flex-col gap-3">
+              <div className="flex flex-col gap-3 px-4">
                 <div className="flex flex-col gap-2">
                   <Label htmlFor="buscar-articulo-nota">
                     Buscar artículos o servicios
@@ -668,12 +668,15 @@ export function NotaDigitalView({
                     Ningún artículo coincide con «{busqueda.trim()}».
                   </p>
                 ) : (
-                  <ArticulosAccordion
-                    articulos={articulosFiltrados}
-                    modo="seleccion"
-                    onAgregar={agregarAlCarrito}
-                    cantidadEnComanda={cantidadEnComanda}
-                  />
+                  <div className="-mx-4">
+                    <ArticulosAccordion
+                      articulos={articulosFiltrados}
+                      modo="seleccion"
+                      onAgregar={agregarAlCarrito}
+                      cantidadEnComanda={cantidadEnComanda}
+                      sinDivideres
+                    />
+                  </div>
                 )}
 
                 {cart.length === 0 ? (
@@ -828,7 +831,7 @@ export function NotaDigitalView({
 
         <TabsContent value="notas">
           <Frame spacing="default" variant="ghost" className="w-full">
-            <FramePanel className="border-0 p-0">
+            <FramePanel className="border-0 p-0 shadow-none before:hidden">
               <FrameHeader className="flex-row items-center justify-between gap-2">
                 <FrameTitle className="text-lg font-semibold">
                   Mis notas digitales
