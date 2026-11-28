@@ -87,6 +87,10 @@ function inScope(scope: SessionScope, event: RealtimeEvent): boolean {
     // compartido por todo el tenant y el refetch ya llega filtrado por RLS.
     case "articulos":
       return true
+    // Inventario del tenant (lotes + kardex): compartido como el catálogo —
+    // el refetch ya llega filtrado por RLS.
+    case "inventario":
+      return true
     case "expenses":
       return event.distribuidorId === scope.userId
     // Usuarios/permisos: solo los que tocan la propia cuenta.

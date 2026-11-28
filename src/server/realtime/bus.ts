@@ -19,6 +19,7 @@ import { pool, type PoolClientLike } from "@/server/db"
 export type RealtimeKind =
   | "clients"
   | "articulos"
+  | "inventario"
   | "entity"
   | "mp_order"
   | "payment_order"
@@ -96,6 +97,7 @@ function logError(context: string, error: unknown): void {
 const KIND_REGISTRY: Record<RealtimeKind, true> = {
   clients: true,
   articulos: true,
+  inventario: true,
   entity: true,
   mp_order: true,
   payment_order: true,

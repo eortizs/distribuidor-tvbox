@@ -57,6 +57,8 @@ const TABLES = [
   "payment_qr_requests",
   "nota_digital_items",
   "articulos",
+  "inventory_lots",
+  "inventory_movements",
   "affiliates",
   "tenants",
 ]

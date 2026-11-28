@@ -2,6 +2,7 @@ import type { TenantModule } from "@/lib/tenant-modules"
 import { tenantAllows } from "@/lib/tenant-modules"
 import {
   BellRingIcon,
+  BoxesIcon,
   CalculatorIcon,
   ClapperboardIcon,
   ImageIcon,
@@ -200,6 +201,14 @@ export const MODULOS: Modulo[] = [
     href: "/modulos/pedidos",
     modulo: "core",
     icon: NotebookPenIcon,
+  },
+  {
+    title: "Inventario",
+    description:
+      "Existencias por lotes ligadas al catálogo: cantidad, caducidad, condición y ubicación, con kardex de entradas, salidas y ajustes.",
+    href: "/modulos/inventario",
+    modulo: "core",
+    icon: BoxesIcon,
   },
   {
     title: "Distribuidores",
