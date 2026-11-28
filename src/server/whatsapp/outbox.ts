@@ -4,13 +4,16 @@ import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
 import { runAsPlatform, runWithTenant } from "@/server/tenant/context"
 import { tenantHostForSlug } from "@/server/tenant/hosts"
 import { listActiveTenants } from "@/server/tenant/context"
+import { readFile } from "node:fs/promises"
+
+import { podarTicketsViejos } from "@/server/tickets/ticket-imagen"
 
 import {
   WHATSAPP_KIND_CLIENT_RENEWAL,
   WHATSAPP_KIND_PAYMENT_ORDER,
   logWhatsAppMessageDetached,
 } from "./service"
-import { sendWhatsAppText, sessionForTenant } from "./gateway"
+import { sendWhatsAppImage, sendWhatsAppText, sessionForTenant } from "./gateway"
 import { shouldDispatchTenant } from "./tenant-routing"
 import type { WhatsAppSession } from "./session"
 
@@ -51,6 +54,8 @@ export interface OutboxClaimRow {
   body: string
   kind: string | null
   attempts: number
+  filePath: string | null
+  fileMime: string | null
 }
 
 /** Tenant de trabajo del despacho (su socket, su contexto, su link). */
@@ -78,7 +83,7 @@ const NO_PANEL_LINK_KINDS = new Set([
  * `payment_order`) no: un enlace que no pueden usar solo confunde.
  */
 function mirrorMessage(row: OutboxClaimRow, tenant: DispatchTenant): string {
-  const base = `${row.title}\n${row.body}`
+  const base = `${row.title}\n${row.body}`.trim()
   if (NO_PANEL_LINK_KINDS.has(row.kind ?? "")) return base
   const panelUrl =
     tenant.kind === "business"
@@ -90,7 +95,8 @@ function mirrorMessage(row: OutboxClaimRow, tenant: DispatchTenant): string {
 async function claimBatch(): Promise<OutboxClaimRow[]> {
   return withTransaction(async (client) => {
     const result = await client.query(
-      `SELECT id, phone, title, body, kind, attempts
+      `SELECT id, phone, title, body, kind, attempts,
+              file_path, file_mime
          FROM wa_outbox
         WHERE status = 'pending' AND next_attempt_at <= now()
         ORDER BY created_at
@@ -117,6 +123,8 @@ async function claimBatch(): Promise<OutboxClaimRow[]> {
       body: String(row.body ?? ""),
       kind: typeof row.kind === "string" ? row.kind : null,
       attempts: Number(row.attempts ?? 0),
+      filePath: typeof row.file_path === "string" ? row.file_path : null,
+      fileMime: typeof row.file_mime === "string" ? row.file_mime : null,
     }))
   })
 }
@@ -128,7 +136,34 @@ const SEND_TIMEOUT_MS = 60_000
 async function sendOne(row: OutboxClaimRow, tenant: DispatchTenant): Promise<void> {
   try {
     // El envío sale por el socket del tenant propietario de la fila.
-    const send = sendWhatsAppText(tenant.id, row.phone, mirrorMessage(row, tenant))
+    // Filas con adjunto (ticket de compra en PNG): IMAGEN con el texto como
+    // caption — el chat muestra el ticket con su branding de inmediato. Si
+    // el archivo ya no está en disco (poda, limpieza), el envío degrada a
+    // TEXTO en el momento — el aviso jamás se pierde.
+    const texto = mirrorMessage(row, tenant)
+    let send: Promise<string>
+    let conImagen = false
+    if (row.filePath) {
+      const data = await readFile(row.filePath).catch(() => null)
+      if (data) {
+        conImagen = true
+        send = sendWhatsAppImage(tenant.id, row.phone, {
+          data,
+          mimetype: row.fileMime ?? "image/png",
+          caption: texto,
+        })
+      } else {
+        console.error(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            error: `whatsapp: outbox adjunto faltante ${row.id}: ${row.filePath}`,
+          })
+        )
+        send = sendWhatsAppText(tenant.id, row.phone, texto)
+      }
+    } else {
+      send = sendWhatsAppText(tenant.id, row.phone, texto)
+    }
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(
         () => reject(new Error("whatsapp_send_timeout")),
@@ -146,18 +181,46 @@ async function sendOne(row: OutboxClaimRow, tenant: DispatchTenant): Promise<voi
       userId: null,
       phone: row.phone,
       text: `${row.title} ${row.body}`.trim(),
-      meta: { source: "notification_mirror", outbox_id: row.id, jid },
+      meta: { source: "notification_mirror", outbox_id: row.id, jid, imagen: conImagen },
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
     const attempts = row.attempts + 1
     const failed = attempts >= MAX_ATTEMPTS
     const backoff = BACKOFFS_MS[Math.min(attempts - 1, BACKOFFS_MS.length - 1)]
+    // Red de seguridad del ticket: si la IMAGEN agotó sus reintentos, el
+    // pagador recibe al menos el TEXTO de confirmación — con el MISMO tope de
+    // envío del resto de la cola: un socket atascado no puede congelar el
+    // tick. Al entregar el texto se limpia el adjunto: el reintento manual
+    // del admin ya no duplica la confirmación (texto + imagen).
+    let adjuntoEntregadoComoTexto = false
+    if (failed && row.filePath) {
+      const textoFallback = mirrorMessage(row, tenant)
+      const jidFallback = await Promise.race([
+        sendWhatsAppText(tenant.id, row.phone, textoFallback),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("whatsapp_send_timeout")),
+            SEND_TIMEOUT_MS
+          )
+        ),
+      ]).catch(() => null)
+      if (jidFallback) {
+        adjuntoEntregadoComoTexto = true
+        console.error(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            error: `whatsapp: outbox documento agotado ${row.id}: fallback texto enviado (${message})`,
+          })
+        )
+      }
+    }
     await pool.query(
       `UPDATE wa_outbox
           SET status = $2, attempts = $3,
               next_attempt_at = now() + ($4::bigint * interval '1 millisecond'),
-              last_error = $5
+              last_error = $5${adjuntoEntregadoComoTexto ? `,
+              file_path = NULL, file_name = NULL, file_mime = NULL` : ""}
         WHERE id = $1::uuid`,
       [row.id, failed ? "failed" : "pending", attempts, backoff, message.slice(0, 400)]
     )
@@ -198,6 +261,17 @@ async function tick(): Promise<void> {
             AND sent_at < now() - ($1::int * interval '1 day')`,
         [OUTBOX_SENT_RETENTION_DAYS]
       )
+      // PDFs de tickets viejos (fs puro, sin BD: sin dependencia de tenant).
+      await podarTicketsViejos().catch((error: unknown) => {
+        console.error(
+          JSON.stringify({
+            ts: new Date().toISOString(),
+            error: `whatsapp: podar tickets: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          })
+        )
+      })
     }
   })
 

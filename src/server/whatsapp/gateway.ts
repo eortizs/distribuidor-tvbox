@@ -37,6 +37,8 @@ import {
   phoneFromJid,
   sendTextToJid,
   withClientComposing,
+  sendImageToJid,
+  type WhatsAppImagenSaliente,
   type WhatsAppSession,
   type WhatsAppStatus,
 } from "./session"
@@ -1191,6 +1193,23 @@ export async function sendWhatsAppText(
   if (!session) throw new Error("whatsapp_socket_not_ready")
   const jid = await jidForPhone(session, phone)
   await sendTextToJid(session, jid, text)
+  return jid
+}
+
+/**
+ * Envío de IMAGEN (ticket de compra PNG) para la cola de salida DEL tenant:
+ * misma semántica de fallo que `sendWhatsAppText` — el motivo es dato para
+ * `wa_outbox` (reintentos con backoff).
+ */
+export async function sendWhatsAppImage(
+  tenantId: string,
+  phone: string,
+  imagen: WhatsAppImagenSaliente
+): Promise<string> {
+  const session = sessionForTenant(tenantId)
+  if (!session) throw new Error("whatsapp_socket_not_ready")
+  const jid = await jidForPhone(session, phone)
+  await sendImageToJid(session, jid, imagen)
   return jid
 }
 

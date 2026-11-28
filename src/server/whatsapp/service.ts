@@ -106,12 +106,14 @@ async function insertOutboxRow(input: {
   kind: string | null
   title: string
   body: string
+  attachment?: { path: string; name: string; mime: string } | null
 }): Promise<boolean> {
   try {
     await pool.query(
       `INSERT INTO wa_outbox
-         (id, user_id, notification_id, phone, title, body, kind)
-       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7)`,
+         (id, user_id, notification_id, phone, title, body, kind,
+          file_path, file_name, file_mime)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6, $7, $8, $9, $10)`,
       [
         randomUUID(),
         input.userId,
@@ -120,6 +122,9 @@ async function insertOutboxRow(input: {
         input.title,
         input.body,
         input.kind,
+        input.attachment?.path ?? null,
+        input.attachment?.name ?? null,
+        input.attachment?.mime ?? null,
       ]
     )
     return true
@@ -193,6 +198,10 @@ export async function enqueueWhatsAppForPhone(input: {
   kind: string | null
   title: string
   body: string
+  /** Imagen adjunta (ticket de compra PNG): la fila se entrega como imagen
+   * de WhatsApp con `title\nbody` de caption. En ruta de disco para que los
+   * reintentos del dispatcher sobrevivan a un reinicio del proceso. */
+  attachment?: { path: string; name: string; mime: string } | null
 }): Promise<boolean> {
   if (input.phone.length === 0) return false
   return insertOutboxRow({
@@ -202,6 +211,7 @@ export async function enqueueWhatsAppForPhone(input: {
     kind: input.kind,
     title: input.title,
     body: input.body,
+    attachment: input.attachment ?? null,
   })
 }
 

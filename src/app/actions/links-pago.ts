@@ -7,6 +7,7 @@ import QRCode from "qrcode"
 import { requireUser } from "@/server/auth/guards"
 import { getClient } from "@/server/clientes/registry"
 import { LEGACY_TENANT_ID } from "@/server/tenant/identity"
+import { runWithTenant } from "@/server/tenant/context"
 import { enqueueWhatsAppForPhone, WHATSAPP_KIND_PAYMENT_ORDER } from "@/server/whatsapp/service"
 import { createPaymentOrderNotification } from "@/server/notifications/service"
 import { AppError } from "@/server/umejson/types"
@@ -16,7 +17,7 @@ import {
   conceptoPagoDeOrden,
   PAYMENT_ORDER_CONCEPTO_ERROR,
 } from "@/lib/links-pago"
-import { notaDigitalTexto } from "@/server/links-pago/notify"
+import { entregarTicketCompraAlPagador } from "@/server/links-pago/notify"
 import {
   cancelPaymentOrder,
   checkRateLimitPaymentOrderCreation,
@@ -358,13 +359,16 @@ export async function resolvePaymentOrderAction(input: {
 
   if (input.decision === "approve") {
     if (resolved.origin === "nota") {
-      // Un aprobado a mano por el creador entrega la MISMA Nota Digital que
-      // la confirmación automática por depósito (consistencia).
-      notifyPayerOfResolution(
-        resolved,
-        "Tu Nota Digital",
-        await notaDigitalTexto(resolved)
-      )
+      // Un aprobado a mano por el creador entrega el MISMO ticket de compra
+      // en PDF que la confirmación automática por depósito (consistencia).
+      // Fire-and-forget para no frenar la UI (generar el PDF tarda segundos),
+      // pero SIEMPRE bajo el tenant de la ORDEN: la continuación detached ya
+      // no tiene ALS/headers fiables tras la respuesta (pitfall 2026-11-24) y
+      // con TENANT_STRICT=on el INSERT en wa_outbox saldría sin GUC —
+      // confirmación perdida en silencio. El fallback a texto vive dentro.
+      void runWithTenant(resolved.tenantId, () =>
+        entregarTicketCompraAlPagador(resolved)
+      ).catch(() => {})
     } else {
       notifyPayerOfResolution(
         resolved,

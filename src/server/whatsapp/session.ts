@@ -207,6 +207,29 @@ export async function sendTextToJid(
   await socket.sendMessage(jid, { text })
 }
 
+/** Imagen de salida (ticket de compra PNG): buffer + caption. WhatsApp no
+ * muestra nombre de archivo para imágenes. */
+export interface WhatsAppImagenSaliente {
+  data: Buffer
+  mimetype: string
+  caption?: string
+}
+
+/** Envía una IMAGEN a un JID concreto (ya resuelto), fallando si no hay socket. */
+export async function sendImageToJid(
+  session: WhatsAppSession,
+  jid: string,
+  imagen: WhatsAppImagenSaliente
+): Promise<void> {
+  const socket = session.socket
+  if (!socket) throw new Error("whatsapp_socket_not_ready")
+  await socket.sendMessage(jid, {
+    image: imagen.data,
+    mimetype: imagen.mimetype,
+    caption: imagen.caption,
+  })
+}
+
 /**
  * Resuelve el JID vigente del teléfono (WhatsApp puede mapear cuentas a
  * LIDs) con caché de 24 h; lanza si el número no está en WhatsApp.
